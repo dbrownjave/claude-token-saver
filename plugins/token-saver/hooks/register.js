@@ -85,6 +85,28 @@ async function runPython($, args, init) {
   throw lastErr
 }
 
+/**
+ * One child process, streamed. Tries python3 then python. Yields { stream, text } pieces
+ * and finally { code }. Throws before the first piece when neither interpreter starts.
+ */
+async function* spawnPython($, args, init) {
+  let lastErr
+  for (const exe of ['python3', 'python']) {
+    let yielded = false
+    try {
+      for await (const piece of $.process.spawn({ argv: [exe, ...args], ...init })) {
+        yielded = true
+        yield piece
+      }
+      return
+    } catch (err) {
+      lastErr = err
+      if (yielded) throw err
+    }
+  }
+  throw lastErr
+}
+
 async function loadConfig($, cwd) {
   const home = await homeDir($)
   const dirs = []
@@ -242,22 +264,50 @@ async function actSkills($, verb, names, cwd) {
   applyProgress({ id: rowId, label, stage: list[0] || verb, step: 1, total, state: 'running', percent: 0 })
   skillsMsg = `${label}…`
   try { $.ui.status('Progress'); $.ui.invalidate('ui.render') } catch { /* no UI */ }
-  let failures = 0
-  let last = ''
-  try {
-    for (let i = 0; i < total; i++) {
-      applyProgress({ id: rowId, stage: list[i], step: i + 1, total, state: 'running', percent: (i / total) * 100 })
+  let ok = 0
+  let skipped = 0
+  let summary = ''
+  const onLine = (line) => {
+    // skills.py --progress prints `>> i/n name ok|skip` as each skill lands; one process, many stages.
+    const m = /^>> (\d+)\/(\d+) (\S+) (ok|skip)$/.exec(line.trim())
+    if (m) {
+      const i = Number(m[1]), n = Number(m[2])
+      if (m[4] === 'ok') ok += 1
+      else skipped += 1
+      applyProgress({ id: rowId, stage: m[3], step: Math.min(i + 1, n), total: n, state: 'running', percent: (i / n) * 100 })
       try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
-      const args = [`${$.plugin.root}/scripts/skills.py`, verb, list[i], '--no-usage']
-      if (cwd) args.push('--project', cwd)
-      const r = await runPython($, args, { timeoutMs: 60_000 })
-      const first = (r.stdout || r.stderr || '').trim().split('\n').find((l) => l.trim()) || `${verb}: exit ${r.exitCode}`
-      last = first.replace(/\s+→\s+\S+$/, '')
-      if (r.exitCode !== 0 || /^Unknown|^  skip/.test(first)) failures += 1
+    } else if (line.trim() && !line.startsWith('  skip')) {
+      summary = line.trim().replace(/\s+→\s+\S+$/, '')
     }
-    const row = applyProgress({ id: rowId, stage: failures ? `${failures} skipped` : 'Done', step: total, total, state: failures ? 'failed' : 'done', percent: 100 })
-    if (row) row.expireAt = Date.now() + (failures ? 15000 : 8000)
-    skillsMsg = total === 1 ? last : `${label}: ${total - failures} done${failures ? `, ${failures} skipped` : ''}`
+  }
+  try {
+    const args = [`${$.plugin.root}/scripts/skills.py`, verb, ...list, '--no-usage', '--progress']
+    if (cwd) args.push('--project', cwd)
+    let streamed = false
+    try {
+      let buf = ''
+      for await (const piece of spawnPython($, args, { cwd: cwd || undefined })) {
+        streamed = true
+        if (typeof piece.text === 'string') {
+          buf += piece.text
+          let nl
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            onLine(buf.slice(0, nl))
+            buf = buf.slice(nl + 1)
+          }
+        }
+      }
+      if (buf.trim()) onLine(buf)
+    } catch (err) {
+      if (streamed) throw err
+      // No streaming on this build: one batch run, start and finish only.
+      const r = await runPython($, args, { timeoutMs: 90_000 })
+      for (const line of (r.stdout || r.stderr || '').split('\n')) onLine(line)
+    }
+    const failed = skipped > 0 && ok === 0
+    const row = applyProgress({ id: rowId, stage: skipped ? `${skipped} skipped` : 'Done', step: total, total, state: failed ? 'failed' : 'done', percent: 100 })
+    if (row) row.expireAt = Date.now() + (skipped ? 15000 : 8000)
+    skillsMsg = summary || `${label}: ${ok} done${skipped ? `, ${skipped} skipped` : ''}`
     try { $.ui.toast(`${skillsMsg} · loads after /clear`, { timeoutMs: 8000 }) } catch { /* no UI */ }
   } catch (err) {
     skillsMsg = `could not run skills.py: ${err && err.message ? err.message : String(err)}`
@@ -292,7 +342,7 @@ function applyProgress(e) {
   if (row.state === 'done') {
     row.target = 1
     if (row.total > 0) row.step = row.total
-    if (!row.stage || row.stage === '') row.stage = 'Done'
+    if (!row.stage) row.stage = 'Done'
   }
   progressRows.set(id, row)
   return row
@@ -349,7 +399,6 @@ function progressTrackText(row, cells, h, Text) {
   const flush = () => {
     if (!run) return
     if (runKind === 'fill') parts.push(h(Text, { color }, run))
-    else if (runKind === 'tick') parts.push(h(Text, { dimColor: true }, run))
     else parts.push(h(Text, { dimColor: true }, run))
     run = ''
   }

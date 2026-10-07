@@ -259,17 +259,19 @@ def _fix_link(moved: Path, target_abs: str | None) -> None:
         os.symlink(target_abs, moved)
 
 
-def park(names: list[str]) -> list[str]:
+def park(names: list[str], report=None) -> list[str]:
     manifest = load_manifest()
     done = []
-    for name in names:
+    for idx, name in enumerate(names, 1):
         src = SKILLS / name
         dst = PARKED / name
         if not os.path.lexists(src):
             print(f"  skip {name}: not in {SKILLS}")
+            if report: report(idx, name, "skip")
             continue
         if os.path.lexists(dst):
             print(f"  skip {name}: already parked")
+            if report: report(idx, name, "skip")
             continue
         target_abs = str((src.parent / os.readlink(src)).resolve()) if src.is_symlink() else None
         _move(src, dst)
@@ -281,59 +283,68 @@ def park(names: list[str]) -> list[str]:
             "parked_at": datetime.now().isoformat(timespec="seconds"),
         }
         done.append(name)
+        if report: report(idx, name, "ok")
     save_manifest(manifest)
     return done
 
 
-def unpark(names: list[str]) -> list[str]:
+def unpark(names: list[str], report=None) -> list[str]:
     manifest = load_manifest()
     done = []
-    for name in names:
+    for idx, name in enumerate(names, 1):
         src = PARKED / name
         if not os.path.lexists(src):
             print(f"  skip {name}: not parked")
+            if report: report(idx, name, "skip")
             continue
         info = manifest.get(name, {})
         dst = Path(info.get("from") or SKILLS / name)
         if os.path.lexists(dst):
             print(f"  skip {name}: {dst} already exists")
+            if report: report(idx, name, "skip")
             continue
         _move(src, dst)
         _fix_link(dst, info.get("target"))
         manifest.pop(name, None)
         done.append(name)
+        if report: report(idx, name, "ok")
     save_manifest(manifest)
     return done
 
 
-def link(names: list[str], project: Path) -> list[str]:
+def link(names: list[str], project: Path, report=None) -> list[str]:
     skills_dir = project / ".claude" / "skills"
     done = []
-    for name in names:
+    for idx, name in enumerate(names, 1):
         src = PARKED / name
         if not os.path.lexists(src):
             print(f"  skip {name}: not parked (only parked skills are linked)")
+            if report: report(idx, name, "skip")
             continue
         dst = skills_dir / name
         if os.path.lexists(dst):
             print(f"  skip {name}: {dst} already exists")
+            if report: report(idx, name, "skip")
             continue
         skills_dir.mkdir(parents=True, exist_ok=True)
         os.symlink(str(src.resolve() if src.is_symlink() else src), dst)
         done.append(name)
+        if report: report(idx, name, "ok")
     return done
 
 
-def unlink(names: list[str], project: Path) -> list[str]:
+def unlink(names: list[str], project: Path, report=None) -> list[str]:
     skills_dir = project / ".claude" / "skills"
     done = []
-    for name in names:
+    for idx, name in enumerate(names, 1):
         dst = skills_dir / name
         if not dst.is_symlink():
             print(f"  skip {name}: {dst} is not a link (nothing deleted)")
+            if report: report(idx, name, "skip")
             continue
         dst.unlink()
         done.append(name)
+        if report: report(idx, name, "ok")
     return done
 
 
@@ -752,6 +763,7 @@ def main() -> int:
     common.add_argument("--no-usage", action="store_true", help="skip the transcript scan")
     common.add_argument("--rescan", action="store_true", help="ignore the hourly usage cache")
     common.add_argument("--json", action="store_true", help="machine-readable status")
+    common.add_argument("--progress", action="store_true", help="print one `>> i/n name ok|skip` line per skill as it happens")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, parents=[common])
     # Flags are accepted before or after the subcommand.
     sub = ap.add_subparsers(dest="cmd")
@@ -791,24 +803,31 @@ def main() -> int:
     if not names:
         return 1
 
+    report = None
+    if args.progress:
+        n = len(names)
+
+        def report(i: int, name: str, status: str) -> None:
+            print(f">> {i}/{n} {name} {status}", flush=True)
+
     if cmd == "park":
-        done = park(names)
+        done = park(names, report)
         print(f"Parked {len(done)}: {', '.join(done)}  →  {PARKED}")
         if done:
             print(next_steps(done))
     elif cmd == "unpark":
-        done = unpark(names)
+        done = unpark(names, report)
         print(f"Unparked {len(done)}: {', '.join(done)}  →  {SKILLS}")
         if done:
             print("Takes effect in your next session: /clear or restart.")
     elif cmd == "link":
-        done = link(names, project)
+        done = link(names, project, report)
         print(f"Linked {len(done)} into {project / '.claude' / 'skills'}: {', '.join(done)}")
         if done:
             print("Loads only in this repo. Takes effect in your next session: /clear or restart.")
             print("Teammates without the parked skill will see a dangling link: add .claude/skills/<name> to .gitignore.")
     elif cmd == "unlink":
-        done = unlink(names, project)
+        done = unlink(names, project, report)
         print(f"Unlinked {len(done)}: {', '.join(done)}  (skills stay in {PARKED})")
     return 0 if names else 1
 
