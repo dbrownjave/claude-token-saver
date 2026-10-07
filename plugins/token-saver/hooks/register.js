@@ -48,6 +48,12 @@ let levels = DEFAULT_LEVELS
 let pythonQuietOn = false
 let bandHidden = false
 let announcedPct = 0            // highest threshold already toasted this session
+// Progress rows above the prompt, driven by the `progress` tool the model calls.
+const PROGRESS_TOOL = 'mcp__token-saver__progress'
+const progressRows = new Map()  // id -> { id, label, stage, step, total, state, target, shown, note }
+let progressTicker = null
+const STATE_COLOR = { running: '#8b7cf6', waiting: '#d9a441', failed: '#e5484d', done: '#30a46c' }
+const STATE_GLYPH = { running: '●', waiting: '?', failed: '!', done: '✓' }
 const SKILLS_PANE = 'loadout'
 let skillsData = null           // last `skills.py status --json`
 let skillsBusy = false
@@ -223,6 +229,113 @@ async function actSkills($, verb, names, cwd) {
   await refreshSkills($, cwd)
 }
 
+function clamp01(x) {
+  return Math.max(0, Math.min(1, x))
+}
+
+/** Apply one `progress` call to the rows. Returns the row, or null when removed. */
+function applyProgress(e) {
+  const id = String(e.id || 'job')
+  if (e.remove) {
+    progressRows.delete(id)
+    return null
+  }
+  const row = progressRows.get(id) || { id, label: id, stage: '', step: 0, total: 0, state: 'running', target: 0, shown: 0, note: '' }
+  if (typeof e.label === 'string' && e.label) row.label = e.label
+  if (typeof e.stage === 'string') row.stage = e.stage
+  if (Number.isFinite(e.total)) row.total = Math.max(0, Math.floor(e.total))
+  if (Number.isFinite(e.step)) row.step = Math.max(0, Math.floor(e.step))
+  if (typeof e.state === 'string' && STATE_COLOR[e.state]) row.state = e.state
+  if (typeof e.note === 'string') row.note = e.note
+  if (Number.isFinite(e.percent)) row.target = clamp01(e.percent / 100)
+  else if (row.total > 0) row.target = clamp01((Math.max(1, row.step) - 1) / row.total)
+  if (row.state === 'done') {
+    row.target = 1
+    if (row.total > 0) row.step = row.total
+    if (!row.stage || row.stage === '') row.stage = 'Done'
+  }
+  progressRows.set(id, row)
+  return row
+}
+
+function pillText(row) {
+  const lead = row.state === 'done' ? '✓ ' : row.state === 'failed' ? '✕ ' : row.state === 'waiting' ? '? ' : ''
+  const count = row.total > 0 ? ` ${Math.max(1, Math.min(row.step || 1, row.total))}/${row.total}` : ''
+  return `${lead}${row.stage || row.label}${count}`
+}
+
+/** Desktop and the web surfaces: a real bar. Dithered fill, stage ticks, a pill riding the head. */
+function progressSvg(row, width) {
+  const W = Math.max(160, Math.floor(width)), H = 22, R = 11
+  const color = STATE_COLOR[row.state]
+  const head = Math.round(W * row.shown)
+  const label = pillText(row)
+  const pillW = Math.min(W, Math.round(label.length * 6.9 + 22))
+  const pillX = Math.max(0, Math.min(W - pillW, head - pillW + 6))
+  const ticks = []
+  for (let i = 1; i < row.total && row.total <= 40; i++) {
+    const x = (W * i) / row.total
+    ticks.push(`<rect x="${x.toFixed(1)}" y="4" width="1.2" height="${H - 8}" fill="${x <= head ? '#ffffff' : color}" opacity="${x <= head ? 0.9 : 0.35}"/>`)
+  }
+  const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
+    `<defs><pattern id="d" width="4" height="4" patternUnits="userSpaceOnUse">` +
+    `<rect x="0" y="0" width="1.6" height="1.6" fill="${color}" opacity="0.95"/>` +
+    `<rect x="2" y="2" width="1.6" height="1.6" fill="${color}" opacity="0.55"/>` +
+    `<rect x="2" y="0" width="1" height="1" fill="${color}" opacity="0.3"/></pattern>` +
+    `<clipPath id="c"><rect x="0" y="0" width="${W}" height="${H}" rx="${R}"/></clipPath></defs>` +
+    `<rect x="0" y="0" width="${W}" height="${H}" rx="${R}" fill="#2b2b30"/>` +
+    `<g clip-path="url(#c)"><rect x="0" y="0" width="${head}" height="${H}" fill="url(#d)"/>` +
+    `<rect x="0" y="0" width="${head}" height="${H}" fill="${color}" opacity="0.12"/>${ticks.join('')}</g>` +
+    `<rect x="${pillX}" y="0" width="${pillW}" height="${H}" rx="${R}" fill="${color}"/>` +
+    `<text x="${pillX + pillW / 2}" y="15" text-anchor="middle" font-family="-apple-system, Inter, Segoe UI, sans-serif" font-size="12" font-weight="600" fill="#ffffff">${esc(label)}</text>` +
+    `</svg>`
+  )
+}
+
+/** The terminal: a block-glyph track with a dithered fill, dim ticks, and an inverse pill at the head. */
+function progressTrackText(row, cells, h, Text) {
+  const color = STATE_COLOR[row.state]
+  const head = Math.round(cells * row.shown)
+  const label = ` ${pillText(row)} `
+  const pillW = Math.min(cells, label.length)
+  const pillX = Math.max(0, Math.min(cells - pillW, head - pillW + 1))
+  const tickAt = new Set()
+  for (let i = 1; i < row.total && row.total <= cells; i++) tickAt.add(Math.round((cells * i) / row.total))
+  const parts = []
+  let run = ''
+  let runKind = ''
+  const flush = () => {
+    if (!run) return
+    if (runKind === 'fill') parts.push(h(Text, { color }, run))
+    else if (runKind === 'tick') parts.push(h(Text, { dimColor: true }, run))
+    else parts.push(h(Text, { dimColor: true }, run))
+    run = ''
+  }
+  for (let x = 0; x < cells; x++) {
+    if (x === pillX) {
+      flush()
+      parts.push(h(Text, { color, inverse: true, bold: true }, label.slice(0, pillW)))
+      x += pillW - 1
+      continue
+    }
+    let ch, kind
+    if (tickAt.has(x)) { ch = '│'; kind = 'tick' }
+    else if (x < head) { ch = (x * 7 + row.id.length) % 5 === 0 ? '░' : '▒'; kind = 'fill' }
+    else { ch = '·'; kind = 'track' }
+    if (kind !== runKind) { flush(); runKind = kind }
+    run += ch
+  }
+  flush()
+  return parts
+}
+
+function progressSettled() {
+  for (const r of progressRows.values()) if (Math.abs(r.target - r.shown) > 0.004) return false
+  return true
+}
+
 function daysAgo(ts) {
   if (!ts) return 'never'
   const d = Math.floor((Date.now() / 1000 - ts) / 86400)
@@ -276,6 +389,40 @@ export function register(on, options = {}) {
         /* no UI */
       }
     }
+    try {
+      await $.tool.register({
+        name: 'progress',
+        description:
+          'Show a progress bar above the prompt for a job with several stages (a build, a migration, a multi-file refactor, a test matrix). ' +
+          'Call it when the job starts and again whenever a stage begins, ends, waits or fails; the same id updates the same bar. ' +
+          'Fields: id (stable per job), label (what the job is), stage (current stage name), step (1-based stage number), total (stage count), ' +
+          'state: running | waiting | failed | done, percent (optional 0-100 override), note (optional short text), remove: true to drop the bar. ' +
+          'Keep calls short; this draws UI and returns one line.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            label: { type: 'string' },
+            stage: { type: 'string' },
+            step: { type: 'integer', minimum: 0 },
+            total: { type: 'integer', minimum: 0 },
+            state: { type: 'string', enum: ['running', 'waiting', 'failed', 'done'] },
+            percent: { type: 'number', minimum: 0, maximum: 100 },
+            note: { type: 'string' },
+            remove: { type: 'boolean' },
+          },
+          required: ['id'],
+        },
+      })
+    } catch {
+      /* tool API missing on older builds */
+    }
+    progressRows.clear()
+    progressTicker = $.clock.every(70, () => {
+      if (progressRows.size === 0 || progressSettled()) return
+      for (const r of progressRows.values()) r.shown += (r.target - r.shown) * 0.16
+      try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
+    })
     if (cacheBand) {
       // Keeps "warm Nm" honest while the person thinks. Runs until the module reloads.
       $.clock.every(BAND_TICK, () => {
@@ -375,6 +522,20 @@ export function register(on, options = {}) {
     } catch (err) {
       return { text: `token-saver: could not run skills.py. It needs python3 (or python) on PATH. ${err && err.message ? err.message : String(err)}` }
     }
+  })
+
+  on('tool.call', { tool: PROGRESS_TOOL }, async ($, e) => {
+    const row = applyProgress(e)
+    try {
+      $.ui.status(progressRows.size ? 'Progress' : undefined)
+      $.ui.invalidate('ui.render')
+    } catch {
+      /* no UI */
+    }
+    const text = row
+      ? `progress: ${row.label} — ${pillText(row)} (${Math.round(row.target * 100)}%, ${row.state})`
+      : `progress: removed ${e.id}`
+    return { result: { content: [{ type: 'text', text }], isError: false } }
   })
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
@@ -539,10 +700,35 @@ export function register(on, options = {}) {
     ])
   })
 
-  if (cacheBand) {
-    on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-      if (!lastUsage || bandHidden) return next(e)
-      if (e.props && e.props.hasSurvey) return next(e)
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props && e.props.hasSurvey) return next(e)
+    const showTokens = cacheBand && lastUsage && !bandHidden
+    if (progressRows.size === 0 && !showTokens) return next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const Svg = $.ui.resolve(e).Svg
+    const width = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
+    const children = []
+    for (const row of progressRows.values()) {
+      const color = STATE_COLOR[row.state]
+      const pct = `${Math.round(row.shown * 100)}%`.padStart(4)
+      const labelW = Math.min(28, Math.max(10, row.label.length))
+      const close = h(Button, { key: `progress-close:${row.id}`, label: '×', plain: true, onPress: () => {
+        progressRows.delete(row.id)
+        try { $.ui.status(progressRows.size ? 'Progress' : undefined); $.ui.invalidate('ui.render') } catch { /* no UI */ }
+      } })
+      const lead = [h(Text, { color }, STATE_GLYPH[row.state] + ' '), h(Text, null, row.label.slice(0, labelW).padEnd(labelW) + '  ')]
+      if (Svg && e.surface !== 'terminal') {
+        const barPx = Math.max(180, Math.min(420, (width - labelW - 14) * 7))
+        children.push(h(Box, { flexDirection: 'row', alignItems: 'center', gap: 1 }, ...lead,
+          h(Svg, { source: progressSvg(row, barPx), alt: `${row.label}: ${pillText(row)}, ${pct.trim()}`, height: 22 }),
+          h(Text, { dimColor: true }, ` ${pct} `), close))
+      } else {
+        const cells = Math.max(16, Math.min(48, width - labelW - 16))
+        children.push(h(Box, { flexDirection: 'row' }, ...lead, ...progressTrackText(row, cells, h, Text), h(Text, { dimColor: true }, ` ${pct} `), close))
+      }
+      if (row.note) children.push(h(Text, { dimColor: true }, '    ' + row.note))
+    }
+    if (showTokens) {
       try {
         const ctx = await contextOf($)
         const clock = cacheClock(await $.clock.now(), ttl)
@@ -554,8 +740,7 @@ export function register(on, options = {}) {
           const hint = hintFor(ctx.percent, clock)
           if (hint) parts.push(hint)
         }
-        const { Box, Text, Button } = $.ui.resolve(e)
-        return h(
+        children.push(h(
           Box,
           null,
           h(Text, { dimColor: true }, parts.join('  ·  ') + '  '),
@@ -567,10 +752,12 @@ export function register(on, options = {}) {
               try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
             },
           }),
-        )
+        ))
       } catch {
-        return next(e)
+        /* usage unavailable: progress rows still draw */
       }
-    })
-  }
+    }
+    if (children.length === 0) return next(e)
+    return h(Box, { flexDirection: 'column' }, ...children)
+  })
 }

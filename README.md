@@ -61,6 +61,16 @@ claude --plugin-dir ./plugins/token-saver
 
 Toggles live on the plugin, not in a settings splice: `quietBash`, `trimOutput`, `cacheBand`, `compactHint`, `compactGuard`, `longCacheTtl`. They show up as rows in `/config`. Disable the whole thing with `/plugin disable token-saver@token-saver`.
 
+### Progress bars (mod only)
+
+The mod registers a `progress` tool. When Claude runs a job with stages, it calls the tool as each stage starts, waits, fails or ends, and a bar appears above the prompt:
+
+```
+● Release pipeline   ▒▒▒▒▒░▒▒│▒▒▒▒▒ Build 2/3 ·····│··········   67%  ×
+```
+
+On the desktop it is a real bar: a dithered fill, a tick per stage, and a pill riding the head that names the stage and count. Purple while running, amber while waiting, red when a stage fails, green when done. The fill eases toward each new value. × removes a row; `remove: true` from the tool does the same. The status line reads "Progress" while any bar is up. Nothing is injected into the prompt beyond the one-line tool result.
+
 ### Compaction guard (mod only)
 
 A settings hook can only add a note before `/compact`. The mod sits on the compaction itself:
