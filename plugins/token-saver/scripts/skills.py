@@ -659,7 +659,8 @@ def status(project: Path, unused_days: int, with_usage: bool, as_json: bool, res
     saved = sum(e["per_turn"] for e in parked)
     if as_json:
         print(json.dumps({"active": active, "parked": parked, "usage": usage, "unused": sorted(unused),
-                          "project_links": links, "per_turn_tokens": per_turn, "parked_tokens": saved}, indent=1))
+                          "project_links": links, "per_turn_tokens": per_turn, "parked_tokens": saved,
+                          "scan_note": SCAN_NOTE}, indent=1))
         return 0
     print(f"Active skills: {len(active)}  ≈{per_turn} tok on every turn (name + description in the listing)")
     for line in table(active, usage, unused, numbered=False)[1]:

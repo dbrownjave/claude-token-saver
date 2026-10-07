@@ -85,7 +85,7 @@ Dev loop: `claude plugin validate ./plugins/token-saver` then `claude plugin tes
 | Threshold toast | Once per threshold crossed (40, 60, 75 percent by default), with the cache-aware hint. |
 | First-run welcome | One toast the first time the mod loads on a machine, saying what is now on. |
 | Compaction guard | Everywhere the mod loads. |
-| `/skills` | Instant. Runs the bundled `scripts/skills.py`. Picker stays in the terminal. |
+| `/skills` | Opens a pane: every skill with cost per turn and last use, a Park button on each active one, Link here / Unpark on each parked one, Park N unused in the header. Esc closes. `/skills list` is the text form. CLI and Desktop; the VS Code panel gets the text. |
 
 Same `~/.claude/token-saver/quiet.json` as the Python hook. Do not run both quiet-bash implementations at once or commands get rewritten twice.
 

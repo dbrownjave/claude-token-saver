@@ -48,6 +48,10 @@ let levels = DEFAULT_LEVELS
 let pythonQuietOn = false
 let bandHidden = false
 let announcedPct = 0            // highest threshold already toasted this session
+const SKILLS_PANE = 'skills'
+let skillsData = null           // last `skills.py status --json`
+let skillsBusy = false
+let skillsMsg = ''               // last action's one-line result, shown in the pane footer
 
 async function readJson($, path) {
   try {
@@ -184,6 +188,47 @@ function hintFor(pct, clock) {
   return `past your ${hit.pct}% (${hit.id})`
 }
 
+async function refreshSkills($, cwd) {
+  skillsBusy = true
+  try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
+  try {
+    const args = [`${$.plugin.root}/scripts/skills.py`, 'status', '--json']
+    if (cwd) args.push('--project', cwd)
+    const r = await runPython($, args, { timeoutMs: 60_000 })
+    if (r.exitCode !== 0) throw new Error((r.stderr || r.stdout || `exit ${r.exitCode}`).trim().split('\n')[0])
+    skillsData = JSON.parse(r.stdout)
+  } catch (err) {
+    skillsData = { error: err && err.message ? err.message : String(err) }
+  }
+  skillsBusy = false
+  try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
+}
+
+async function actSkills($, verb, names, cwd) {
+  if (skillsBusy) return
+  skillsBusy = true
+  skillsMsg = `${verb} ${names.join(' ')}…`
+  try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
+  try {
+    const args = [`${$.plugin.root}/scripts/skills.py`, verb, ...names]
+    if (cwd) args.push('--project', cwd)
+    const r = await runPython($, args, { timeoutMs: 60_000 })
+    const first = (r.stdout || r.stderr || '').trim().split('\n').find((l) => l.trim()) || `${verb}: exit ${r.exitCode}`
+    skillsMsg = first.replace(/\s+→\s+\S+$/, '')
+    try { $.ui.toast(`${skillsMsg} · loads after /clear`, { timeoutMs: 8000 }) } catch { /* no UI */ }
+  } catch (err) {
+    skillsMsg = `could not run skills.py: ${err && err.message ? err.message : String(err)}`
+  }
+  skillsBusy = false
+  await refreshSkills($, cwd)
+}
+
+function daysAgo(ts) {
+  if (!ts) return 'never'
+  const d = Math.floor((Date.now() / 1000 - ts) / 86400)
+  return d <= 0 ? 'today' : `${d}d ago`
+}
+
 export function register(on, options = {}) {
   const quietBash = options.quietBash !== false
   const trimOutput = options.trimOutput !== false
@@ -216,7 +261,7 @@ export function register(on, options = {}) {
       await $.command.register({
         name: 'skills',
         description:
-          'Skills cost tokens every turn. /skills lists them; /skills park|unpark|link|unlink <names…> (globs ok). Takes effect next session.',
+          'Skills cost tokens every turn. /skills opens a pane to park, link and unpark them; /skills list, suggest, park|unpark|link|unlink <names…>. Takes effect next session.',
       })
     } catch {
       /* command API missing on older builds */
@@ -295,10 +340,23 @@ export function register(on, options = {}) {
    */
   on('command.run', { command: 'skills' }, async ($, e) => {
     const words = (e.args || '').trim().split(/\s+/).filter(Boolean)
+    if (words.length === 0 || words[0] === 'pane') {
+      // The pane: rows with Park / Link / Unpark / Unlink buttons. Text fallback where panes do not draw.
+      let cwd = ''
+      try { cwd = await $.session.cwd() } catch { /* fine */ }
+      void refreshSkills($, cwd)
+      try {
+        await $.ui.open({ id: SKILLS_PANE, title: 'Skills', focus: true, closeOnEscape: true, holdToasts: true })
+        return { text: 'Skills pane opened. Esc closes it. /skills list prints the same as text.' }
+      } catch {
+        words.splice(0, words.length, 'status')
+      }
+    }
+    if (words[0] === 'list') words[0] = 'status'
     const verb = words[0] || 'status'
     const verbs = ['status', 'suggest', 'park', 'unpark', 'link', 'unlink']
     if (!verbs.includes(verb)) {
-      return { text: `usage: /skills [suggest [topic…]|park|unpark|link|unlink <names…>]  ·  picker: python3 ${$.plugin.root}/scripts/skills.py pick` }
+      return { text: `usage: /skills (pane) · /skills list · /skills suggest [topic…] · /skills park|unpark|link|unlink <names…>  ·  terminal picker: python3 ${$.plugin.root}/scripts/skills.py pick` }
     }
     if (verb === 'suggest' && words.length > 1) {
       // /skills suggest gsap scroll animation  →  suggest --for "gsap scroll animation"
@@ -395,6 +453,88 @@ export function register(on, options = {}) {
       }
     }
     return next({ ...e, instructions })
+  })
+
+  on('ui.render', { component: 'Pane', requestId: SKILLS_PANE }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const width = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
+    const narrow = width < 64
+    let cwd = ''
+    try { cwd = await $.session.cwd() } catch { /* fine */ }
+    const col = (children) => h(Box, { flexDirection: 'column' }, ...children)
+    const row = (children) => h(Box, { flexDirection: 'row' }, ...children)
+    const dim = (t) => h(Text, { dimColor: true }, t)
+    const text = (t) => h(Text, null, t)
+    const bold = (t) => h(Text, { bold: true }, t)
+    const pad = (t, n) => (t.length > n ? t.slice(0, n - 1) + '…' : t.padEnd(n))
+
+    if (!skillsData) {
+      return col([
+        dim(skillsBusy ? 'reading skills…' : 'no data yet'),
+        h(Button, { key: 'refresh', label: 'Refresh', hotkey: 'r', onPress: () => refreshSkills($, cwd) }),
+      ])
+    }
+    if (skillsData.error) {
+      return col([text(`token-saver: ${skillsData.error}`), dim('skills.py needs python3 or python on PATH'),
+        h(Button, { key: 'refresh', label: 'Refresh', hotkey: 'r', onPress: () => refreshSkills($, cwd) })])
+    }
+    const d = skillsData
+    const unused = new Set(d.unused || [])
+    const linked = new Set(d.project_links || [])
+    const usage = d.usage || {}
+    const active = [...(d.active || [])].sort((a, b) => (unused.has(b.name) - unused.has(a.name)) || (b.per_turn - a.per_turn) || a.name.localeCompare(b.name))
+    const parked = [...(d.parked || [])].sort((a, b) => ((usage[b.name] ? 1 : 0) - (usage[a.name] ? 1 : 0)) || a.name.localeCompare(b.name))
+    const nameW = Math.min(30, Math.max(12, ...active.concat(parked).map((x) => x.name.length)))
+
+    const header = [
+      row([
+        bold('Skills  '),
+        dim(`active ${active.length} ≈${d.per_turn_tokens} tok every turn · parked ${parked.length} ≈${d.parked_tokens} kept out  `),
+      ]),
+      row([
+        h(Button, { key: 'refresh', label: skillsBusy ? 'working…' : 'Refresh', hotkey: 'r', onPress: () => refreshSkills($, cwd) }),
+        text(' '),
+        ...(unused.size
+          ? [h(Button, { key: 'park-unused', label: `Park ${unused.size} unused`, hotkey: 'u', variant: 'primary', onPress: () => actSkills($, 'park', ['unused'], cwd) })]
+          : [dim('nothing unused 30+ days')]),
+      ]),
+      text(' '),
+    ]
+
+    const activeRows = active.length
+      ? active.map((sk) => row([
+          dim(unused.has(sk.name) ? '· ' : '  '),
+          text(pad(sk.name, nameW)),
+          dim(`  ${String(sk.per_turn).padStart(4)} tok  `),
+          ...(narrow ? [] : [dim(pad(usage[sk.name] ? `${daysAgo(usage[sk.name].last)} ×${usage[sk.name].count}` : 'never', 14))]),
+          h(Button, { key: `park:${sk.name}`, label: 'Park', onPress: () => actSkills($, 'park', [sk.name], cwd) }),
+        ]))
+      : [dim('  no active skills')]
+
+    const parkedRows = parked.length
+      ? parked.map((sk) => row([
+          dim(usage[sk.name] ? '! ' : '  '),
+          text(pad(sk.name, nameW)),
+          dim(`  ${String(sk.per_turn).padStart(4)} tok  `),
+          ...(narrow ? [] : [dim(pad(usage[sk.name] ? `used ${daysAgo(usage[sk.name].last)}` : '', 14))]),
+          ...(linked.has(sk.name)
+            ? [dim('linked here  '), h(Button, { key: `unlink:${sk.name}`, label: 'Unlink', onPress: () => actSkills($, 'unlink', [sk.name], cwd) })]
+            : [h(Button, { key: `link:${sk.name}`, label: 'Link here', onPress: () => actSkills($, 'link', [sk.name], cwd) }), text(' '),
+               h(Button, { key: `unpark:${sk.name}`, label: 'Unpark', onPress: () => actSkills($, 'unpark', [sk.name], cwd) })]),
+        ]))
+      : [dim('  nothing parked')]
+
+    return col([
+      ...header,
+      bold('Active'), dim('  · = no Skill call in local transcripts for 30+ days'),
+      ...activeRows,
+      text(' '),
+      bold('Parked'), dim('  ! = used while parked → Link here (this repo) or Unpark (everywhere)'),
+      ...parkedRows,
+      text(' '),
+      dim(skillsMsg ? `${skillsMsg}  ·  loads in the next session (/clear)` : 'Park moves a skill out of every session; Link brings it back for this repo only. Loads in the next session (/clear).'),
+      ...(d.scan_note ? [dim(d.scan_note)] : []),
+    ])
   })
 
   if (cacheBand) {
