@@ -43,5 +43,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.press({ key: 'park:floor-design-system' })
     const park = calls.find((c) => c.includes('park') && c.includes('floor-design-system'))
     expect(park).toBeDefined()
+    // the action reported through a progress row in the band
+    const band: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface, component: 'AbovePrompt', props: { hasSurvey: false, bodyColumns: 100 } as any })
+    expect(await band.find({ key: 'progress-close:loadout' })).toBeDefined()
+    expect(await band.find({ text: /Park 1 skill/ })).toBeDefined()
   })
 }

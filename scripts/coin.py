@@ -37,6 +37,8 @@ POOL_MID = "+=;:il!~-*^/)(][}{<>?xzjtfkrvy"
 POOL_HI = "#@0896&%$AEMWNHKXRSBDGQUZ"
 POOL_HEX = "0123456789abcdef"
 C_OK, C_SKIP, C_FAIL, C_DIM, C_TITLE = 114, 245, 203, 245, 220
+BAR_RUN, BAR_WAIT, BAR_FAIL, BAR_DONE, BAR_TRACK = 141, 179, 203, 78, 240   # purple, amber, red, green, track
+BAR_CELLS = 44
 
 # 5x7 bitmaps for the optional raised emblem
 EMBLEMS = {
@@ -188,7 +190,7 @@ def fit_height(stream, requested: int | None) -> int:
     if requested:
         return requested
     cols, rows = shutil.get_terminal_size((100, 40))
-    by_rows = rows - 18                       # title, four steps, summary and a little air below the coin
+    by_rows = rows - 19                       # title, bar, four steps, summary and a little air below the coin
     by_cols = int((cols - 6) / CELL_ASPECT)
     return max(11, min(21, by_rows, by_cols))
 
@@ -210,8 +212,59 @@ class Progress:
         self._thread: threading.Thread | None = None
         self._frame = 0
         self._drawn = 0
+        self._shown = 0.0            # eased fill of the install bar
+
+    def _flush(self) -> None:
+        try:
+            self.stream.flush()
+        except (BrokenPipeError, OSError):
+            pass
 
     # ---- drawing ----
+    def _bar_state(self) -> tuple[float, str, int, int, str]:
+        """(target fill, pill text, color, done count, state) for the one bar over all steps."""
+        total = len(self.steps)
+        done = sum(1 for s in self.steps if s.state in ("done", "skip"))
+        failed = any(s.state == "fail" for s in self.steps)
+        running = next((s for s in self.steps if s.state == "running"), None)
+        if failed:
+            label = next(s for s in self.steps if s.state == "fail").label
+            return done / total, f" ✕ {label} {done + 1}/{total} ", BAR_FAIL, done, "fail"
+        if done == total:
+            return 1.0, f" ✓ done {total}/{total} ", BAR_DONE, done, "done"
+        if running:
+            return done / total, f" {running.label} {done + 1}/{total} ", BAR_RUN, done, "run"
+        return done / total, f" {done}/{total} ", BAR_WAIT, done, "wait"
+
+    def bar(self) -> str:
+        """A dithered track with a tick per step and an inverse pill riding the fill head."""
+        target, pill, color, done, state = self._bar_state()
+        self._shown += (target - self._shown) * 0.18
+        if abs(target - self._shown) < 0.005:
+            self._shown = target
+        cells = BAR_CELLS
+        head = int(round(cells * self._shown))
+        pill = pill[:cells]
+        pill_x = max(0, min(cells - len(pill), head - len(pill) + 1))
+        ticks = {int(round(cells * i / len(self.steps))) for i in range(1, len(self.steps))}
+        out = []
+        x = 0
+        while x < cells:
+            if x == pill_x:
+                out.append(paint(pill, color, self.color) if not self.color else f"\033[7;38;5;{color}m{pill}\033[0m")
+                x += len(pill)
+                continue
+            if x in ticks:
+                out.append(paint("│", 250 if x <= head else BAR_TRACK, self.color))
+            elif x < head:
+                out.append(paint("░" if (x * 7) % 5 == 0 else "▒", color, self.color))
+            else:
+                out.append(paint("·", BAR_TRACK, self.color))
+            x += 1
+        glyph = {"run": ("●", BAR_RUN), "wait": ("?", BAR_WAIT), "fail": ("!", BAR_FAIL), "done": ("✓", BAR_DONE)}[state]
+        pct = f"{int(round(self._shown * 100)):>3}%"
+        return f"{paint(glyph[0], glyph[1], self.color)} {''.join(out)} {paint(pct, C_DIM, self.color)}"
+
     def _right(self) -> list[str]:
         right = [paint(self.title, C_TITLE, self.color), ""]
         for s in self.steps:
@@ -231,15 +284,19 @@ class Progress:
 
     def _lines(self, theta: float) -> list[str]:
         coin = [f"  {row}".rstrip() for row in self.coin.rows(theta, self._frame, self.color)]
-        steps = [f"  {row}".rstrip() for row in self._right()]
+        right = self._right()
+        steps = [f"  {right[0]}", f"  {self.bar()}", ""] + [f"  {row}".rstrip() for row in right[2:]]
         return coin + [""] + steps
 
     def _draw(self, theta: float) -> None:
         lines = self._lines(theta)
         out = f"\033[{self._drawn}A" if self._drawn else ""
         out += "".join("\033[2K" + l + "\n" for l in lines)
-        self.stream.write(out)
-        self.stream.flush()
+        try:
+            self.stream.write(out)
+        except (BrokenPipeError, OSError):
+            return
+        self._flush()
         self._drawn = len(lines)
 
     def _spin(self) -> None:
@@ -259,7 +316,7 @@ class Progress:
             self._thread.start()
         else:
             self.stream.write(f"{self.title}\n")
-            self.stream.flush()
+            self._flush()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -268,9 +325,10 @@ class Progress:
             if self._thread:
                 self._thread.join(timeout=1)
             with self._lock:
-                self._draw(0.0)                   # at rest, face up
+                self._shown = self._bar_state()[0]   # the bar lands where the steps did
+                self._draw(0.0)                      # at rest, face up
             self.stream.write("\033[?25h")
-            self.stream.flush()
+            self._flush()
 
     @contextmanager
     def step(self, label: str):
@@ -290,8 +348,11 @@ class Progress:
         finally:
             if not self.animate:
                 mark = {"done": "✔", "skip": "–", "fail": "✘"}.get(s.state, "•")
-                self.stream.write(f"  {mark} {label}" + (f"  {s.detail}" if s.detail else "") + "\n")
-                self.stream.flush()
+                try:
+                    self.stream.write(f"  {mark} {label}" + (f"  {s.detail}" if s.detail else "") + "\n")
+                except (BrokenPipeError, OSError):
+                    return
+                self._flush()
 
 
 def demo(plain: bool, seconds: float, size: int | None, emblem: str | None) -> None:
@@ -316,7 +377,11 @@ if __name__ == "__main__":
     ap.add_argument("--size", type=int, default=None, help="coin height in rows (odd, 9..25)")
     ap.add_argument("--emblem", default=None, help="raised letter on the face: T, $ or C")
     a = ap.parse_args()
-    if a.demo:
-        demo(a.plain, a.seconds, a.size, a.emblem)
-    else:
-        ap.print_help()
+    try:
+        if a.demo:
+            demo(a.plain, a.seconds, a.size, a.emblem)
+        else:
+            ap.print_help()
+    except BrokenPipeError:
+        # `| head` closed the pipe: leave quietly, no interpreter noise at exit
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())

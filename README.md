@@ -20,7 +20,7 @@ That is the whole install. No questions. It:
 4. **Preflights your existing `settings.json`.** Hooks you already have stay. For each one that overlaps, it prints one line saying how the two coexist, or that it left ours off (for example when you already have a status line). Nothing of yours is edited or reordered.
 5. Prints a summary and the one thing left to do: open a new session.
 
-While it works, an ASCII gold coin spins beside the step list and each step ticks as it lands. It is a lit, textured disc in the spirit of David Haubner's ASCII Bitcoin animation, without the B; `--size` sets its height and `--emblem T` puts a raised letter on the face. On a pipe, in CI, or with `--plain` (or `TOKEN_SAVER_PLAIN=1`) you get plain lines instead. `NO_COLOR` is honored. `python3 scripts/coin.py --demo` shows it without installing anything.
+While it works, an ASCII gold coin spins above the step list, a progress bar with a tick per step and a pill naming the current step fills underneath it, and each step ticks as it lands. It is a lit, textured disc in the spirit of David Haubner's ASCII Bitcoin animation, without the B; `--size` sets its height and `--emblem T` puts a raised letter on the face. On a pipe, in CI, or with `--plain` (or `TOKEN_SAVER_PLAIN=1`) you get plain lines instead. `NO_COLOR` is honored. `python3 scripts/coin.py --demo` shows it without installing anything.
 
 Run it again after updating the pack; it restages the mod and Claude picks it up on the next session or `/reload-plugins`. `./install.sh --dry-run` shows the plan without writing. `./install.sh --pick` is the module picker if you want to choose. `./install.sh --uninstall` removes the mod, our hooks, rules and skills, and leaves everything else.
 
@@ -69,7 +69,7 @@ The mod registers a `progress` tool. When Claude runs a job with stages, it call
 ● Release pipeline   ▒▒▒▒▒░▒▒│▒▒▒▒▒ Build 2/3 ·····│··········   67%  ×
 ```
 
-On the desktop it is a real bar: a dithered fill, a tick per stage, and a pill riding the head that names the stage and count. Purple while running, amber while waiting, red when a stage fails, green when done. The fill eases toward each new value. × removes a row; `remove: true` from the tool does the same. The status line reads "Progress" while any bar is up. Nothing is injected into the prompt beyond the one-line tool result.
+On the desktop it is a real bar: a dithered fill, a tick per stage, and a pill riding the head that names the stage and count. Purple while running, amber while waiting, red when a stage fails, green when done. The fill eases toward each new value. × removes a row; `remove: true` from the tool does the same. `/loadout` actions use the same rows: one stage per skill, green when done, gone eight seconds later. The status line reads "Progress" while any bar is up. Nothing is injected into the prompt beyond the one-line tool result.
 
 ### Compaction guard (mod only)
 

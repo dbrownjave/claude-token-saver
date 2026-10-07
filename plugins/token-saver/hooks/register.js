@@ -210,22 +210,62 @@ async function refreshSkills($, cwd) {
   try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
 }
 
+/** Expand globs, @groups and 'unused' against the last status, so each skill can be its own stage. */
+function expandSkillNames(verb, names) {
+  if (!skillsData || skillsData.error) return names
+  const active = (skillsData.active || []).map((x) => x.name)
+  const parked = (skillsData.parked || []).map((x) => x.name)
+  const pool = verb === 'park' ? active : verb === 'unlink' ? (skillsData.project_links || []) : parked
+  const out = []
+  for (const raw of names) {
+    let hits
+    if (raw === 'unused') hits = (skillsData.unused || []).filter((n) => pool.includes(n))
+    else if (raw.startsWith('@')) hits = pool.filter((n) => n.split('-')[0] === raw.slice(1))
+    else if (/[*?[]/.test(raw)) {
+      const re = new RegExp('^' + raw.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$')
+      hits = pool.filter((n) => re.test(n))
+    } else hits = [raw]
+    for (const h of hits) if (!out.includes(h)) out.push(h)
+  }
+  return out
+}
+
+const VERB_LABEL = { park: 'Park', unpark: 'Bring back', link: 'Link here', unlink: 'Unlink' }
+
 async function actSkills($, verb, names, cwd) {
   if (skillsBusy) return
   skillsBusy = true
-  skillsMsg = `${verb} ${names.join(' ')}…`
-  try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
+  const list = expandSkillNames(verb, names)
+  const total = list.length
+  const rowId = 'loadout'
+  const label = `${VERB_LABEL[verb] || verb} ${total} skill${total === 1 ? '' : 's'}`
+  applyProgress({ id: rowId, label, stage: list[0] || verb, step: 1, total, state: 'running', percent: 0 })
+  skillsMsg = `${label}…`
+  try { $.ui.status('Progress'); $.ui.invalidate('ui.render') } catch { /* no UI */ }
+  let failures = 0
+  let last = ''
   try {
-    const args = [`${$.plugin.root}/scripts/skills.py`, verb, ...names]
-    if (cwd) args.push('--project', cwd)
-    const r = await runPython($, args, { timeoutMs: 60_000 })
-    const first = (r.stdout || r.stderr || '').trim().split('\n').find((l) => l.trim()) || `${verb}: exit ${r.exitCode}`
-    skillsMsg = first.replace(/\s+→\s+\S+$/, '')
+    for (let i = 0; i < total; i++) {
+      applyProgress({ id: rowId, stage: list[i], step: i + 1, total, state: 'running', percent: (i / total) * 100 })
+      try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
+      const args = [`${$.plugin.root}/scripts/skills.py`, verb, list[i], '--no-usage']
+      if (cwd) args.push('--project', cwd)
+      const r = await runPython($, args, { timeoutMs: 60_000 })
+      const first = (r.stdout || r.stderr || '').trim().split('\n').find((l) => l.trim()) || `${verb}: exit ${r.exitCode}`
+      last = first.replace(/\s+→\s+\S+$/, '')
+      if (r.exitCode !== 0 || /^Unknown|^  skip/.test(first)) failures += 1
+    }
+    const row = applyProgress({ id: rowId, stage: failures ? `${failures} skipped` : 'Done', step: total, total, state: failures ? 'failed' : 'done', percent: 100 })
+    if (row) row.expireAt = Date.now() + (failures ? 15000 : 8000)
+    skillsMsg = total === 1 ? last : `${label}: ${total - failures} done${failures ? `, ${failures} skipped` : ''}`
     try { $.ui.toast(`${skillsMsg} · loads after /clear`, { timeoutMs: 8000 }) } catch { /* no UI */ }
   } catch (err) {
     skillsMsg = `could not run skills.py: ${err && err.message ? err.message : String(err)}`
+    const row = applyProgress({ id: rowId, stage: 'error', state: 'failed', percent: 100 })
+    if (row) row.expireAt = Date.now() + 15000
   }
   skillsBusy = false
+  try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
   await refreshSkills($, cwd)
 }
 
@@ -419,7 +459,19 @@ export function register(on, options = {}) {
     }
     progressRows.clear()
     progressTicker = $.clock.every(70, () => {
-      if (progressRows.size === 0 || progressSettled()) return
+      if (progressRows.size === 0) return
+      const now = Date.now()
+      let changed = false
+      for (const [id, r] of progressRows) {
+        if (r.expireAt && now >= r.expireAt) {
+          progressRows.delete(id)
+          changed = true
+        }
+      }
+      if (changed) {
+        try { $.ui.status(progressRows.size ? 'Progress' : undefined) } catch { /* no UI */ }
+      }
+      if (!changed && progressSettled()) return
       for (const r of progressRows.values()) r.shown += (r.target - r.shown) * 0.16
       try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
     })
@@ -513,6 +565,14 @@ export function register(on, options = {}) {
     }
     if (!['status', 'suggest'].includes(verb) && words.length < 2) {
       return { text: `/loadout ${verb} needs at least one name. Globs (gsap-*), groups (@gsap) and 'unused' work.` }
+    }
+    if (['park', 'unpark', 'link', 'unlink'].includes(verb)) {
+      // Typed actions take the same path as the pane's buttons: a progress row per skill, then a refresh.
+      let cwd = ''
+      try { cwd = await $.session.cwd() } catch { /* fine */ }
+      if (!skillsData) await refreshSkills($, cwd)
+      await actSkills($, verb, words.slice(1), cwd)
+      return { text: `${skillsMsg} · loads in the next session (/clear)` }
     }
     const argv = [`${$.plugin.root}/scripts/skills.py`, verb, ...words.slice(1)]
     try {
