@@ -85,7 +85,7 @@ Dev loop: `claude plugin validate ./plugins/token-saver` then `claude plugin tes
 | Threshold toast | Once per threshold crossed (40, 60, 75 percent by default), with the cache-aware hint. |
 | First-run welcome | One toast the first time the mod loads on a machine, saying what is now on. |
 | Compaction guard | Everywhere the mod loads. |
-| `/park` | Opens a pane: every skill with cost per turn and last use, a Park button on each active one, Link here / Unpark on each parked one, Park N unused in the header. Esc closes. `/park list` is the text form. CLI and Desktop; the VS Code panel gets the text. |
+| `/loadout` | Opens a pane: every skill with cost per turn and last use, a Park button on each active one, Link here / Unpark on each parked one, Park N unused in the header. Esc closes. `/loadout list` is the text form. CLI and Desktop; the VS Code panel gets the text. |
 
 Same `~/.claude/token-saver/quiet.json` as the Python hook. Do not run both quiet-bash implementations at once or commands get rewritten twice.
 
@@ -128,7 +128,7 @@ Every skill under `~/.claude/skills` costs tokens on **every turn**: its name an
 ./install.sh skills park gsap-* # by name, glob, @group, or 'unused'
 ```
 
-In a session with the mod: `/park` opens the pane; `/park gsap-*` parks; `/park back gsap-react` brings one back everywhere; `/park link gsap-react` for this repo only. Instant, no model turn. The picker needs a TTY so it stays in the terminal.
+In a session with the mod: `/loadout` opens the pane; `/loadout gsap-*` parks; `/loadout back gsap-react` brings one back everywhere; `/loadout link gsap-react` for this repo only. Instant, no model turn. The picker needs a TTY so it stays in the terminal.
 
 | Action | What happens | Undo |
 |---|---|---|

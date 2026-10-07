@@ -498,7 +498,7 @@ def score_skill(entry: dict, signals: dict[str, tuple[str, int]]) -> tuple[int, 
 
 def compact_names(hits: list[str], pool: list[str]) -> list[str]:
     """Fold a prefix group into `prefix-*` when three or more hits share it and the glob
-    would select nothing outside the hits. Keeps /park link lines short and complete."""
+    would select nothing outside the hits. Keeps /loadout link lines short and complete."""
     by_prefix: dict[str, list[str]] = {}
     for n in hits:
         by_prefix.setdefault(n.split("-")[0], []).append(n)
@@ -553,7 +553,7 @@ def suggest(project: Path, topic: str, as_json: bool, brief: bool) -> int:
         names = compact_names([e["name"] for _, e, _ in strong], [e["name"] for e in parked])
         srcs = sorted({r.split("(")[1].rstrip(")") for _, _, why in strong[:6] for r in why[:2]})
         print(f"Parked skills match this repo: {', '.join(names[:6])}{' …' if len(names) > 6 else ''} "
-              f"(from {', '.join(srcs[:3])}). Enable here: /park link {' '.join(names)}   (loads after /clear)")
+              f"(from {', '.join(srcs[:3])}). Enable here: /loadout link {' '.join(names)}   (loads after /clear)")
         return 0
 
     if not signals:
@@ -581,7 +581,7 @@ def suggest(project: Path, topic: str, as_json: bool, brief: bool) -> int:
             names = " ".join(compact_names([e["name"] for _, e, _ in strong], [e["name"] for e in parked]))
             print(f"\nEnable for this repo only:  skills.py link {names}")
             print(f"Enable everywhere:          skills.py unpark {names}")
-            print("Loads in the next session (/clear). In a mod session: /park link <names>")
+            print("Loads in the next session (/clear). In a mod session: /loadout link <names>")
         else:
             print("\nOnly weak hints. Enable one by name if you want it: skills.py link <name>")
     elif topic and not active_hits:

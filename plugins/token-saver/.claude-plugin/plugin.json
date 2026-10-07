@@ -45,7 +45,7 @@
     "suggestSkills": {
       "type": "boolean",
       "title": "Suggest parked skills for this repo at session start",
-      "description": "Reads package.json, Package.swift, pyproject, Cargo.toml, go.mod and html for signals and names parked skills that fit. One UI line, no tokens. /park suggest [topic] on demand.",
+      "description": "Reads package.json, Package.swift, pyproject, Cargo.toml, go.mod and html for signals and names parked skills that fit. One UI line, no tokens. /loadout suggest [topic] on demand.",
       "default": true
     }
   }

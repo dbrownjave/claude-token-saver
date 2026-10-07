@@ -48,7 +48,7 @@ let levels = DEFAULT_LEVELS
 let pythonQuietOn = false
 let bandHidden = false
 let announcedPct = 0            // highest threshold already toasted this session
-const SKILLS_PANE = 'park'
+const SKILLS_PANE = 'loadout'
 let skillsData = null           // last `skills.py status --json`
 let skillsBusy = false
 let skillsMsg = ''               // last action's one-line result, shown in the pane footer
@@ -246,7 +246,7 @@ export function register(on, options = {}) {
       // Once per machine: say what changed, so the first session after install is not a mystery.
       if (!(await $.store.get('welcomed'))) {
         await $.store.set('welcomed', true)
-        const msg = 'token-saver is on: cache band above the prompt · /tokens · /park · /compact is guarded when the cache is cold'
+        const msg = 'token-saver is on: cache band above the prompt · /tokens · /loadout · /compact is guarded when the cache is cold'
         $.ui.log(msg)
         try { $.ui.toast(msg, { timeoutMs: 12000 }) } catch { /* no UI */ }
       }
@@ -259,9 +259,9 @@ export function register(on, options = {}) {
         description: 'Token-saver totals, cache clock and your context thresholds. No model turn.',
       })
       await $.command.register({
-        name: 'park',
+        name: 'loadout',
         description:
-          'Skills cost tokens every turn. /park opens a pane to park, link and bring back skills; /park <names…>, /park back|link|unlink <names…>, /park list, /park suggest. Takes effect next session.',
+          'Your skill loadout. Every skill costs tokens each turn: /loadout opens a pane to park, link and bring back skills; /loadout <names…> parks, /loadout back|link|unlink <names…>, /loadout list, /loadout suggest. Takes effect next session.',
       })
     } catch {
       /* command API missing on older builds */
@@ -297,7 +297,7 @@ export function register(on, options = {}) {
           const seen = await $.store.get(key)
           if (seen !== today) {
             await $.store.set(key, today)
-            try { $.ui.toast(line.split('. Enable here')[0] + '. See /park suggest', { timeoutMs: 8000 }) } catch { /* no UI */ }
+            try { $.ui.toast(line.split('. Enable here')[0] + '. See /loadout suggest', { timeoutMs: 8000 }) } catch { /* no UI */ }
           }
         }
       } catch {
@@ -335,10 +335,10 @@ export function register(on, options = {}) {
   })
 
   /**
-   * /park → scripts/skills.py inside the plugin. No shell: argv only.
+   * /loadout → scripts/skills.py inside the plugin. No shell: argv only.
    * The interactive picker needs a TTY, so it stays a terminal command.
    */
-  on('command.run', { command: 'park' }, async ($, e) => {
+  on('command.run', { command: 'loadout' }, async ($, e) => {
     const words = (e.args || '').trim().split(/\s+/).filter(Boolean)
     if (words.length === 0 || words[0] === 'pane') {
       // The pane: rows with Park / Link / Unpark / Unlink buttons. Text fallback where panes do not draw.
@@ -346,8 +346,8 @@ export function register(on, options = {}) {
       try { cwd = await $.session.cwd() } catch { /* fine */ }
       void refreshSkills($, cwd)
       try {
-        await $.ui.open({ id: SKILLS_PANE, title: 'Park', focus: true, closeOnEscape: true, holdToasts: true })
-        return { text: 'Park pane opened. Esc closes it. /park list prints the same as text.' }
+        await $.ui.open({ id: SKILLS_PANE, title: 'Loadout', focus: true, closeOnEscape: true, holdToasts: true })
+        return { text: 'Loadout pane opened. Esc closes it. /loadout list prints the same as text.' }
       } catch {
         words.splice(0, words.length, 'status')
       }
@@ -355,17 +355,17 @@ export function register(on, options = {}) {
     if (words[0] === 'list') words[0] = 'status'
     if (words[0] === 'back') words[0] = 'unpark'
     const verbs = ['status', 'suggest', 'park', 'unpark', 'link', 'unlink']
-    if (!verbs.includes(words[0]) && words[0] !== 'help') words.unshift('park')   // /park gsap-*  →  park gsap-*
+    if (!verbs.includes(words[0]) && words[0] !== 'help') words.unshift('park')   // /loadout gsap-*  →  park gsap-*
     const verb = words[0]
     if (!verbs.includes(verb)) {
-      return { text: `usage: /park (pane) · /park <names…> · /park back|link|unlink <names…> · /park list · /park suggest [topic…]  ·  terminal picker: python3 ${$.plugin.root}/scripts/skills.py pick` }
+      return { text: `usage: /loadout (pane) · /loadout <names…> · /loadout back|link|unlink <names…> · /loadout list · /loadout suggest [topic…]  ·  terminal picker: python3 ${$.plugin.root}/scripts/skills.py pick` }
     }
     if (verb === 'suggest' && words.length > 1) {
-      // /park suggest gsap scroll animation  →  suggest --for "gsap scroll animation"
+      // /loadout suggest gsap scroll animation  →  suggest --for "gsap scroll animation"
       words.splice(1, words.length - 1, '--for', words.slice(1).join(' '))
     }
     if (!['status', 'suggest'].includes(verb) && words.length < 2) {
-      return { text: `/park ${verb} needs at least one name. Globs (gsap-*), groups (@gsap) and 'unused' work.` }
+      return { text: `/loadout ${verb} needs at least one name. Globs (gsap-*), groups (@gsap) and 'unused' work.` }
     }
     const argv = [`${$.plugin.root}/scripts/skills.py`, verb, ...words.slice(1)]
     try {
@@ -490,7 +490,7 @@ export function register(on, options = {}) {
 
     const header = [
       row([
-        bold('Park  '),
+        bold('Loadout  '),
         dim(`active ${active.length} ≈${d.per_turn_tokens} tok every turn · parked ${parked.length} ≈${d.parked_tokens} kept out  `),
       ]),
       row([

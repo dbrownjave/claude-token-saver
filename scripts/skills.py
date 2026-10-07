@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shim: the real script ships inside the mod so /park can find it."""
+"""Shim: the real script ships inside the mod so /loadout can find it."""
 import runpy
 from pathlib import Path
 
