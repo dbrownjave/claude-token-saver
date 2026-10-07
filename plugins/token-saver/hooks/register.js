@@ -354,38 +354,135 @@ function pillText(row) {
   return `${lead}${row.stage || row.label}${count}`
 }
 
-/** Desktop and the web surfaces: a real bar. Dithered fill, stage ticks, a pill riding the head. */
+/** Shared by every surface: the dot-matrix palette. Deterministic, so a frame never flickers between redraws. */
+function hexRgb(hex) {
+  const n = parseInt(hex.slice(1), 16)
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+function rgbHex(r, g, b) {
+  return '#' + [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('')
+}
+/** `color` scaled toward black by `f` (0..1), mixed a touch toward the track so the dim end still reads as the state. */
+function shade(hex, f) {
+  const [r, g, b] = hexRgb(hex)
+  const t = Math.max(0, Math.min(1, f))
+  return rgbHex(0x2b + (r - 0x2b) * t, 0x2b + (g - 0x2b) * t, 0x30 + (b - 0x30) * t)
+}
+/** A small integer hash of a grid position; ~15% of filled squares sit one step dimmer. */
+function dotHash(col, row, salt) {
+  let x = (col * 374761393 + row * 668265263 + salt * 2246822519) | 0
+  x = Math.imul(x ^ (x >>> 13), 1274126177)
+  return (x ^ (x >>> 16)) >>> 0
+}
+const DOT_UNFILLED = '#3a3a40'
+const DOT_TRACK = '#242428'
+const THUMB_TEXT = '#1d1d21'
+let progressTick = 0            // advanced by the band ticker; frames are a pure function of it (0 in tests)
+const BURST_PERIOD = 36         // ticks per burst (≈2.5 s at 70 ms)
+
+/**
+ * Brightness of one filled square, 0..1, after the Effort slider's own recipe: a quantized 5-step ramp
+ * rising toward the head, a hashed dither one step down, a "burst" wavefront that sweeps from the left
+ * edge to the head and lifts the cells it crosses one step (per-cell jitter so the front frays), and a slow
+ * breath on top-step cells. Done and failed rows hold still.
+ */
+function dotFactor(row, frac, col, r, salt) {
+  const live = row.state === 'running' || row.state === 'waiting'
+  const hsh = dotHash(col, r, salt)
+  let step = Math.min(4, Math.floor(frac * 5))             // 0..4 along the fill
+  if (hsh % 100 < 15) step = Math.max(0, step - 1)         // dither
+  if (live) {
+    const period = row.state === 'waiting' ? BURST_PERIOD * 2 : BURST_PERIOD
+    const phase = ((progressTick + (hsh % 5)) % period) / period    // jitter: each cell sees the front a hair early or late
+    const front = phase * 1.15                                      // the front runs a little past the head, then restarts
+    const d = frac + Math.abs(r - 1) * 0.04                         // Manhattan-ish: rows lag the middle row slightly
+    if (Math.abs(d - front) < 0.06) step = Math.min(4, step + 1)
+  }
+  let f = 0.45 + 0.1375 * step                                   // 0.45 … 1.0
+  if (live && step === 4) f -= 0.1 * (0.5 + 0.5 * Math.sin(progressTick * 0.25 + (hsh % 6)))   // breathe
+  return f
+}
+
+/** Desktop and the web surfaces: Claude Code's Effort slider look. A rounded track of tiny rounded squares, dim grey where
+ *  unfilled, the state colour brightening toward the head where filled, a deterministic dither, stage ticks in the gaps,
+ *  and a white rounded thumb carrying the pill text. */
 function progressSvg(row, width) {
-  const W = Math.max(160, Math.floor(width)), H = 22, R = 11
+  const W = Math.max(160, Math.floor(width)), H = 22
+  const SIZE = 4, GAP = 2, PITCH = SIZE + GAP, ROWS = 3, RAD = 1
+  const INSET_Y = (H - (ROWS * SIZE + (ROWS - 1) * GAP)) / 2
+  const cols = Math.floor((W - 2 * INSET_Y + GAP) / PITCH)
+  const INSET_X = (W - (cols * SIZE + (cols - 1) * GAP)) / 2
   const color = STATE_COLOR[row.state]
   const head = Math.round(W * row.shown)
   const label = pillText(row)
-  const pillW = Math.min(W, Math.round(label.length * 6.9 + 22))
-  const pillX = Math.max(0, Math.min(W - pillW, head - pillW + 6))
+  const pillW = Math.min(W - 4, Math.round(label.length * 6.6 + 20))
+  const pillX = Math.max(2, Math.min(W - pillW - 2, head - pillW))
+  const salt = row.id.length * 31 + (row.id.charCodeAt(0) || 0)
+  const squares = []
+  for (let c = 0; c < cols; c++) {
+    const x = INSET_X + c * PITCH
+    const cx = x + SIZE / 2
+    const filled = cx < head
+    const frac = head > 0 ? Math.min(1, cx / head) : 1
+    for (let r = 0; r < ROWS; r++) {
+      const y = INSET_Y + r * PITCH
+      const col = filled ? shade(color, dotFactor(row, frac, c, r, salt)) : DOT_UNFILLED
+      squares.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${SIZE}" height="${SIZE}" rx="${RAD}" fill="${col}"/>`)
+    }
+  }
   const ticks = []
   for (let i = 1; i < row.total && row.total <= 40; i++) {
-    const x = (W * i) / row.total
-    ticks.push(`<rect x="${x.toFixed(1)}" y="4" width="1.2" height="${H - 8}" fill="${x <= head ? '#ffffff' : color}" opacity="${x <= head ? 0.9 : 0.35}"/>`)
+    const bx = (W * i) / row.total
+    const colIdx = Math.max(1, Math.min(cols - 1, Math.round((bx - INSET_X) / PITCH)))
+    const tx = INSET_X + colIdx * PITCH - GAP / 2 - 0.5
+    const lit = tx <= head
+    ticks.push(`<rect x="${tx.toFixed(1)}" y="${INSET_Y.toFixed(1)}" width="1" height="${(H - 2 * INSET_Y).toFixed(1)}" fill="${lit ? '#ffffff' : color}" opacity="${lit ? 0.9 : 0.35}"/>`)
   }
   const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;')
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
-    `<defs><pattern id="d" width="4" height="4" patternUnits="userSpaceOnUse">` +
-    `<rect x="0" y="0" width="1.6" height="1.6" fill="${color}" opacity="0.95"/>` +
-    `<rect x="2" y="2" width="1.6" height="1.6" fill="${color}" opacity="0.55"/>` +
-    `<rect x="2" y="0" width="1" height="1" fill="${color}" opacity="0.3"/></pattern>` +
-    `<clipPath id="c"><rect x="0" y="0" width="${W}" height="${H}" rx="${R}"/></clipPath></defs>` +
-    `<rect x="0" y="0" width="${W}" height="${H}" rx="${R}" fill="#2b2b30"/>` +
-    `<g clip-path="url(#c)"><rect x="0" y="0" width="${head}" height="${H}" fill="url(#d)"/>` +
-    `<rect x="0" y="0" width="${head}" height="${H}" fill="${color}" opacity="0.12"/>${ticks.join('')}</g>` +
-    `<rect x="${pillX}" y="0" width="${pillW}" height="${H}" rx="${R}" fill="${color}"/>` +
-    `<text x="${pillX + pillW / 2}" y="15" text-anchor="middle" font-family="-apple-system, Inter, Segoe UI, sans-serif" font-size="12" font-weight="600" fill="#ffffff">${esc(label)}</text>` +
+    `<defs><clipPath id="c"><rect x="0" y="0" width="${W}" height="${H}" rx="${H / 2}"/></clipPath></defs>` +
+    `<rect x="0" y="0" width="${W}" height="${H}" rx="${H / 2}" fill="${DOT_TRACK}"/>` +
+    `<g clip-path="url(#c)">${squares.join('')}${ticks.join('')}</g>` +
+    `<rect x="${pillX}" y="1" width="${pillW}" height="${H - 2}" rx="${(H - 2) / 2}" fill="#ffffff"/>` +
+    `<text x="${pillX + pillW / 2}" y="14.5" text-anchor="middle" font-family="-apple-system, Inter, Segoe UI, sans-serif" font-size="11" font-weight="600" fill="${THUMB_TEXT}">${esc(label)}</text>` +
     `</svg>`
   )
 }
 
-/** The terminal: a block-glyph track with a dithered fill, dim ticks, and an inverse pill at the head. */
-function progressTrackText(row, cells, h, Text) {
+/** Standard base64 of a byte array; the sandbox has no Buffer and toBase64 is not everywhere yet. */
+function base64(bytes) {
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+  let out = ''
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i], b = bytes[i + 1], c = bytes[i + 2]
+    const n = (a << 16) | ((b || 0) << 8) | (c || 0)
+    out += A[(n >> 18) & 63] + A[(n >> 12) & 63] + (b === undefined ? '=' : A[(n >> 6) & 63]) + (c === undefined ? '=' : A[n & 63])
+  }
+  return out
+}
+/** Raster cells for a dot matrix `columns` wide and one row tall: a half-block square on every even global column (a
+ *  terminal cell is about twice as tall as wide, so a half block is near square), a blank gap column between, and a `│`
+ *  where a stage boundary falls. `colorAt(col)` gives the 0xRRGGBB of a global column, -1 for an unlit tick, -2 for a
+ *  lit one. `offset` is the global index of this segment's first column, so parity survives the split around the thumb. */
+function rasterCells(columns, colorAt, offset = 0) {
+  const DEFAULT = 0x01000000
+  const words = new Uint32Array(columns * 3)
+  let i = 0
+  for (let c = 0; c < columns; c++) {
+    const g = c + offset
+    const col = colorAt(g)
+    if (col === -1) { words[i++] = 0x2502; words[i++] = 0x55555c; words[i++] = DEFAULT }         // │ tick, unlit
+    else if (col === -2) { words[i++] = 0x2502; words[i++] = 0xffffff; words[i++] = DEFAULT }    // │ tick, lit
+    else if (g % 2 === 1) { words[i++] = 0x20; words[i++] = DEFAULT; words[i++] = DEFAULT }      // gap column
+    else { words[i++] = 0x2580; words[i++] = col; words[i++] = DEFAULT }                          // ▀ square
+  }
+  return base64(new Uint8Array(words.buffer))
+}
+
+/** The terminal: the same dot matrix. With a Raster to draw into, two rows of half-block squares split around a white
+ *  thumb at the head; without one, a row of small-square glyphs in a 4-step gradient of the state colour. */
+function progressTrackText(row, cells, h, Text, Raster) {
   const color = STATE_COLOR[row.state]
   const head = Math.round(cells * row.shown)
   const label = ` ${pillText(row)} `
@@ -393,27 +490,46 @@ function progressTrackText(row, cells, h, Text) {
   const pillX = Math.max(0, Math.min(cells - pillW, head - pillW + 1))
   const tickAt = new Set()
   for (let i = 1; i < row.total && row.total <= cells; i++) tickAt.add(Math.round((cells * i) / row.total))
+  const salt = row.id.length * 31 + (row.id.charCodeAt(0) || 0)
+  const thumb = h(Text, { color: THUMB_TEXT, backgroundColor: '#ffffff', bold: true }, label.slice(0, pillW))
+  if (typeof Raster === 'function') {
+    const colorAt = (x) => {
+      // ticks sit in a gap column: the one before an even boundary, the boundary itself when odd
+      if (x % 2 === 1 && (tickAt.has(x) || tickAt.has(x + 1))) return x <= head ? -2 : -1
+      if (x >= head) return 0x3a3a40
+      return parseInt(shade(color, dotFactor(row, x / Math.max(1, head - 1), x, 1, salt)).slice(1), 16)
+    }
+    const parts = []
+    if (pillX > 0) parts.push(h(Raster, { key: `progress-dots:${row.id}:l`, columns: pillX, rows: 1, cells: rasterCells(pillX, colorAt, 0) }))
+    parts.push(thumb)
+    const rest = cells - pillX - pillW
+    if (rest > 0) parts.push(h(Raster, { key: `progress-dots:${row.id}:r`, columns: rest, rows: 1, cells: rasterCells(rest, colorAt, pillX + pillW) }))
+    return parts
+  }
+  const steps = [shade(color, 0.5), shade(color, 0.68), shade(color, 0.85), color]
   const parts = []
   let run = ''
-  let runKind = ''
+  let runProps = null
+  let runKey = ''
   const flush = () => {
     if (!run) return
-    if (runKind === 'fill') parts.push(h(Text, { color }, run))
-    else parts.push(h(Text, { dimColor: true }, run))
+    parts.push(h(Text, runProps, run))
     run = ''
   }
   for (let x = 0; x < cells; x++) {
     if (x === pillX) {
       flush()
-      parts.push(h(Text, { color, inverse: true, bold: true }, label.slice(0, pillW)))
+      parts.push(thumb)
       x += pillW - 1
       continue
     }
-    let ch, kind
-    if (tickAt.has(x)) { ch = '│'; kind = 'tick' }
-    else if (x < head) { ch = (x * 7 + row.id.length) % 5 === 0 ? '░' : '▒'; kind = 'fill' }
-    else { ch = '·'; kind = 'track' }
-    if (kind !== runKind) { flush(); runKind = kind }
+    let ch, props, key
+    if (tickAt.has(x)) { ch = '│'; props = x <= head ? { color: '#ffffff' } : { color, dimColor: true }; key = `t${x <= head}` }
+    else if (x < head) {
+      const s = Math.min(3, Math.round((dotFactor(row, x / Math.max(1, head), x, 1, salt) - 0.45) / 0.55 * 3))
+      ch = '▪'; props = { color: steps[s] }; key = `f${s}`
+    } else { ch = '▪'; props = { color: DOT_UNFILLED }; key = 'u' }
+    if (key !== runKey) { flush(); runKey = key; runProps = props }
     run += ch
   }
   flush()
@@ -520,9 +636,14 @@ export function register(on, options = {}) {
       if (changed) {
         try { $.ui.status(progressRows.size ? 'Progress' : undefined) } catch { /* no UI */ }
       }
-      if (!changed && progressSettled()) return
-      for (const r of progressRows.values()) r.shown += (r.target - r.shown) * 0.16
-      try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
+      progressTick += 1
+      const moving = !progressSettled()
+      const live = [...progressRows.values()].some((r) => r.state === 'running' || r.state === 'waiting')
+      if (moving) for (const r of progressRows.values()) r.shown += (r.target - r.shown) * 0.16
+      // the burst and the breath redraw at half rate; a settled done/failed row costs nothing
+      if (changed || moving || (live && progressTick % 2 === 0)) {
+        try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
+      }
     })
     if (cacheBand) {
       // Keeps "warm Nm" honest while the person thinks. Runs until the module reloads.
@@ -815,6 +936,7 @@ export function register(on, options = {}) {
     if (progressRows.size === 0 && !showTokens) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const Svg = $.ui.resolve(e).Svg
+    const Raster = e.surface === 'terminal' ? $.ui.resolve(e).Raster : undefined
     const width = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
     const children = []
     for (const row of progressRows.values()) {
@@ -833,7 +955,7 @@ export function register(on, options = {}) {
           h(Text, { dimColor: true }, ` ${pct} `), close))
       } else {
         const cells = Math.max(16, Math.min(48, width - labelW - 16))
-        children.push(h(Box, { flexDirection: 'row' }, ...lead, ...progressTrackText(row, cells, h, Text), h(Text, { dimColor: true }, ` ${pct} `), close))
+        children.push(h(Box, { flexDirection: 'row' }, ...lead, ...progressTrackText(row, cells, h, Text, Raster), h(Text, { dimColor: true }, ` ${pct} `), close))
       }
       if (row.note) children.push(h(Text, { dimColor: true }, '    ' + row.note))
     }

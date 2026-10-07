@@ -37,7 +37,9 @@ POOL_MID = "+=;:il!~-*^/)(][}{<>?xzjtfkrvy"
 POOL_HI = "#@0896&%$AEMWNHKXRSBDGQUZ"
 POOL_HEX = "0123456789abcdef"
 C_OK, C_SKIP, C_FAIL, C_DIM, C_TITLE = 114, 245, 203, 245, 220
-BAR_RUN, BAR_WAIT, BAR_FAIL, BAR_DONE, BAR_TRACK = 141, 179, 203, 78, 240   # purple, amber, red, green, track
+BAR_RUN, BAR_WAIT, BAR_FAIL, BAR_DONE = 141, 179, 203, 78   # purple, amber, red, green
+BAR_UNFILLED = 238                                                           # dim square where the fill has not reached
+BAR_RAMP = {141: (60, 97, 141), 179: (136, 179, 220), 203: (124, 167, 203), 78: (29, 71, 78)}   # 3-step gradient per state
 BAR_CELLS = 44
 
 # 5x7 bitmaps for the optional raised emblem
@@ -237,7 +239,8 @@ class Progress:
         return done / total, f" {done}/{total} ", BAR_WAIT, done, "wait"
 
     def bar(self) -> str:
-        """A dithered track with a tick per step and an inverse pill riding the fill head."""
+        """A dot-matrix track: tiny squares in a 3-step gradient of the state colour where filled, dim where not,
+        a `│` per step boundary, and a white thumb with dark text riding the fill head."""
         target, pill, color, done, state = self._bar_state()
         self._shown += (target - self._shown) * 0.18
         if abs(target - self._shown) < 0.005:
@@ -247,19 +250,26 @@ class Progress:
         pill = pill[:cells]
         pill_x = max(0, min(cells - len(pill), head - len(pill) + 1))
         ticks = {int(round(cells * i / len(self.steps))) for i in range(1, len(self.steps))}
+        ramp = BAR_RAMP.get(color, (color, color, color))
+        front = ((self._frame % 36) / 36) * 1.15 if state in ("run", "wait") else -1   # the burst, as the band draws it
         out = []
         x = 0
         while x < cells:
             if x == pill_x:
-                out.append(paint(pill, color, self.color) if not self.color else f"\033[7;38;5;{color}m{pill}\033[0m")
+                out.append(f"\033[48;5;255;38;5;234m{pill}\033[0m" if self.color else pill)
                 x += len(pill)
                 continue
             if x in ticks:
-                out.append(paint("│", 250 if x <= head else BAR_TRACK, self.color))
+                out.append(paint("│", 250 if x <= head else BAR_UNFILLED, self.color))
             elif x < head:
-                out.append(paint("░" if (x * 7) % 5 == 0 else "▒", color, self.color))
+                step = min(2, (x * 3) // max(1, head))
+                if (x * 7 + 3) % 13 == 0:      # a deterministic dither: one in ~13 squares sits a step dimmer
+                    step = max(0, step - 1)
+                if front >= 0 and abs(x / max(1, head) - front) < 0.07:   # the front lifts the cells it crosses
+                    step = min(2, step + 1)
+                out.append(paint("▪", ramp[step], self.color))
             else:
-                out.append(paint("·", BAR_TRACK, self.color))
+                out.append(paint("▪", BAR_UNFILLED, self.color))
             x += 1
         glyph = {"run": ("●", BAR_RUN), "wait": ("?", BAR_WAIT), "fail": ("!", BAR_FAIL), "done": ("✓", BAR_DONE)}[state]
         pct = f"{int(round(self._shown * 100)):>3}%"
