@@ -27,7 +27,7 @@ Omit `--for` to match on repo signals alone (package.json deps, Package.swift, x
 2. **Parked match** → one line to the user: which skills fit, from which signal, cost per turn. Offer two options, default the first:
    - this repo only: `skills.py link <names>` (symlink into `.claude/skills`, machine-local)
    - everywhere: `skills.py unpark <names>`
-   On yes, run it and say one line: loads after `/clear` or a restart. In a session with the mod, `/skills link <names>` does the same with no model turn.
+   On yes, run it and say one line: loads after `/clear` or a restart. In a session with the mod, `/park link <names>` does the same with no model turn.
 3. **No match** → say so in one line and continue the task without a skill. Do not list every skill. Do not invent one.
 
 ## Rules

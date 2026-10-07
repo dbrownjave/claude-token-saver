@@ -5,3 +5,4 @@ __pycache__/
 .preview/
 .claude/launch.json
 dist/
+plugins/token-saver/.claude-plugin/types/

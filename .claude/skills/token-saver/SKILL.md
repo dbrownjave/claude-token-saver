@@ -37,7 +37,7 @@ python3 scripts/skills.py
 ```
 
    - That prints active skills with per-turn cost, last use from local transcripts, and a `·` mark on skills unused for 30+ days.
-   - To park, run `python3 scripts/skills.py pick` and let the user choose, or `python3 scripts/skills.py park unused` / `park gsap-*` when they have already said what to drop. In a session with the mod loaded, `/skills park <names>` does the same without a model turn.
+   - To park, run `python3 scripts/skills.py pick` and let the user choose, or `python3 scripts/skills.py park unused` / `park gsap-*` when they have already said what to drop. In a session with the mod loaded, `/park park <names>` does the same without a model turn.
    - Never `mv`, `rm`, or hand-write symlinks for skills. The manager keeps a manifest so `unpark` and `link` can undo everything.
    - After any change say one line: takes effect after `/clear` or a restart; `skills.py unpark <name>` brings one back everywhere, `skills.py link <name>` for this repo only.
 

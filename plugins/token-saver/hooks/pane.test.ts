@@ -17,7 +17,7 @@ const STATUS = {
   scan_note: 'usage from cache',
 }
 
-const PANE = { title: 'Skills', isFocused: true, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} }
+const PANE = { title: 'Park', isFocused: true, bodyColumns: 110, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} }
 
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`skills pane draws rows with Park / Link / Unpark on ${surface}`, async ($, on) => {
@@ -29,7 +29,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       calls.push(e.argv)
       return { value: { exitCode: 0, stdout: JSON.stringify(STATUS), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     })
-    const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface, component: 'Pane', requestId: 'skills', props: PANE as any })
+    const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface, component: 'Pane', requestId: 'park', props: PANE as any })
     expect((await ui.find({ key: 'refresh' }))?.props.label).toBe('Refresh')
     await ui.press({ key: 'refresh' })
     expect(calls.length).toBeGreaterThan(0)
