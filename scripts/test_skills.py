@@ -72,6 +72,17 @@ class SkillsManager(unittest.TestCase):
         self.assertEqual(self.names(self.skills), ["gsap-core", "gsap-react", "plan"])
         self.assertEqual(json.loads((self.parked / ".parked.json").read_text()), {})
 
+    def test_link_and_unlink_a_symlinked_parked_skill(self) -> None:
+        self.run_skills("park", "gsap-core")                       # gsap-core is a symlink into .agents
+        r = self.run_skills("link", "gsap-core")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        link = self.proj / ".claude" / "skills" / "gsap-core"
+        self.assertTrue(link.is_symlink() and (link / "SKILL.md").is_file())
+        self.assertIn("gsap-core", self.run_skills("status").stdout.split("Linked into")[1])
+        r = self.run_skills("unlink", "gsap-*")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertFalse(link.exists())
+
     def test_unknown_name_exits_nonzero_and_changes_nothing(self) -> None:
         r = self.run_skills("park", "nope")
         self.assertEqual(r.returncode, 1)

@@ -327,7 +327,9 @@ def link(names: list[str], project: Path, report=None) -> list[str]:
             if report: report(idx, name, "skip")
             continue
         skills_dir.mkdir(parents=True, exist_ok=True)
-        os.symlink(str(src.resolve() if src.is_symlink() else src), dst)
+        # Point at the parked entry itself (a symlink to a symlink is fine), so the
+        # link is recognisably ours and follows the parked skill if it is retargeted.
+        os.symlink(str(src), dst)
         done.append(name)
         if report: report(idx, name, "ok")
     return done
@@ -354,13 +356,18 @@ def project_links(project: Path) -> list[str]:
         return []
     out = []
     for child in sorted(skills_dir.iterdir()):
-        if child.is_symlink():
-            try:
-                target = (child.parent / os.readlink(child)).resolve()
-            except OSError:
-                continue
-            if str(target).startswith(str(PARKED.resolve())) or str(os.readlink(child)).startswith(str(PARKED)):
-                out.append(child.name)
+        if not child.is_symlink():
+            continue
+        try:
+            raw = os.readlink(child)
+        except OSError:
+            continue
+        parked = PARKED / child.name
+        # ours if it names the parked entry, or lands on the same real path as the parked entry
+        if raw.startswith(str(PARKED)):
+            out.append(child.name)
+        elif os.path.lexists(parked) and os.path.realpath(child) == os.path.realpath(parked):
+            out.append(child.name)
     return out
 
 
