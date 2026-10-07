@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "id": "rules",
+      "name": "Token-budget rules",
+      "kind": "rules",
+      "default": true,
+      "summary": "Standing policy Claude follows: /clear on topic change, @file, Haiku subagents."
+    },
+    {
+      "id": "skill",
+      "name": "/token-saver + /repo-skills skills",
+      "kind": "skill",
+      "default": true,
+      "summary": "Two on-demand skills: the token audit, and repo-skills, which finds and links parked skills that fit the repo you are in."
+    },
+    {
+      "id": "session-audit",
+      "name": "Session-start audit",
+      "kind": "hook",
+      "default": true,
+      "summary": "Short budget line at session start. Warns if CLAUDE.md is fat or cache looks cold.",
+      "event": "SessionStart",
+      "matcher": "startup|resume|clear|compact",
+      "script": "audit_startup.py",
+      "timeout": 8
+    },
+    {
+      "id": "quiet-bash",
+      "name": "Quiet bash rewriter",
+      "kind": "hook",
+      "default": true,
+      "summary": "Rewrites git status/log and test commands to short reporters before they run.",
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "quiet_bash.py",
+      "timeout": 5
+    },
+    {
+      "id": "trim-output",
+      "name": "Trim huge bash output",
+      "kind": "hook",
+      "default": true,
+      "summary": "Keeps head+tail of huge successful stdout. Never trims failures.",
+      "event": "PostToolUse",
+      "matcher": "Bash",
+      "script": "trim_output.py",
+      "timeout": 5
+    },
+    {
+      "id": "compact-keep",
+      "name": "Compact keep-list",
+      "kind": "hook",
+      "default": false,
+      "summary": "Before /compact, remind Claude to keep errors, files touched, and next steps.",
+      "event": "PreCompact",
+      "matcher": "",
+      "script": "pre_compact.py",
+      "timeout": 5
+    },
+    {
+      "id": "cache-guard",
+      "name": "Cache-bust guard",
+      "kind": "hook",
+      "default": false,
+      "summary": "Asks before a mid-session model switch when the prompt cache is warm.",
+      "event": "PreModelSwitch",
+      "matcher": "",
+      "script": "pre_model_switch.py",
+      "timeout": 5
+    },
+    {
+      "id": "slim-startup",
+      "name": "Slimmer startup settings",
+      "kind": "settings",
+      "default": false,
+      "summary": "Caps bash output at 8k chars and sets CLAUDE_CODE_DISABLE_ARTIFACT=1 (reversible). Does not write enableArtifact:false, which cannot be turned back on.",
+      "settings": {
+        "bashOutputMaxChars": 8000,
+        "env": {
+          "BASH_MAX_OUTPUT_LENGTH": "8000",
+          "CLAUDE_CODE_DISABLE_ARTIFACT": "1"
+        }
+      }
+    },
+    {
+      "id": "deny-secrets",
+      "name": "Deny secret file reads",
+      "kind": "settings",
+      "default": false,
+      "summary": "Blocks Read on .env, secrets/, node_modules, .git/objects.",
+      "deny": [
+        "Read(.env)",
+        "Read(.env.*)",
+        "Read(**/.env)",
+        "Read(**/.env.*)",
+        "Read(**/secrets/**)",
+        "Read(**/node_modules/**)",
+        "Read(**/.git/objects/**)"
+      ]
+    },
+    {
+      "id": "thinking-cap",
+      "name": "Cap extra thinking tokens",
+      "kind": "settings",
+      "default": false,
+      "summary": "Sets MAX_THINKING_TOKENS=8000. Skip this if you want full reasoning on hard tasks.",
+      "settings": {
+        "env": {
+          "MAX_THINKING_TOKENS": "8000"
+        }
+      }
+    },
+    {
+      "id": "no-connectors",
+      "name": "Disable claude.ai connectors",
+      "kind": "settings",
+      "default": false,
+      "summary": "Stops Slack/Jira/etc connectors from loading every turn. Only if you do not use them.",
+      "settings": {
+        "disableClaudeAiConnectors": true
+      }
+    },
+    {
+      "id": "no-remote",
+      "name": "Disable remote control",
+      "kind": "settings",
+      "default": false,
+      "summary": "Turns off remote-control tool definitions you are not using.",
+      "settings": {
+        "disableRemoteControl": true
+      }
+    },
+    {
+      "id": "statusline",
+      "name": "Cache light in the CLI status line",
+      "kind": "statusline",
+      "default": false,
+      "summary": "CLI bar: cache warm/cold, hit %, recache-if-cold. VS Code panel already has a clock \u2014 skip if you only use the editor."
+    },
+    {
+      "id": "quiet-map",
+      "name": "Editable quiet-bash map",
+      "kind": "files",
+      "default": true,
+      "summary": "Installs ~/.claude/token-saver/quiet.json so you can add pnpm/cargo/kubectl rewrites. Never overwrites your edits."
+    }
+  ]
+}

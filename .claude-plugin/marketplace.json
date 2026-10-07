@@ -1,0 +1,12 @@
+{
+  "name": "token-saver",
+  "owner": { "name": "token-saver" },
+  "plugins": [
+    {
+      "name": "token-saver",
+      "source": "./plugins/token-saver",
+      "description": "Quiet bash, trim huge output, cache band, /tokens. No network.",
+      "version": "0.2.0"
+    }
+  ]
+}

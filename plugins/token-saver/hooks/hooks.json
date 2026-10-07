@@ -1,0 +1,6 @@
+{
+  "description": "Token-saver mod: quiet bash, trim output, cache band, /tokens, cold-cache compaction veto",
+  "modules": [
+    "./register.js"
+  ]
+}

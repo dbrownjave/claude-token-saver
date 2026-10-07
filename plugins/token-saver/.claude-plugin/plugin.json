@@ -1,0 +1,52 @@
+{
+  "name": "token-saver",
+  "version": "0.2.0",
+  "description": "Token-saver mod: quiet bash, trim output, cache band, /tokens, cold-cache compaction veto",
+  "author": {
+    "name": "token-saver"
+  },
+  "userConfig": {
+    "quietBash": {
+      "type": "boolean",
+      "title": "Rewrite noisy bash",
+      "description": "git status/log and test commands become short reporters before they run.",
+      "default": true
+    },
+    "trimOutput": {
+      "type": "boolean",
+      "title": "Trim huge successful output",
+      "description": "Head+tail of huge successful stdout. Failures are left intact.",
+      "default": true
+    },
+    "cacheBand": {
+      "type": "boolean",
+      "title": "Cache band above the prompt",
+      "description": "CLI and Desktop only. VS Code panel does not draw mod UI.",
+      "default": true
+    },
+    "compactHint": {
+      "type": "boolean",
+      "title": "Cache-aware hint on the band",
+      "description": "Fat and warm: /compact is cheap. Fat and cold: /clear, do not /compact. Never types into the box.",
+      "default": true
+    },
+    "compactGuard": {
+      "type": "boolean",
+      "title": "Veto /compact on a cold cache",
+      "description": "Manual /compact is refused when the prompt cache has gone cold, with the re-send cost named. Auto-compaction is never blocked. Override once with: /compact force",
+      "default": true
+    },
+    "longCacheTtl": {
+      "type": "boolean",
+      "title": "Prompt cache TTL is 1 hour",
+      "description": "Off: 5-minute TTL (Claude Code's default). On: 1-hour TTL. Sets when the band and the compact guard call the cache cold.",
+      "default": false
+    },
+    "suggestSkills": {
+      "type": "boolean",
+      "title": "Suggest parked skills for this repo at session start",
+      "description": "Reads package.json, Package.swift, pyproject, Cargo.toml, go.mod and html for signals and names parked skills that fit. One UI line, no tokens. /skills suggest [topic] on demand.",
+      "default": true
+    }
+  }
+}

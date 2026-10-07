@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "note": "Indications only. Does not compact or clear. Edit the percents. Reinstall will not overwrite this file once copied to ~/.claude/token-saver/thresholds.json. /context in VS Code is the category grid; these lines are your own marks on fill.",
+  "levels": [
+    {"id": "watch", "pct": 40, "hint": "note"},
+    {"id": "handoff", "pct": 60, "hint": "new-conversation"},
+    {"id": "compact", "pct": 75, "hint": "compact-if-warm"}
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "skip_if_contains": ["&&", "||", "|", ";"],
+  "danger": ["\\brm\\b", "\\bsudo\\b", "\\bdd\\b", "\\bmkfs\\b", ">\\s", "/dev/"],
+  "rewrites": [
+    {"id": "git-status", "pattern": "^git\\s+status\\b", "unless": ["-sb", "-s"], "replace": "git status -sb", "enabled": true},
+    {"id": "git-log", "pattern": "^git\\s+log\\b", "unless": ["--oneline"], "replace": "git log --oneline -20", "enabled": true},
+    {"id": "git-diff", "pattern": "^git\\s+diff\\s*$", "replace": "git diff --stat", "enabled": true},
+    {"id": "pytest", "pattern": "^pytest\\b", "unless": ["-q"], "append": " -q --tb=short", "enabled": true},
+    {"id": "python-pytest", "pattern": "^python\\s+-m\\s+pytest\\b", "unless": ["-q"], "append": " -q --tb=short", "enabled": true},
+    {"id": "vitest", "pattern": "^(npx\\s+)?vitest\\b", "unless": ["--reporter"], "append": " --reporter=dot", "enabled": true},
+    {"id": "npm-test", "pattern": "^npm\\s+test\\b", "unless": ["--reporter", "-- "], "append": " -- --reporter=dot", "enabled": true},
+    {"id": "pnpm-test", "pattern": "^pnpm\\s+test\\b", "unless": ["--reporter", "-- "], "append": " -- --reporter=dot", "enabled": true},
+    {"id": "cargo-test", "pattern": "^cargo\\s+test\\b", "unless": ["--quiet", "-q"], "append": " --quiet", "enabled": true},
+    {"id": "tree", "pattern": "^tree\\s*$", "replace": "tree -L 2 -I 'node_modules|.git|dist|build|coverage'", "enabled": true},
+    {"id": "docker-ps", "pattern": "^docker\\s+ps\\s*$", "replace": "docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Ports}}'", "enabled": true}
+  ]
+}
