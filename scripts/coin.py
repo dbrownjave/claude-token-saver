@@ -382,6 +382,7 @@ if __name__ == "__main__":
             demo(a.plain, a.seconds, a.size, a.emblem)
         else:
             ap.print_help()
-    except BrokenPipeError:
+        sys.stdout.flush()
+    except (BrokenPipeError, OSError):
         # `| head` closed the pipe: leave quietly, no interpreter noise at exit
         os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
