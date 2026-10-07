@@ -15,8 +15,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     })
     on('ui.status' as any, () => ({ value: undefined }))
     const r: any = await ($ as any).tool.call({ tool: TOOL, id: 'rel', label: 'Release pipeline', stage: 'Build', step: 2, total: 3 })
-    expect(r.result.content[0].text).toContain('Release pipeline')
-    expect(r.result.content[0].text).toContain('Build 2/3')
+    expect(r.result).toContain('Release pipeline')
+    expect(r.result).toContain('Build 2/3')
     const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface, component: 'AbovePrompt', props: BAND as any })
     expect(await ui.find({ text: /Release pipeline/ })).toBeDefined()
     expect(await ui.find({ key: 'progress-close:rel' })).toBeDefined()
@@ -28,10 +28,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(await ui.find({ text: /Build 2\/3/ })).toBeDefined()
     }
     const done: any = await ($ as any).tool.call({ tool: TOOL, id: 'rel', state: 'done' })
-    expect(done.result.content[0].text).toContain('100%')
+    expect(done.result).toContain('100%')
     await ui.press({ key: 'progress-close:rel' })
     expect(await ui.find({ key: 'progress-close:rel' })).toBeUndefined()
     const gone: any = await ($ as any).tool.call({ tool: TOOL, id: 'rel', remove: true })
-    expect(gone.result.content[0].text).toContain('removed')
+    expect(gone.result).toContain('removed')
   })
 }

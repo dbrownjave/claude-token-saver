@@ -63,13 +63,11 @@ Toggles live on the plugin, not in a settings splice: `quietBash`, `trimOutput`,
 
 ### Progress bars (mod only)
 
-The mod registers a `progress` tool. When Claude runs a job with stages, it calls the tool as each stage starts, waits, fails or ends, and a bar appears above the prompt:
+The mod registers a `progress` tool. When Claude runs a job with stages, it calls the tool as each stage starts, waits, fails or ends, and a bar appears above the prompt.
 
-```
-● Release pipeline   ▒▒▒▒▒░▒▒│▒▒▒▒▒ Build 2/3 ·····│··········   67%  ×
-```
+The bar is a port of the Effort slider's own shader from the Claude app: a 14 px squared track of tiny rounded cells in three rows, lit by bursts that race out from the head every 0.3–0.75 s as Manhattan-distance wavefronts, a five-step white→ink ramp with breathing top cells, and a charged bed that deepens toward the head and fades over the first quarter. Tuned brighter than the slider. The stage and count ride in a gradient pill in the bar's own colour, trailing the head; there is no status icon, the colour and the pill's ✕ / ? / ✓ carry state. Purple running, amber waiting, red failed, green done. A finished row keeps sparking faintly for a minute, then holds still. Frames are a pure function of the band's 70 ms tick, so they are deterministic and testable.
 
-On the desktop it is a real bar: a dithered fill, a tick per stage, and a pill riding the head that names the stage and count. Purple while running, amber while waiting, red when a stage fails, green when done. The fill eases toward each new value. × removes a row; `remove: true` from the tool does the same. `/loadout` actions use the same rows: one stage per skill, green when done, gone eight seconds later. The status line reads "Progress" while any bar is up. Nothing is injected into the prompt beyond the one-line tool result.
+In the terminal the same cells draw as a one-row Raster of half-block squares with a coloured text pill; where Raster is missing, small-square glyphs. × removes a row; `remove: true` from the tool does the same. `/loadout` actions use the same rows: one stage per skill, green when done, gone eight seconds later. The status line reads "Progress" while any bar is up.
 
 ### Compaction guard (mod only)
 
