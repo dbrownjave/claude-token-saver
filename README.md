@@ -89,7 +89,7 @@ Dev loop: `claude plugin validate ./plugins/token-saver` then `claude plugin tes
 |---|---|
 | Quiet bash + trim | CLI, Desktop, VS Code panel, `claude -p` |
 | Cache band above the prompt | CLI and Desktop only. VS Code does not draw mod UI; use its cache clock. |
-| `/tokens` | Opens the Context pane: the context window drawn with the pack's own animated bar (compact-at tick, your next threshold mark), the breakdown in one hue, a Cache card with its own bar, what the pack saved this session, and Clear / Compact / Later on `c` / `k` / `l`. `/tokens list` prints the text form; `hide` and `show` toggle the band. |
+| `/tokens` | Opens the Context pane: the context window drawn with the pack's own animated bar (compact-at tick, your next threshold mark), the breakdown in one hue, a Cache card with its own bar, what the pack saved this session, and Clear / Compact / Later on `c` / `k` / `l`. Expanded, the right column is a savings report: tokens served from cache (billed at a tenth), trimmed tokens kept out of every later turn, cold compactions vetoed, priced with the `inputPricePerM` rate you set in `/config` (tokens only until you do), plus tips generated from the live breakdown. `/tokens list` prints the text form; `hide` and `show` toggle the band. |
 | Threshold toast | Once per threshold crossed (40, 60, 75 percent by default), with the cache-aware hint. |
 | First-run welcome | One toast the first time the mod loads on a machine, saying what is now on. |
 | Compaction guard | Everywhere the mod loads. |

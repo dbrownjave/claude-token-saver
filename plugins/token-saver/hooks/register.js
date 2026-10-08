@@ -47,6 +47,7 @@ let rules = DEFAULT_RULES
 let levels = DEFAULT_LEVELS
 let pythonQuietOn = false
 let bandHidden = false
+const totals = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0 }   // this session, from turn.step usage
 let announcedPct = 0            // highest threshold already toasted this session
 // Progress rows above the prompt, driven by the `progress` tool the model calls.
 const PROGRESS_TOOL = 'mcp__token-saver__progress'
@@ -704,14 +705,39 @@ function contextView(usage, ttl, usageLast, clock, stats) {
     cache = { known: true, warm: false, accent: 'Cold', fill: 0, strong: 'Warmth 0%', rest: ` · Hit ${hitPct(usageLast)}%`,
       foot: `idle ${Math.max(1, Math.round(clock.idleMs / MINUTE))}m, past ${ttlMin}m`, footer: `Cache cold: next message re-caches ${fmtK(sent)}.` }
   }
-  const saved = stats || { rewrites: 0, savedChars: 0, vetoes: 0 }
-  const savedStrong = `${saved.rewrites} rewrite${saved.rewrites === 1 ? '' : 's'}`
-  const savedRest = ` · ${fmtK(saved.savedChars)} trimmed · ${saved.vetoes} veto${saved.vetoes === 1 ? '' : 'es'}`
+  const saved = stats || { rewrites: 0, savedChars: 0, vetoes: 0, totals: { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0 }, rate: 0 }
+  const T = saved.totals || { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0 }
+  const rate = Number(saved.rate) || 0                       // $ per million input tokens, from /config
+  const usd = (tokens, factor = 1) => (rate ? `$${((tokens * factor * rate) / 1e6).toFixed(2)}` : null)
+  const inputAll = T.input + T.cacheRead + T.cacheWrite
+  const cachePct = inputAll ? Math.round((100 * T.cacheRead) / inputAll) : 0
+  const cacheSavedTok = Math.round(T.cacheRead * 0.9)         // a cache read bills a tenth of a fresh read
+  const keptOutTok = T.keptOut
+  const vetoTok = Math.round(T.vetoTokens * 1.25)             // a re-cache writes at 1.25×
+  const totalSavedTok = cacheSavedTok + keptOutTok + vetoTok
+  const savings = {
+    total: usd(totalSavedTok) || `${fmtK(totalSavedTok)} tok`, totalTok: totalSavedTok, rate,
+    lines: [
+      `${fmtK(T.cacheRead)} served from cache (${cachePct}% of input)${usd(cacheSavedTok) ? ` · ${usd(cacheSavedTok)}` : ''}`,
+      `${fmtK(Math.round(saved.savedChars / 4))} tok trimmed, kept out over ${T.turns} turn${T.turns === 1 ? '' : 's'} = ${fmtK(keptOutTok)}${usd(keptOutTok) ? ` · ${usd(keptOutTok)}` : ''}`,
+      `${saved.rewrites} quiet command${saved.rewrites === 1 ? '' : 's'} · ${saved.vetoes} cold compact${saved.vetoes === 1 ? '' : 's'} vetoed${vetoTok ? ` (${fmtK(vetoTok)} re-cache avoided${usd(vetoTok) ? `, ${usd(vetoTok)}` : ''})` : ''}`,
+    ],
+    cost: usage && usage.cost && Number.isFinite(usage.cost.usd) ? `$${usage.cost.usd.toFixed(2)} spent` : '',
+  }
+  const tips = []
+  if (g && g.tools > 40_000) tips.push(`MCP tools cost ${fmtK(g.tools)} every turn: /mcp and disable servers you are not using`)
+  if (b && Number(b.skills && b.skills.tokens) > 4_000) tips.push(`skills cost ${fmtK(b.skills.tokens)} every turn: /loadout and park the ones you never call`)
+  if (g && used && g.messages / Math.max(used, 1) > 0.6 && pct >= 50) tips.push(`messages are ${Math.round((100 * g.messages) / used)}% of context: /handoff then /clear before the next topic`)
+  if (clock && clock.known && !clock.warm) tips.push('cache is cold: start fresh (/clear) instead of /compact, which would re-cache everything')
+  if (clock && clock.known && clock.warm && hitPct(usageLast) < 70) tips.push(`cache hit ${hitPct(usageLast)}%: avoid editing CLAUDE.md, settings or /model mid-session`)
+  if (nextMark) tips.push(`next mark ${nextMark.pct}% (${nextMark.id}): ${nextMark.id === 'handoff' ? 'write a handoff and /clear' : nextMark.id === 'compact' ? '/compact only while the cache is warm' : 'note decisions as you go'}`)
+  const savedStrong = savings.total
+  const savedRest = rate ? ` est. saved` : ' saved · set $/M in /config for dollars'
   const hint = hintFor(pct, clock || { warm: false, leftMs: 0 })
   return {
     hasData: !!usage, pct, used, window, measure, state,
     header: { usedText: window ? `${fmtK(used)} / ${fmtK(window)} (${pct}%)` : `${fmtK(used)} (${pct}%)`, compactText: compactPct === null ? '' : `Compact at ${compactPct}%` },
-    marks, legend, free, segments, nextMark, compactPct, cache, savedStrong, savedRest, hint,
+    marks, legend, free, segments, nextMark, compactPct, cache, savedStrong, savedRest, savings, tips: tips.slice(0, 3), hint,
   }
 }
 
@@ -822,6 +848,7 @@ export function register(on, options = {}) {
   const cacheBand = options.cacheBand !== false
   const compactHint = options.compactHint !== false
   const compactGuard = options.compactGuard !== false
+  const inputPricePerM = Number(options.inputPricePerM) || 0
   const suggestSkills = options.suggestSkills !== false
   const ttl = options.longCacheTtl ? TTL_LONG : TTL_SHORT
 
@@ -1078,6 +1105,12 @@ export function register(on, options = {}) {
     if (!e.agentId && result && result.usage) {
       lastUsage = result.usage
       lastStepAt = await $.clock.now()
+      totals.turns += 1
+      totals.input += result.usage.input_tokens || 0
+      totals.cacheRead += result.usage.cache_read_input_tokens || 0
+      totals.cacheWrite += result.usage.cache_creation_input_tokens || 0
+      totals.output += result.usage.output_tokens || 0
+      totals.keptOut += Math.round(savedChars / 4)          // every trimmed token would have been resent this turn
       try {
         $.ui.invalidate('ui.render')
       } catch {
@@ -1122,6 +1155,7 @@ export function register(on, options = {}) {
       if (clock.known && !clock.warm) {
         vetoes += 1
         const ctx = await contextOf($)
+        totals.vetoTokens += ctx.tokens || 0
         return {
           skip:
             `token-saver: prompt cache is cold (idle ${mins(clock.idleMs)}m). ` +
@@ -1233,7 +1267,7 @@ export function register(on, options = {}) {
     const W = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
     const now = await $.clock.now()
     const data = await loadContext($, now, W)
-    const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes })
+    const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM })
     const PX = 6.5
     const col = (props, children) => h(Box, { flexDirection: 'column', ...props }, ...children)
     const row = (props, children) => h(Box, { flexDirection: 'row', ...props }, ...children)
@@ -1250,6 +1284,7 @@ export function register(on, options = {}) {
       t('◔ ', { color: CTX.secondary }),
       t('Context window', { bold: true, color: CTX.heading }),
       h(Box, { flexGrow: 1 }),
+      ...(view.savings.totalTok ? [t(`saved ${view.savings.total}`, { color: CTX.warm }), dim(' · ')] : []),
       sec(view.header.usedText),
       h(Button, { key: 'ctx-expand', label: ctxExpanded ? '⌄' : '›', plain: true, hotkey: 'e', onPress: () => { ctxExpanded = !ctxExpanded; invalidate($) } }),
     ])
@@ -1274,8 +1309,9 @@ export function register(on, options = {}) {
       row({}, [t(view.cache.strong, { bold: true, color: CTX.text }), sec(view.cache.rest)]),
       dim(view.cache.foot),
       t(' '),
-      row({}, [t(view.savedStrong, { bold: true, color: CTX.text }), sec(view.savedRest)]),
-      dim(view.nextMark ? `next mark ${view.nextMark.pct}%` : 'past every mark'),
+      row({}, [t(view.savedStrong, { bold: true, color: CTX.text }), sec(view.savedRest), ...(view.savings.cost ? [dim(` · ${view.savings.cost}`)] : [])]),
+      ...view.savings.lines.map((l) => dim(l)),
+      ...(view.tips.length ? [t(' '), t('Tips', { bold: true, color: CTX.heading }), ...view.tips.map((tip) => row({}, [t('→ ', { color: CTX.warm }), t(tip, { color: CTX.legend, wrap: 'wrap' })]))] : []),
     ])
     const footer = row({ alignItems: 'center', gap: 1 }, [
       t('●', { color: view.cache.warm ? CTX.dot : CTX.dim }),

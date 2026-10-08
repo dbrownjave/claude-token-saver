@@ -56,9 +56,12 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ text: /^302k$/ })).toBeDefined()
     expect(await ui.find({ text: /Free 486k/ })).toBeDefined()
     expect(await ui.find({ text: /^Cache$/ })).toBeDefined()
-    expect(await ui.find({ text: /^0 rewrites$/ })).toBeDefined()
-    expect(await ui.find({ text: /0 trimmed · 0 vetoes/ })).toBeDefined()
-    expect(await ui.find({ text: /next mark 60%/ })).toBeDefined()
+    expect(await ui.find({ text: /^0 tok$/ })).toBeDefined()                       // nothing saved yet, no $ rate set
+    expect(await ui.find({ text: /set \$\/M in \/config/ })).toBeDefined()
+    expect(await ui.find({ text: /0 quiet commands · 0 cold compacts vetoed/ })).toBeDefined()
+    expect(await ui.find({ text: /^Tips$/ })).toBeDefined()
+    expect(await ui.find({ text: /MCP tools cost 63k every turn/ })).toBeDefined()
+    expect(await ui.find({ text: /next mark 60% \(handoff\)/ })).toBeDefined()
     expect(await ui.find({ text: /no response yet/ })).toBeDefined()
 
     if (surface === 'desktop') {
@@ -95,5 +98,5 @@ test('context pane without a breakdown falls back to one Used entry and no tick'
   await ui.press({ key: 'ctx-expand' })
   expect(await ui.find({ text: /^Messages $/ })).toBeDefined()
   expect(await ui.find({ text: /Compact at/ })).toBeUndefined()
-  expect(await ui.find({ text: /next mark 75%/ })).toBeDefined()
+  expect(await ui.find({ text: /next mark 75% \(compact\)/ })).toBeDefined()
 })
