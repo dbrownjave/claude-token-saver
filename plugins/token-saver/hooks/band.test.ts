@@ -48,7 +48,14 @@ for (const surface of ['terminal', 'desktop'] as const) {
     for (const b of [open, hide]) expect(b?.props.bold).toBeUndefined()
 
     await ui.press({ key: 'band-open' })
-    expect(opened.map((o) => o.id)).toContain('context')
+    if (surface === 'terminal') expect(opened.map((o) => o.id)).toContain('context')
+    else {
+      // the desktop app has no slot for plugin panes: the full pane opens in the band itself, ⌃ folds it back
+      expect(await ui.find({ text: /^Claude's working memory$/ })).toBeDefined()
+      await ui.press({ key: 'ctx-expand' })
+      expect(await ui.find({ text: /^Claude's working memory$/ })).toBeUndefined()
+      expect(await ui.find({ key: 'band-open' })).toBeDefined()
+    }
     await ui.press({ key: 'hide' })
     expect(await ui.find({ key: 'band-open' })).toBeUndefined()
   })

@@ -52,6 +52,7 @@ let rules = DEFAULT_RULES
 let levels = DEFAULT_LEVELS
 let pythonQuietOn = false
 let bandHidden = false
+let bandPane = false              // desktop: the full Context pane drawn in the band (no plugin panes there)
 const totals = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0 }   // this session, from turn.step usage
 let limitBase = null            // { pct, tokens } when the five-hour window was first seen: tokens per % of window
 let monthSaved = { key: '', tok: 0, usd: 0, sessionTok: 0, sessionUsd: 0 }   // carried in $.store across sessions
@@ -1776,6 +1777,49 @@ function daysAgo(ts) {
   return d <= 0 ? 'today' : `${d}d ago`
 }
 
+/* Per-load settings the module-level renderers read (set once in register). */
+let ENV = { ttl: TTL_SHORT, options: {}, keepWarmMax: 5, cardBars: 'fire', compactGuard: true, inputPricePerM: 0 }
+
+/* The Context pane's drawing, shared: the terminal shows it in a real Pane; the desktop app (its Code tab has no
+   slot for plugin panes, so a Pane there is never drawn) shows it in the band above the prompt instead. */
+async function renderContext($, e, inBand) {
+const { ttl, options, keepWarmMax, cardBars, compactGuard, inputPricePerM } = ENV
+  try {
+    const el = $.ui.resolve(e)
+    const term = e.surface === 'terminal'
+    const pal = THEME_HEX[term ? 'terminal' : 'desktop']
+    const ui = {
+      Box: el.Box, Text: el.Text, Button: el.Button, Svg: term ? undefined : el.Svg, Raster: term ? el.Raster : undefined, term,
+      hex: (k) => (String(k).startsWith('#') ? k : pal[k] || pal.inactive),
+    }
+    const W = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
+    const now = await $.clock.now()
+    const data = await loadContext($, now, W)
+    if (homeCache === null) { try { homeCache = await homeDir($) } catch { homeCache = '' } }
+    const clock = cacheClock(now, ttl)
+    const view = contextView(data.usage, ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
+    view.groups = drillGroups(view.breakdown, homeCache)
+    const L = ctxExplain ? liveNumbers(view, { ttl, now, keepWarmMax, longTtl: !!options.longCacheTtl, totals, rewrites, vetoes }) : null
+    return drawContextPane(ui, view, {
+      W, t: progressTick * TICK_S, now, ttl, keepWarmMax, longTtl: !!options.longCacheTtl, cardStyle: cardBars, live: clock.known, L,
+      onExplain: () => { ctxExplain = !ctxExplain; if (!ctxExplain) ctxGloss = { open: false, focus: null }; invalidate($) },
+      onGlossary: (focus) => { ctxGloss = { open: true, focus }; invalidate($) },
+      onGlossaryBack: () => { ctxGloss = { open: false, focus: null }; invalidate($) },
+      onExpand: inBand ? () => { bandPane = false; ctxExpanded = false; invalidate($) } : () => { ctxExpanded = !ctxExpanded; invalidate($) },
+      onReceipt: () => { ctxReceipt = !ctxReceipt; invalidate($) },
+      onGroup: (id) => { if (ctxGroups.has(id)) ctxGroups.delete(id); else ctxGroups.add(id); invalidate($) },
+      onRun: (cmd) => runFromPane($, cmd),
+      onClear: () => clearSession($),
+      onCompact: () => compactNow($, ttl, compactGuard),
+      onLater: inBand ? () => { bandPane = false; ctxExpanded = false; invalidate($) } : async () => { ctxPaneOpen = false; try { await $.ui.close({ id: CONTEXT_PANE }) } catch { /* closed */ } },
+    })
+  } catch (err) {
+    const { Text } = $.ui.resolve(e)
+    return h(Text, { color: '#e5484d' }, `token-saver: context pane failed: ${err && err.stack ? err.stack.split('\n').slice(0, 2).join(' ') : String(err)}`)
+  }
+}
+
+
 export function register(on, options = {}) {
   const quietBash = options.quietBash !== false
   const trimOutput = options.trimOutput !== false
@@ -1788,6 +1832,7 @@ export function register(on, options = {}) {
   // Keep-warm pings only make sense against the 5-minute TTL; with the 1-hour TTL a lapse is already rare
   const keepWarmMax = Math.max(0, Math.round(Number(options.keepWarmPings ?? 5)))
   const cardBars = options.cardBars === 'ember' ? 'ember' : 'fire'
+  ENV = { ttl, options, keepWarmMax, cardBars, compactGuard, inputPricePerM }
   keepWarm.on = options.keepWarm !== false && !options.longCacheTtl && keepWarmMax > 0
 
   on('session.start', async ($, e, next) => {
@@ -1933,6 +1978,7 @@ export function register(on, options = {}) {
     }
     if (arg === '' || arg === 'pane') {
       // The Context pane: the engine's own context dialog, drawn by the mod. Text where panes do not draw (vscode).
+      bandPane = true; ctxExpanded = true; invalidate($)              // desktop: shown above the prompt
       if (await openContextPane($)) return { text: 'Context pane opened. Esc closes it. /tokens list prints the same as text.' }
     }
     const ctx = await contextOf($)
@@ -2243,41 +2289,7 @@ export function register(on, options = {}) {
    * receipt, three cards, Claude's working memory, drill-down groups. Svg cells on the desktop, Raster half-blocks on
    * the terminal; every frame a function of the 70 ms tick. Figures from loadContext(), cached 10 s.
    */
-  on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => {
-    try {
-      const el = $.ui.resolve(e)
-      const term = e.surface === 'terminal'
-      const pal = THEME_HEX[term ? 'terminal' : 'desktop']
-      const ui = {
-        Box: el.Box, Text: el.Text, Button: el.Button, Svg: term ? undefined : el.Svg, Raster: term ? el.Raster : undefined, term,
-        hex: (k) => (String(k).startsWith('#') ? k : pal[k] || pal.inactive),
-      }
-      const W = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
-      const now = await $.clock.now()
-      const data = await loadContext($, now, W)
-      if (homeCache === null) { try { homeCache = await homeDir($) } catch { homeCache = '' } }
-      const clock = cacheClock(now, ttl)
-      const view = contextView(data.usage, ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
-      view.groups = drillGroups(view.breakdown, homeCache)
-      const L = ctxExplain ? liveNumbers(view, { ttl, now, keepWarmMax, longTtl: !!options.longCacheTtl, totals, rewrites, vetoes }) : null
-      return drawContextPane(ui, view, {
-        W, t: progressTick * TICK_S, now, ttl, keepWarmMax, longTtl: !!options.longCacheTtl, cardStyle: cardBars, live: clock.known, L,
-        onExplain: () => { ctxExplain = !ctxExplain; if (!ctxExplain) ctxGloss = { open: false, focus: null }; invalidate($) },
-        onGlossary: (focus) => { ctxGloss = { open: true, focus }; invalidate($) },
-        onGlossaryBack: () => { ctxGloss = { open: false, focus: null }; invalidate($) },
-        onExpand: () => { ctxExpanded = !ctxExpanded; invalidate($) },
-        onReceipt: () => { ctxReceipt = !ctxReceipt; invalidate($) },
-        onGroup: (id) => { if (ctxGroups.has(id)) ctxGroups.delete(id); else ctxGroups.add(id); invalidate($) },
-        onRun: (cmd) => runFromPane($, cmd),
-        onClear: () => clearSession($),
-        onCompact: () => compactNow($, ttl, compactGuard),
-        onLater: async () => { ctxPaneOpen = false; try { await $.ui.close({ id: CONTEXT_PANE }) } catch { /* closed */ } },
-      })
-    } catch (err) {
-      const { Text } = $.ui.resolve(e)
-      return h(Text, { color: '#e5484d' }, `token-saver: context pane failed: ${err && err.stack ? err.stack.split('\n').slice(0, 2).join(' ') : String(err)}`)
-    }
-  })
+  on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => renderContext($, e, false))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props && e.props.hasSurvey) return next(e)
@@ -2307,6 +2319,10 @@ export function register(on, options = {}) {
       }
       if (row.note) children.push(h(Text, { dimColor: true }, '    ' + row.note))
     }
+    if (showTokens && bandPane && e.surface !== 'terminal') {
+      children.push(await renderContext($, e, true))
+      return h(Box, { flexDirection: 'column' }, ...children)
+    }
     if (showTokens) {
       try {
         // M4's closed pane in one row: a short fire bar, the percent, the cache cells and words, what was saved, ⌄ ×
@@ -2322,7 +2338,10 @@ export function register(on, options = {}) {
         const t = (str, color) => h(Text, color ? { color:term ? color : ui.hex(color) } : null, term ? str : nbsp(str))
         const pctText = view.window ? `${view.pct}%` : fmtK(view.used)
         const buttons = [
-          h(Button, { key: 'band-open', label: '⌄', plain: true, onPress: () => openContextPane($) }), t(' '),
+          h(Button, { key: 'band-open', label: '⌄', plain: true, onPress: () => {
+            if (term) return openContextPane($)
+            bandPane = true; ctxExpanded = true; ctxCache.at = 0; invalidate($)         // desktop: open it right here, above the prompt
+          } }), t(' '),
           h(Button, { key: 'hide', label: '×', plain: true, onPress: () => { bandHidden = true; invalidate($) } }),
         ]
         const row = []
