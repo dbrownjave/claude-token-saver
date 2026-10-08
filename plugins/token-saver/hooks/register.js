@@ -404,7 +404,11 @@ const INKS = {
   done:    { hot: [0.62, 0.94, 0.76], c0: [0.45, 0.90, 0.68], c1: [0.20, 0.65, 0.45] },
   cold:    { hot: [0.70, 0.70, 0.74], c0: [0.52, 0.52, 0.57], c1: [0.33, 0.33, 0.38] },
   orange:  { hot: [1.00, 0.74, 0.50], c0: [1.00, 0.62, 0.36], c1: [0.80, 0.40, 0.20] },
+  blue:    { hot: [0.62, 0.76, 1.00], c0: [0.45, 0.62, 0.98], c1: [0.22, 0.40, 0.80] },
+  green:   { hot: [0.66, 0.90, 0.66], c0: [0.48, 0.78, 0.48], c1: [0.25, 0.50, 0.28] },
+  yellow:  { hot: [0.98, 0.86, 0.45], c0: [0.86, 0.72, 0.28], c1: [0.60, 0.48, 0.14] },
 }
+const SEG_INK = { messages: 'blue', tools: 'orange', files: 'green', system: 'yellow', buffer: 'cold' }
 const TRACK_RGB = [0.165, 0.165, 0.18]      // #2a2a2e
 const BAR_H = 14, BAR_ROWS = 3, BAR_RADIUS = 4
 
@@ -483,7 +487,8 @@ function shadeCell(row, cx, cy, cols, rows, t, bursts, seed, pitchPx, W) {
   const lum = Math.pow(mixN(lumA, lumB, 0.5 + 0.5 * Math.sin(t * 0.35 + lumA * 6.2832)), 1.9)
   const stream = 0.9 + 0.16 * Math.sin(t * 1.3 + cx * 0.45 + lumB * 2)
   const e = Math.min(Math.max(energy, 0), 1) * L * mixN(0.16, 1, lum) * stream * SH.gain
-  const ink = INKS[row.state] || INKS.running
+  let ink = INKS[row.state] || INKS.running
+  if (row.segments) { const f = px / W; const sg = row.segments.find((x) => f <= x.end) || row.segments[row.segments.length - 1]; if (sg) ink = INKS[sg.ink] || ink }
   const g = Math.max(0, Math.min(1, px / Math.max(pos * W, 1)))
   const chargeA = SH.chargeMax * Math.pow(g, 1.1) * charged * L
   const lv = (e > 0.04) + (e > 0.2) + (e > 0.4) + (e > 0.6) + (e > 0.8)
@@ -675,7 +680,9 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const free = g ? g.free : Math.max(0, measure - used)
   const segments = (g
     ? [['messages', g.messages], ['tools', g.tools], ['files', g.files], ['system', g.system], ['buffer', g.buffer]]
-    : [['messages', used]]).filter(([, n]) => n > 0).map(([id, tokens]) => ({ id, tokens, frac: Math.max(0, Math.min(1, tokens / measure)), color: SEG[id] }))
+    : [['messages', used]]).filter(([, n]) => n > 0).map(([id, tokens]) => ({ id, tokens, frac: Math.max(0, Math.min(1, tokens / measure)), color: SEG[id], ink: SEG_INK[id] }))
+  let acc = 0
+  for (const sg of segments) { acc += sg.frac; sg.end = acc }
   const compactOn = !!(b && b.isAutoCompactEnabled && Number.isFinite(b.autoCompactThreshold) && b.autoCompactThreshold > 0)
   const compactPct = compactOn ? pct100((100 * b.autoCompactThreshold) / measure) : null
   const nextMark = levels.map((l) => ({ pct: Number(l.pct), id: l.id })).filter((l) => l.pct > pct).sort((x, y) => x.pct - y.pct)[0] || null
@@ -1247,33 +1254,29 @@ export function register(on, options = {}) {
       h(Button, { key: 'ctx-expand', label: ctxExpanded ? '⌄' : '›', plain: true, hotkey: 'e', onPress: () => { ctxExpanded = !ctxExpanded; invalidate($) } }),
     ])
     const barCols = Math.max(12, W - 4)
-    const stacked = Svg
-      ? h(Svg, { source: stackedBarSvg(view.segments, barCols * PX, 8), alt: `Context ${view.pct}%`, height: 8 })
-      : row({}, stackedBarText(h, Text, view.segments, barCols))
+    const ctxRow = { id: 'context', label: 'Context', stage: `${view.pct}%`, step: 0, total: 0, state: view.state, live: true, plain: true, target: view.pct / 100, shown: view.pct / 100, note: '' }
+    const stacked = bar(ctxRow, barCols, view.marks, `Context ${view.pct}%`)
     if (!ctxExpanded) return col({ gap: 0 }, [headline, stacked, ...(ctxMsg ? [dim(ctxMsg)] : [])])
 
-    const legend = row({}, [
-      ...view.legend.flatMap((s, i) => [...(i ? [dim(' · ')] : []), t('● ', { color: SEG[s.label.toLowerCase()] || CTX.dim }), t(`${s.label} ${fmtK(s.tokens)}`, { color: CTX.legend })]),
-      dim(`   Free ${fmtK(view.free)}`),
-      ...(view.header.compactText ? [dim(`   ${view.header.compactText}`)] : []),
-      ...(view.hasData ? [] : [dim('   figures appear after the first response')]),
-    ])
-    const half = Math.max(24, Math.floor((W - 2) / 2))
-    const cacheBar = Svg
-      ? h(Svg, { source: gradientBarSvg(view.cache.fill, (half - 2) * PX, 10, 'cache'), alt: `Cache ${view.cache.accent}`, height: 10 })
-      : row({}, gradientBarText(h, Text, view.cache.fill, half - 2))
-    const cacheCard = col({ width: half }, [
+    // Expanded: the cells recolour by category, the cache bar sits under it, the figures to the right
+    const leftCols = Math.max(24, Math.floor(W * 0.58))
+    const splitRow = { ...ctxRow, id: 'context-split', segments: view.segments }
+    const cacheRow = { id: 'cache', label: 'Cache', stage: view.cache.pill || '', step: 0, total: 0, state: view.cache.warm ? 'running' : 'cold', plain: true, target: view.cache.fill, shown: view.cache.fill, note: '', settledAt: 0 }
+    const bars = col({ width: leftCols, gap: 0 }, [
+      bar(splitRow, leftCols - 1, view.marks, `Context ${view.pct}% by category`),
       row({}, [t('Cache', { bold: true, color: CTX.heading }), t(' · ', { color: CTX.dim }), t(view.cache.accent, { bold: true, color: view.cache.warm ? CTX.warm : CTX.dim })]),
-      cacheBar,
+      ...(view.cache.known ? [bar(cacheRow, leftCols - 1, [], `Cache ${view.cache.accent}`)] : [dim(view.cache.strong)]),
+    ])
+    const stats = col({ flexGrow: 1, gap: 0 }, [
+      ...view.segments.map((sg) => row({}, [t('● ', { color: sg.color }), t(`${sg.id[0].toUpperCase()}${sg.id.slice(1)} `, { color: CTX.legend }), t(fmtK(sg.tokens), { color: CTX.text })])),
+      dim(`Free ${fmtK(view.free)}${view.header.compactText ? ` · ${view.header.compactText.toLowerCase()}` : ''}`),
+      t(' '),
       row({}, [t(view.cache.strong, { bold: true, color: CTX.text }), sec(view.cache.rest)]),
       dim(view.cache.foot),
-    ])
-    const savedCard = col({ width: half }, [
-      t('Saved', { bold: true, color: CTX.heading }),
+      t(' '),
       row({}, [t(view.savedStrong, { bold: true, color: CTX.text }), sec(view.savedRest)]),
-      dim([view.nextMark ? `next mark ${view.nextMark.pct}%` : 'past every mark', view.compactPct === null ? 'auto-compact off' : `compact at ${view.compactPct}%`].join(' · ')),
+      dim(view.nextMark ? `next mark ${view.nextMark.pct}%` : 'past every mark'),
     ])
-
     const footer = row({ alignItems: 'center', gap: 1 }, [
       t('●', { color: view.cache.warm ? CTX.dot : CTX.dim }),
       t(view.cache.footer, { color: CTX.text }),
@@ -1285,10 +1288,8 @@ export function register(on, options = {}) {
     ])
     return col({ gap: 0 }, [
       headline,
-      stacked,
-      legend,
       t(' '),
-      row({ gap: 2 }, [cacheCard, savedCard]),
+      row({ gap: 2 }, [bars, stats]),
       t(' '),
       footer,
       buttons,
