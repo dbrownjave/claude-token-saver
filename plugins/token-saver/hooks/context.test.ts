@@ -51,16 +51,14 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ text: /484k \/ 1M \(48%\)/ })).toBeDefined()
     expect(await ui.find({ key: 'ctx-clear' })).toBeUndefined()        // collapsed: headline + bar only
     await ui.press({ key: 'ctx-expand' })
-    expect(await ui.find({ text: /compact at 97%/i })).toBeDefined()
-    for (const label of ['System ', 'Tools ', 'Files ', 'Messages ']) expect(await ui.find({ text: new RegExp(`^${label}$`) })).toBeDefined()
-    expect(await ui.find({ text: /^302k$/ })).toBeDefined()
-    expect(await ui.find({ text: /Free 486k/ })).toBeDefined()
     expect(await ui.find({ text: /^Cache$/ })).toBeDefined()
-    expect(await ui.find({ text: /^0 tok$/ })).toBeDefined()                       // nothing saved yet, no $ rate set
-    expect(await ui.find({ text: /set \$\/M in \/config/ })).toBeDefined()
+    expect(await ui.find({ text: /^0 tok$/ })).toBeDefined()                       // nothing saved yet
     expect(await ui.find({ text: /0 quiet commands · 0 cold compacts vetoed/ })).toBeDefined()
-    expect(await ui.find({ text: /^Tips$/ })).toBeDefined()
-    expect(await ui.find({ text: /MCP tools cost 63k every turn/ })).toBeDefined()
+    expect(await ui.find({ text: /set \$\/M in \/config for dollars/ })).toBeDefined()   // cost ledger present but no turns: no derived rate yet
+    expect(await ui.find({ text: /\$1\.37 spent/ })).toBeDefined()
+    expect(await ui.find({ text: /Where tokens go/ })).toBeDefined()
+    expect(await ui.find({ text: /^MCP tools $/ })).toBeDefined()
+    expect(await ui.find({ text: /^Messages $/ })).toBeDefined()
     expect(await ui.find({ text: /next mark 60% \(handoff\)/ })).toBeDefined()
     expect(await ui.find({ text: /no response yet/ })).toBeDefined()
 
@@ -96,7 +94,20 @@ test('context pane without a breakdown falls back to one Used entry and no tick'
   const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'desktop', component: 'Pane', requestId: 'context', props: PANE as any })
   expect(await ui.find({ text: /120k \/ 200k \(60%\)/ })).toBeDefined()
   await ui.press({ key: 'ctx-expand' })
-  expect(await ui.find({ text: /^Messages $/ })).toBeDefined()
   expect(await ui.find({ text: /Compact at/ })).toBeUndefined()
+  expect(await ui.find({ text: /tokens only/ })).toBeDefined()                     // no cost ledger, no rate limits: unknown billing
   expect(await ui.find({ text: /next mark 75% \(compact\)/ })).toBeDefined()
+})
+
+test('context pane on a subscription prices savings as window headroom once the window moves', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home' })
+  on('session.usage' as any, () => ({ value: { startedAt: NOW, context: { tokens: 300_000, window: 1_000_000, percent: 30 }, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(NOW + 3600_000).toISOString() }] } }))
+  on('ui.close' as any, () => ({ value: undefined }))
+  const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'desktop', component: 'Pane', requestId: 'context', props: PANE as any })
+  await ui.press({ key: 'ctx-expand' })
+  expect(await ui.find({ text: /40% of 5-hour window used/ })).toBeDefined()
+  expect(await ui.find({ text: /subscription: window maths appears once the 5-hour window moves/ })).toBeDefined()
+  expect(await ui.find({ text: /\$/ })).toBeUndefined()                           // never a dollar on a subscription
 })
