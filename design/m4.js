@@ -267,40 +267,76 @@
     const entries = [
       [1, 'Context', 'How full Claude\u2019s working memory is: everything it has to read again before it can answer.',
         `${tok1(n)} of ${tok1(WIN)} tokens (${pct}%).${next ? ` Next mark: ${next.id} at ${next.p}%, about ${msgs} message${msgs === 1 ? '' : 's'} away.` : ''}`,
-        next && next.id === 'handoff' ? 'Before it fills, write a handoff, then Clear.' : 'Keep one task per conversation; Clear when the topic changes.'],
+        next && next.id === 'handoff' ? 'Before it fills, write a handoff, then Clear.' : 'Keep one task per conversation; Clear when the topic changes.', 'context'],
       [2, 'The bar', 'The same number, drawn. Its colour follows your marks, and the ticks show where they are.',
-        `Now ${colour}. Marks at ${MARKS.map((m) => m.p + '%').join(', ')}; auto-compact at ${AUTO}%.`, ''],
+        `Now ${colour}. Marks at ${MARKS.map((m) => m.p + '%').join(', ')}; auto-compact at ${AUTO}%.`, '', 'marks'],
       [3, 'Cache', 'Anthropic keeps a copy of this conversation for a while. Reusing it costs a tenth; letting it lapse means paying again in full.',
-        cacheLive, c.known && c.warm ? 'Reply before it cools, and avoid switching model or editing CLAUDE.md mid-session.' : 'Clear beats Compact while cold: compacting would pay for everything again.'],
+        cacheLive, c.known && c.warm ? 'Reply before it cools, and avoid switching model or editing CLAUDE.md mid-session.' : 'Clear beats Compact while cold: compacting would pay for everything again.', 'cache'],
       [4, 'Saved', 'Tokens the plugin kept off your bill this session.',
-        sc.fresh ? 'Nothing yet: it counts from the first reply.' : `${tok1(savedTok)} tokens${api ? ` ≈ ${usdOf(savedTok)}` : ''}, ${share}% of what you would have sent.`, 'Open the pane (⌄) to see where it came from.'],
+        sc.fresh ? 'Nothing yet: it counts from the first reply.' : `${tok1(savedTok)} tokens${api ? ` ≈ ${usdOf(savedTok)}` : ''}, ${share}% of what you would have sent.`, 'Open the pane (⌄) to see where it came from.', 'saved'],
       [5, 'Clear · Compact · Later', 'Clear starts fresh. Compact shrinks the conversation into a summary, cheap only while the cache is warm. Later closes this.',
-        `Recommended now: ${{ c:'Clear', k:'Compact', l:'Later' }[actions(sc).find((b) => b.prim) ? actions(sc).find((b) => b.prim).key : 'l']}.`, ''],
+        `Recommended now: ${{ c:'Clear', k:'Compact', l:'Later' }[actions(sc).find((b) => b.prim) ? actions(sc).find((b) => b.prim).key : 'l']}.`, '', 'compact'],
     ]
     if (sc.open) entries.push(
       [6, 'Saved this session', 'Where the saving came from: cache reads, trimmed tool output, and cold compactions that were blocked.',
-        `Cache reads ${tok1(D.save.cacheSaved)} · Trimmed ${tok1(D.save.keptOut)} · Re-cache ${tok1(D.save.vetoTok)}.`, 'Press Receipt for the money, line by line.'],
+        `Cache reads ${tok1(D.save.cacheSaved)} · Trimmed ${tok1(D.save.keptOut)} · Re-cache ${tok1(D.save.vetoTok)}.`, 'Press Receipt for the money, line by line.', 'cut'],
       [7, 'The cards', 'What is coming (your next mark), what keeps the cache alive while you are away, and how long it stays warm.',
-        `Runway ${next ? Math.round(100 * (pct - ([...MARKS].reverse().find((m) => m.p <= pct) || { p:0 }).p) / (next.p - ([...MARKS].reverse().find((m) => m.p <= pct) || { p:0 }).p)) : 100}% · ${api ? `Pings ${KEEPWARM.pings} of ${KEEPWARM.cap}` : `Usage ${WINDOW5H.usage}% of the 5-hour window`} · ${c.known && c.warm ? `${c.left}m left` : 'Cold'}.`, ''],
+        `Runway ${next ? Math.round(100 * (pct - ([...MARKS].reverse().find((m) => m.p <= pct) || { p:0 }).p) / (next.p - ([...MARKS].reverse().find((m) => m.p <= pct) || { p:0 }).p)) : 100}% · ${api ? `Pings ${KEEPWARM.pings} of ${KEEPWARM.cap}` : `Usage ${WINDOW5H.usage}% of the 5-hour window`} · ${c.known && c.warm ? `${c.left}m left` : 'Cold'}.`, '', 'keepwarm'],
       [8, 'Claude\u2019s working memory', 'Everything Claude re-reads each time it replies or uses a tool, by kind.',
-        `Biggest: MCP tools ${tok1(SPL.mcp)} (${pct1(SPL.mcp)}), then messages ${tok1(SPL.messages)}.`, 'Smaller memory means cheaper replies and more room before compaction.'],
+        `Biggest: MCP tools ${tok1(SPL.mcp)} (${pct1(SPL.mcp)}), then messages ${tok1(SPL.messages)}.`, 'Smaller memory means cheaper replies and more room before compaction.', 'mcp'],
       [9, 'Groups', 'What is inside each kind, with a button that trims it.',
-        'Turning off unused MCP servers could save up to 38k each time.', 'Open a group, then press its button.'],
+        'Turning off unused MCP servers could save up to 38k each time.', 'Open a group, then press its button.', 'deferred'],
     )
     return entries
   }
+  /* the glossary's live numbers for this pane's scenario (the plugin fills the same shape from the session) */
+  function liveFor(sc) {
+    const n = sc.used, c = sc.cache, pct = pctOfUsed(n), next = MARKS.find((m) => m.p > pct), api = isApi()
+    const msgs = next ? Math.max(1, Math.ceil(Math.max(0, WIN * next.p / 100 - n) / GROWTH)) : 0
+    const ttl = c.ttl || 60
+    return {
+      used:tok1(n), win:tok1(WIN), pct, requests:D.turns || 23, api, rate:money(D.usd.rate),
+      messages:tok1(SPL.messages), messagesPct:pct1(SPL.messages), mcp:tok1(SPL.mcp), mcpPct:pct1(SPL.mcp), mcpServers:13,
+      mcpDeferred:'165.3k', sysDeferred:'15.7k', skills:tok1(SPL.skills), skillCount:134, system:tok1(SPL.system), sysTools:tok1(SPL.tools),
+      memory:'2.6k', memoryCount:5, buffer:tok1(BUFFER), free:tok1(Math.max(0, WIN - n - BUFFER)),
+      cacheLine:!c.known ? 'No reply yet, so nothing is cached.' : c.warm ? `Warm, ${c.left}m left: your next message reuses ${tok1(n)}${api ? ` (≈ ${money(usd(n * 0.1, D))} instead of ${money(usd(n * 1.25, D))})` : ''}.` : `Cold: your next message re-processes ${tok1(n)}${api ? ` (≈ ${money(usd(n * 1.25, D))})` : ''}.`,
+      cacheState:!c.known ? 'Not started: the clock begins after the first reply.' : !c.warm ? 'Cold.' : c.left <= 5 ? `Cooling: ${c.left}m left.` : `Warm: ${c.left}m left.`,
+      cacheWarm:c.known && c.warm, ttl:ttl >= 60 ? 'One hour' : `${ttl} minutes`, coldCost:money(usd(n * 1.25, D)), hit:D.cache.hit,
+      pings:KEEPWARM.pings, pingCap:KEEPWARM.cap,
+      nextMark:next ? `Next: ${next.id} at ${next.p}%, about ${msgs} message${msgs === 1 ? '' : 's'} away.` : 'Past every mark.', auto:AUTO,
+      saved:tok1(savedTok), savedUsd:usdOf(savedTok), share:Math.round(100 * heroShare()), cacheSaved:tok1(D.save.cacheSaved),
+      keptOut:tok1(D.save.keptOut), keptRequests:D.save.keptTurns, rewrites:D.save.rewrites ?? 4, vetoes:D.save.vetoes, vetoTok:tok1(D.save.vetoTok),
+      windowUsage:WINDOW5H.usage, windowResets:WINDOW5H.resets,
+    }
+  }
+  const GLOSS = new Map()                                     // per pane: { open, focus }
+  const glossOf = (sc) => GLOSS.get(sc.id) || { open:false, focus:null }
+  const openGloss = (sc, focus = null) => { GLOSS.set(sc.id, { open:true, focus }); build() }
+  const closeGloss = (sc) => { GLOSS.set(sc.id, { open:false, focus:null }); build() }
+  function glossaryRows(sc, T) {
+    const g = glossOf(sc), rows = [{ readout:{ ro:'sep' } }, { readout:{ ro:'ghead', sc } }]
+    for (const grp of window.GLOSSARY(liveFor(sc))) {
+      rows.push({ readout:{ ro:'ggroup', name:grp.group } })
+      for (const t of grp.terms) {
+        const e = [null, t.name, t.what, t.live || '', t.todo || '', t.id], hot = g.focus === t.id
+        rows.push(...(T === 'term' ? explainTerm(e, hot).map((r) => ({ readout:{ ro:'raw', r } })) : [{ readout:{ ro:'gterm', e, hot } }]))
+      }
+    }
+    return rows
+  }
   function explainRows(sc, T) {
-    const rows = [{ readout:{ ro:'sep' } }, { readout:{ ro:'exhead' } }]
-    for (const e of explainEntries(sc)) rows.push(...(T === 'term' ? explainTerm(e).map((r) => ({ readout:{ ro:'raw', r } })) : [{ readout:{ ro:'explain', e } }]))
+    if (glossOf(sc).open) return glossaryRows(sc, T)
+    const rows = [{ readout:{ ro:'sep' } }, { readout:{ ro:'exhead', sc } }]
+    for (const e of explainEntries(sc)) rows.push(...(T === 'term' ? explainTerm(e).map((r) => ({ readout:{ ro:'raw', r } })) : [{ readout:{ ro:'explain', e, sc } }]))
     return rows
   }
   /* terminal: an entry wraps to 76 cells — "¹ Context  what it is…", then the live value, then "→ what to do" */
-  function explainTerm([n, name, what, live, todo]) {
+  function explainTerm([n, name, what, live, todo], hot = false) {
     const P = PALETTE_T(), W = M.TW, c = (s, col) => `<span style="color:${col}">${esc(s)}</span>`
     const wrap = (text, width) => { const out = []; let line = ''; for (const w of text.split(' ')) { if ((line + ' ' + w).trim().length > width) { out.push(line.trim()); line = w } else line += ' ' + w } if (line.trim()) out.push(line.trim()); return out }
     const out = []
-    const head = `${SUP[n]} ${name}  `, first = wrap(what, W - head.length)
-    out.push({ text:head + first[0], html:c(SUP[n] + ' ', P.brand) + c(name, P.text) + '  ' + c(first[0], P.faint), len:head.length + first[0].length })
+    const mark = n == null ? (hot ? '▸ ' : '  ') : SUP[n] + ' ', head = `${mark}${name}  `, first = wrap(what, W - head.length)
+    out.push({ text:head + first[0], html:c(mark, P.brand) + c(name, hot ? P.brand : P.text) + '  ' + c(first[0], P.faint), len:head.length + first[0].length })
     for (const l of [...first.slice(1).join(' ') ? wrap(first.slice(1).join(' '), W - 3) : []]) out.push({ text:'   ' + l, html:'   ' + c(l, P.faint), len:3 + l.length })
     for (const l of wrap(live, W - 3)) out.push({ text:'   ' + l, html:'   ' + c(l, P.text), len:3 + l.length })
     if (todo) wrap('→ ' + todo, W - 3).forEach((l) => out.push({ text:'   ' + l, html:'   ' + c(l, P.faint), len:3 + l.length }))
@@ -317,7 +353,23 @@
     if (ro.ro === 'gap') { row.style.minHeight = '10px'; return row }
     if (ro.ro === 'savedblock') return savedDesk(ro.ui, P, ro.key)
     if (ro.ro === 'mark') { row.style.marginTop = '4px'; row.append(badgeEl(ro.n, P), txt(' ' + ro.label, P.brand)); return row }
-    if (ro.ro === 'exhead') { row.append(txt('Explain this pane', P.text), grow(), txt('Live values, this session', P.faint)); return row }
+    if (ro.ro === 'exhead' || ro.ro === 'ghead') {
+      const gl = ro.ro === 'ghead', fillB = P.dark ? P.raised : M.hex(M.mix(P.bg, P.text, 0.07))
+      const b = document.createElement('span'); b.className = 'mbtn'; b.textContent = gl ? 'Back to Explain' : 'Glossary'
+      b.style.cssText += `;height:20px;padding:0 9px;border-radius:6px;border-color:transparent;background:${fillB};color:${P.dim};cursor:pointer;margin-left:12px`
+      b.onclick = (e) => { e.stopPropagation(); gl ? closeGloss(ro.sc) : openGloss(ro.sc) }
+      row.append(txt(gl ? 'Glossary' : 'Explain this pane', P.text), grow(), txt('Live values, this session', P.faint), b); return row
+    }
+    if (ro.ro === 'ggroup') { row.style.marginTop = '8px'; row.append(txt(ro.name, P.brand)); return row }
+    if (ro.ro === 'gterm') {
+      const [, name, what, live, todo] = ro.e
+      const box = document.createElement('div'); box.style.cssText = `padding:5px 0 5px ${ro.hot ? 10 : 12}px;line-height:1.5;${ro.hot ? `border-left:2px solid ${P.brand};background:${M.hex(M.mix(P.bg, P.brand, 0.08))};border-radius:0 6px 6px 0` : ''}`
+      const l1 = document.createElement('div'); l1.append(txt(name, ro.hot ? P.brand : P.text), txt('  ' + what, P.faint)); box.append(l1)
+      if (live) { const l2 = document.createElement('div'); l2.append(txt(live, P.text)); box.append(l2) }
+      if (todo) { const l3 = document.createElement('div'); l3.append(txt('→ ' + todo, P.faint)); box.append(l3) }
+      if (ro.hot) setTimeout(() => box.scrollIntoView({ block:'nearest' }), 0)
+      return box
+    }
     if (ro.ro === 'explain') {
       const [n, name, what, live, todo] = ro.e
       const box = document.createElement('div'); box.style.cssText = 'display:flex;gap:10px;align-items:flex-start;padding:6px 0'
@@ -327,6 +379,12 @@
       const l2 = document.createElement('div'); l2.append(txt(live, P.text))
       body.append(l1, l2)
       if (todo) { const l3 = document.createElement('div'); l3.append(txt('→ ' + todo, P.faint)); body.append(l3) }
+      const gid = ro.e[5]
+      if (gid) {   // "More" opens the glossary at this part's term
+        const more = document.createElement('div'), a = txt('More in the glossary →', P.brand)
+        a.style.cursor = 'pointer'; a.onclick = (ev) => { ev.stopPropagation(); openGloss(ro.sc, gid) }
+        more.append(a); body.append(more)
+      }
       box.append(b, body); return box
     }
     if (ro.ro === 'sep') { row.style.cssText += `;min-height:0;height:1px;background:${P.line};margin:12px 0 10px`; return row }
@@ -440,7 +498,11 @@
     if (ro.ro === 'gap') return { html:'', text:'', len:0 }
     if (ro.ro === 'raw') return ro.r
     if (ro.ro === 'mark') { const t = `${SUP[ro.n]} ${ro.label}`; return { html:c(t, P.brand), text:t, len:t.length } }
-    if (ro.ro === 'exhead') { const l = 'Explain this pane', r = 'Live values, this session'; return { html:c(l, P.text) + ' '.repeat(W - l.length - r.length) + c(r, P.faint), text:l, len:W } }
+    if (ro.ro === 'exhead' || ro.ro === 'ghead') {
+      const gl = ro.ro === 'ghead', l = gl ? 'Glossary' : 'Explain this pane', b = gl ? '[ Back to Explain ]' : '[ Glossary ]', r = 'Live values  '
+      return { html:c(l, P.text) + ' '.repeat(W - l.length - r.length - b.length) + c(r, P.faint) + c(b, P.dim), text:l, len:W }
+    }
+    if (ro.ro === 'ggroup') return { html:c(ro.name, P.brand), text:ro.name, len:ro.name.length }
     if (ro.ro === 'distsub') { const l = 'Re-read every time Claude replies or uses a tool'; return { html:c(l, P.faint), text:l, len:l.length } }
     if (ro.ro === 'sep') return { html:c('─'.repeat(W), P.line), text:'─'.repeat(W), len:W }
     if (ro.ro === 'disttitle') { const r = `${tok1(D.used)} of ${tok1(WIN)} tok`, l = 'Claude\u2019s working memory'; return { html:c(l, P.text) + ' '.repeat(W - l.length - r.length) + c(r, P.text), text:l + ' '.repeat(W - l.length - r.length) + r, len:W } }
