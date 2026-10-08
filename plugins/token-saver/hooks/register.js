@@ -1676,6 +1676,42 @@ async function clearSession($) {
   }
 }
 
+/** Open the Context pane, as /tokens does. False where panes are not drawn (the caller answers in text). */
+async function openContextPane($) {
+  ctxCache.at = 0
+  try {
+    const opened = await $.ui.open({ id: CONTEXT_PANE, title: 'Context', focus: true, closeOnEscape: true, holdToasts: true, rows: 10 })
+    if (!opened || opened.isPlaced !== false) {
+      ctxMsg = ''
+      ctxPaneOpen = true
+      await rollMonth($)
+      return true
+    }
+  } catch {
+    /* no panes on this surface */
+  }
+  return false
+}
+
+/** The band's figures: one plain usage call (no breakdown), cached a second so the 70 ms redraws cost nothing. */
+let bandCtx = { at: 0, usage: null }
+async function bandUsage($, now) {
+  if (bandCtx.at && now - bandCtx.at < 1000) return bandCtx.usage
+  let usage = null
+  try { usage = await $.session.usage() } catch { usage = null }
+  if (!(usage && usage.context)) usage = { ...(usage || {}), context: { tokens: sentOf(lastUsage) } }
+  bandCtx = { at: now, usage }
+  return usage
+}
+
+/** The band's cache words: the pane's sentence, short. */
+function bandSentence(c) {
+  if (!c.known) return [['No response yet', 'inactive']]
+  if (!c.warm) return [['Cache cold: next message re-caches ', 'inactive'], [c.amount, 'text']]
+  if (c.cooling) return [[`Cache cooling: ${c.leftMin}m left to reuse `, 'inactive'], [c.amount, 'text']]
+  return [['Cache warm: next message reuses ', 'inactive'], [c.amount, 'text']]
+}
+
 /** A drill-down group's command (/mcp, /memory, /agents, /loadout): close the pane, then run it as /clear does. */
 async function runFromPane($, command) {
   ctxPaneOpen = false
@@ -1802,7 +1838,8 @@ export function register(on, options = {}) {
     }
     progressRows.clear()
     progressTicker = $.clock.every(70, () => {
-      if (progressRows.size === 0 && !ctxPaneOpen) return
+      const bandOn = cacheBand && !!lastUsage && !bandHidden      // the band's bar burns while it shows; hidden, it costs nothing
+      if (progressRows.size === 0 && !ctxPaneOpen && !bandOn) return
       const now = Date.now()
       let changed = false
       for (const [id, r] of progressRows) {
@@ -1821,7 +1858,7 @@ export function register(on, options = {}) {
         r.state === 'running' || r.state === 'waiting' || (r.state === 'done' && tNow - (r.settledAt || 0) < SH.sparkleFor + SH.MAX_AGE))
       if (moving) for (const r of progressRows.values()) r.shown += (r.target - r.shown) * 0.16
       // the shader runs at the tick rate while a row is live or a finished one still sparkles; afterwards a row costs nothing
-      if (changed || moving || animating || (ctxPaneOpen && progressTick % 2 === 0)) {
+      if (changed || moving || animating || ((ctxPaneOpen || bandOn) && progressTick % 2 === 0)) {
         try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
       }
     })
@@ -1876,18 +1913,7 @@ export function register(on, options = {}) {
     }
     if (arg === '' || arg === 'pane') {
       // The Context pane: the engine's own context dialog, drawn by the mod. Text where panes do not draw (vscode).
-      ctxCache.at = 0
-      try {
-        const opened = await $.ui.open({ id: CONTEXT_PANE, title: 'Context', focus: true, closeOnEscape: true, holdToasts: true, rows: 10 })
-        if (!opened || opened.isPlaced !== false) {
-          ctxMsg = ''
-          ctxPaneOpen = true
-          await rollMonth($)
-          return { text: 'Context pane opened. Esc closes it. /tokens list prints the same as text.' }
-        }
-      } catch {
-        /* no panes on this surface: the text answer below */
-      }
+      if (await openContextPane($)) return { text: 'Context pane opened. Esc closes it. /tokens list prints the same as text.' }
     }
     const ctx = await contextOf($)
     const clock = cacheClock(await $.clock.now(), ttl)
@@ -2263,29 +2289,46 @@ export function register(on, options = {}) {
     }
     if (showTokens) {
       try {
-        const ctx = await contextOf($)
-        const clock = cacheClock(await $.clock.now(), ttl)
-        const cache = clock.warm ? `warm ${mins(clock.leftMs)}m` : 'cold'
-        const parts = [
-          `token-saver  ctx ${fmt(ctx.tokens)}${ctx.window ? ` (${ctx.percent}%)` : ''}  cache ${hitPct(lastUsage)}% ${cache}  trimmed ${fmt(savedChars)}  /tokens`,
+        // M4's closed pane in one row: a short fire bar, the percent, the cache cells and words, what was saved, ⌄ ×
+        const term = e.surface === 'terminal'
+        const pal = THEME_HEX[term ? 'terminal' : 'desktop']
+        const el = $.ui.resolve(e)
+        const ui = { Box, Text, Button, Svg: term ? undefined : el.Svg, Raster: term ? el.Raster : undefined, term, hex: (k) => (String(k).startsWith('#') ? k : pal[k] || pal.inactive) }
+        const now = await $.clock.now()
+        const clock = cacheClock(now, ttl)
+        const view = contextView(await bandUsage($, now), ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
+        view.compactPct = null                                   // no breakdown here: marks only
+        const c = view.cache
+        const t = (str, color) => h(Text, color ? { color } : null, str)
+        const pctText = view.window ? `${view.pct}%` : fmtK(view.used)
+        const buttons = [
+          h(Button, { key: 'band-open', label: '⌄', plain: true, onPress: () => openContextPane($) }), t(' '),
+          h(Button, { key: 'hide', label: '×', plain: true, onPress: () => { bandHidden = true; invalidate($) } }),
         ]
-        if (compactHint) {
-          const hint = hintFor(ctx.percent, clock)
-          if (hint) parts.push(hint)
+        const row = []
+        if (term) {
+          // ▬ 48%  ▪▪▪▪▪ Warm 47m · Reuses 96k · 2.2M saved      ⌄ ×   — drop "Reuses" first, then the bar, when narrow
+          const words = !c.known ? 'No response yet' : !c.warm ? 'Cold' : c.cooling ? `Cooling ${c.leftMin}m` : `Warm ${c.leftMin}m`
+          const reuse = !c.known ? '' : c.warm ? `Reuses ${c.amount}` : `Re-caches ${c.amount}`
+          const BAR = 16
+          const fixed = 1 + pctText.length + 2 + 5 + 1 + words.length + 3 + view.savings.short.length + 1 + 3
+          const room = Math.max(20, width - 2)
+          const withReuse = reuse && fixed + BAR + 3 + reuse.length <= room
+          const withBar = fixed + BAR <= room
+          if (withBar) row.push(contextBar(ui, geoOf(true, BAR, 14, 4), view, progressTick * TICK_S, clock.known))
+          row.push(t(`${withBar ? ' ' : ''}${pctText}`, view.accent), t('  '), ...cacheMini(ui, c), t(' '), t(words, 'inactive'))
+          if (withReuse) row.push(t(' · ', 'inactive'), t(reuse, 'inactive'))
+        } else {
+          const barPx = Math.max(160, Math.min(220, Math.round(width * 1.8)))
+          row.push(contextBar(ui, geoOf(false, barPx, 10, 3), view, progressTick * TICK_S, clock.known), t(' '), t(pctText, view.accent), t('  '), ...cacheMini(ui, c), t(' '),
+            ...bandSentence(c).map(([s, r]) => t(s, r)))
         }
-        children.push(h(
-          Box,
-          null,
-          h(Text, { dimColor: true }, parts.join('  ·  ') + '  '),
-          h(Button, {
-            key: 'hide',
-            label: 'Hide',
-            onPress: () => {
-              bandHidden = true
-              try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
-            },
-          }),
-        ))
+        row.push(t(' · ', 'inactive'), t(view.savings.short, 'inactive'), h(Box, { flexGrow: 1 }), t(' '), ...buttons)
+        children.push(h(Box, { flexDirection: 'row', alignItems: 'center' }, ...row.filter(Boolean)))
+        if (compactHint) {
+          const hint = hintFor(view.pct, clock)
+          if (hint) children.push(h(Text, { color: 'inactive', wrap: 'truncate' }, cap1(hint)))
+        }
       } catch {
         /* usage unavailable: progress rows still draw */
       }
