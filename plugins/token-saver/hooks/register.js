@@ -15,6 +15,9 @@ const MINUTE = 60 * 1000
 const TTL_SHORT = 5 * MINUTE
 const TTL_LONG = 60 * MINUTE
 const BAND_TICK = 30 * 1000
+const KEEP_WARM_TICK = 15 * 1000
+const KEEP_WARM_LEAD = 75 * 1000          // the TTL runs from a request's start and a fork takes seconds: ping well before it lapses
+const KEEP_WARM_PROMPT = 'Keep-alive ping from the token-saver plugin. Reply with a single period and nothing else.'
 
 const DEFAULT_RULES = [
   { id: 'git-status', pattern: '^git\\s+status\\b', unless: ['-sb', '-s'], replace: 'git status -sb' },
@@ -51,6 +54,14 @@ const totals = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, kep
 let limitBase = null            // { pct, tokens } when the five-hour window was first seen: tokens per % of window
 let monthSaved = { key: '', tok: 0, usd: 0, sessionTok: 0, sessionUsd: 0 }   // carried in $.store across sessions
 let announcedPct = 0            // highest threshold already toasted this session
+/**
+ * Keep-warm: while you are idle, re-read the session's own cached prefix ($.model.fork) shortly before the 5-minute TTL
+ * lapses, so your next message hits the cache instead of re-writing it. A read costs 0.1× fresh input and refreshes the
+ * TTL; a lapse costs a 1.25× re-write, so a ping pays while pings × 0.1 < chance-you-return × 1.15. The cap (default 5,
+ * about 20 minutes) assumes about even odds. Costs and savings are booked in fresh-input-token equivalents.
+ */
+const keepWarm = { on: false, streak: 0, pings: 0, misses: 0, costTok: 0, savedTok: 0, busy: false, refreshedAt: 0, stopped: '' }
+let inTurn = false
 // Progress rows above the prompt, driven by the `progress` tool the model calls.
 const PROGRESS_TOOL = 'mcp__token-saver__progress'
 const progressRows = new Map()  // id -> { id, label, stage, step, total, state, target, shown, note }
@@ -197,8 +208,50 @@ async function contextOf($) {
 
 function cacheClock(now, ttl) {
   if (!lastStepAt) return { known: false, warm: false, idleMs: 0, leftMs: 0 }
-  const idleMs = Math.max(0, now - lastStepAt)
+  const idleMs = Math.max(0, now - Math.max(lastStepAt, keepWarm.refreshedAt))   // a keep-warm ping refreshes the TTL too
   return { known: true, warm: idleMs < ttl, idleMs, leftMs: Math.max(0, ttl - idleMs) }
+}
+
+/** Whether a keep-warm ping is due now, else why not. Pure: every input is passed in. */
+function keepWarmDue(w, now, lastStep, ttl, maxPings, turnRunning) {
+  if (!w.on) return 'off'
+  if (turnRunning) return 'turn running'
+  if (w.busy) return 'busy'
+  if (!lastStep) return 'no response yet'
+  const idle = now - Math.max(lastStep, w.refreshedAt)
+  if (idle >= ttl) return 'lapsed'
+  if (ttl - idle > KEEP_WARM_LEAD) return 'not yet'
+  if (w.streak >= maxPings) return 'cap'
+  return 'ping'
+}
+
+/** One input-token-equivalent figure for what a call cost: write 1.25×, read 0.1×, output 5×. */
+function billedTok(u) {
+  if (!u) return 0
+  return Math.round((u.input_tokens || 0) + 1.25 * (u.cache_creation_input_tokens || 0) + 0.1 * (u.cache_read_input_tokens || 0) + 5 * (u.output_tokens || 0))
+}
+
+async function tickKeepWarm($, ttl, maxPings) {
+  const now = await $.clock.now()
+  if (keepWarmDue(keepWarm, now, lastStepAt, ttl, maxPings, inTurn) !== 'ping') return
+  keepWarm.busy = true
+  try {
+    // API billing only: a subscription already caches the main thread for an hour, and a ping would spend plan quota
+    let u = null
+    try { u = await $.session.usage() } catch { /* no usage API */ }
+    if (!(u && u.cost && Number.isFinite(u.cost.usd))) { keepWarm.stopped = 'not API billing'; keepWarm.on = false; return }
+    const r = await $.model.fork({ prompt: KEEP_WARM_PROMPT })
+    if (r.usage) keepWarm.costTok += billedTok(r.usage)
+    if (!r.isAnswered && r.reason === 'nothing-to-fork') return
+    keepWarm.pings += 1
+    keepWarm.streak += 1
+    const read = (r.usage && r.usage.cache_read_input_tokens) || 0
+    if (r.isAnswered && read >= 0.8 * sentOf(r.usage)) keepWarm.refreshedAt = now
+    else { keepWarm.misses += 1; keepWarm.streak = Infinity }   // already lapsed (model switch, eviction) or failed: stop paying this stretch
+    try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
+  } finally {
+    keepWarm.busy = false
+  }
 }
 
 function levelFor(pct) {
@@ -722,7 +775,9 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const cacheSavedTok = Math.round(T.cacheRead * 0.9)
   const keptOutTok = T.keptOut
   const vetoTok = Math.round(T.vetoTokens * 1.25)
-  const totalSavedTok = cacheSavedTok + keptOutTok + vetoTok
+  const kw = saved.keepWarm || { pings: 0, savedTok: 0, costTok: 0 }
+  const warmNet = kw.savedTok - kw.costTok                 // can be negative: pings you never came back for
+  const totalSavedTok = cacheSavedTok + keptOutTok + vetoTok + warmNet
   const usd = (tok) => (mode === 'api' && rate ? `$${((tok * rate) / 1e6).toFixed(2)}` : '')
   // subscription: tokens per 1% of the five-hour window, learned as the window moves during this session
   const base = saved.limitBase
@@ -738,6 +793,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
     lines: [
       `${fmtK(T.cacheRead)} served from cache, ${cachePct}% of input${worth(cacheSavedTok) ? ` · ${worth(cacheSavedTok)}` : ''}`,
       `${fmtK(Math.round(saved.savedChars / 4))} tok trimmed, kept out of ${T.turns} turn${T.turns === 1 ? '' : 's'} = ${fmtK(keptOutTok)}${worth(keptOutTok) ? ` · ${worth(keptOutTok)}` : ''}`,
+      ...(kw.pings ? [`kept warm ${kw.pings}× · ${fmtK(kw.savedTok)} re-cache avoided − ${fmtK(kw.costTok)} spent pinging = ${warmNet < 0 ? '−' : ''}${fmtK(Math.abs(warmNet))}${worth(Math.abs(warmNet)) ? ` · ${worth(Math.abs(warmNet))}` : ''}`] : []),
       `${saved.rewrites} quiet command${saved.rewrites === 1 ? '' : 's'} · ${saved.vetoes} cold compact${saved.vetoes === 1 ? '' : 's'} vetoed${vetoTok ? ` (${fmtK(vetoTok)} re-cache avoided${worth(vetoTok) ? `, ${worth(vetoTok)}` : ''})` : ''}`,
     ],
     cost: hasCost ? `$${usage.cost.usd.toFixed(2)} spent` : five ? `${pct100(five.percentUsed)}% of 5-hour window used` : '',
@@ -810,7 +866,7 @@ function gradientBarText(h, Text, fill, cells) {
 async function rollMonth($) {
   try {
     const key = `saved:${new Date().toISOString().slice(0, 7)}`
-    const sessionTok = Math.round(totals.cacheRead * 0.9) + totals.keptOut + Math.round(totals.vetoTokens * 1.25)
+    const sessionTok = Math.round(totals.cacheRead * 0.9) + totals.keptOut + Math.round(totals.vetoTokens * 1.25) + keepWarm.savedTok - keepWarm.costTok
     const delta = sessionTok - monthSaved.sessionTok
     if (monthSaved.key !== key) { const prev = await $.store.get(key); monthSaved = { key, tok: Number(prev && prev.tok) || 0, usd: 0, sessionTok: 0, sessionUsd: 0 } }
     monthSaved.tok += Math.max(0, delta)
@@ -888,6 +944,9 @@ export function register(on, options = {}) {
   const inputPricePerM = Number(options.inputPricePerM) || 0
   const suggestSkills = options.suggestSkills !== false
   const ttl = options.longCacheTtl ? TTL_LONG : TTL_SHORT
+  // Keep-warm pings only make sense against the 5-minute TTL; with the 1-hour TTL a lapse is already rare
+  const keepWarmMax = Math.max(0, Math.round(Number(options.keepWarmPings ?? 5)))
+  keepWarm.on = options.keepWarm !== false && !options.longCacheTtl && keepWarmMax > 0
 
   on('session.start', async ($, e, next) => {
     await loadConfig($, e.cwd)
@@ -986,6 +1045,7 @@ export function register(on, options = {}) {
         if (lastStepAt) $.ui.invalidate('ui.render')
       })
     }
+    if (keepWarm.on) $.clock.every(KEEP_WARM_TICK, () => { tickKeepWarm($, ttl, keepWarmMax).catch(() => { keepWarm.busy = false }) })
     if (suggestSkills) {
       // Parked skills that fit this repo: one UI line, nothing into the prompt.
       try {
@@ -1047,6 +1107,7 @@ export function register(on, options = {}) {
         `context       ${fmt(ctx.tokens)} tok${window}  ·  ${cache}`,
         `last request  in ${fmt(u.input_tokens)}  out ${fmt(u.output_tokens)}  cache-read ${fmt(u.cache_read_input_tokens)} (${hitPct(u)}%)`,
         `this session  rewrites ${rewrites}  trimmed ~${fmt(savedChars)} chars  compactions vetoed ${vetoes}`,
+        `keep-warm     ${keepWarm.on ? `on · ${keepWarm.pings} ping${keepWarm.pings === 1 ? '' : 's'} · avoided ${fmt(keepWarm.savedTok)} · spent ${fmt(keepWarm.costTok)} tok` : `off${keepWarm.stopped ? ` (${keepWarm.stopped})` : ''}`}`,
         hintFor(ctx.percent, clock) || 'under your lowest threshold',
         'limits: ~/.claude/token-saver/thresholds.json  ·  /tokens hide|show  ·  override a veto: /compact force',
       ].join('\n'),
@@ -1138,11 +1199,30 @@ export function register(on, options = {}) {
     return { result: { ...rec, stdout: trim(rec.stdout) } }
   })
 
+  // Keep-warm never pings while a turn runs: the turn itself keeps the cache warm, and a fork would race it
+  on('turn.start', async ($, e, next) => {
+    inTurn = true
+    return next(e)
+  })
+  on('turn.complete', async ($, e, next) => {
+    try {
+      return await next(e)
+    } finally {
+      inTurn = false
+    }
+  })
+
   on('turn.step', async function* ($, e, next) {
     const result = yield* next(e)
     if (!e.agentId && result && result.usage) {
+      const stepAt = await $.clock.now()
+      // Kept warm through an idle stretch that would have lapsed, and this request hit: the re-write was avoided
+      if (keepWarm.streak > 0 && lastStepAt && stepAt - lastStepAt >= ttl && stepAt - keepWarm.refreshedAt < ttl && hitPct(result.usage) >= 80) {
+        keepWarm.savedTok += Math.round(1.15 * (result.usage.cache_read_input_tokens || 0))
+      }
+      keepWarm.streak = 0
       lastUsage = result.usage
-      lastStepAt = await $.clock.now()
+      lastStepAt = stepAt
       totals.turns += 1
       totals.input += result.usage.input_tokens || 0
       totals.cacheRead += result.usage.cache_read_input_tokens || 0
@@ -1312,7 +1392,7 @@ export function register(on, options = {}) {
     const W = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
     const now = await $.clock.now()
     const data = await loadContext($, now, W)
-    const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved })
+    const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
     const PX = 6.5
     const col = (props, children) => h(Box, { flexDirection: 'column', ...props }, ...children)
     const row = (props, children) => h(Box, { flexDirection: 'row', ...props }, ...children)

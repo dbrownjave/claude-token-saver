@@ -59,7 +59,7 @@ Or one session, no marketplace:
 claude --plugin-dir ./plugins/token-saver
 ```
 
-Toggles live on the plugin, not in a settings splice: `quietBash`, `trimOutput`, `cacheBand`, `compactHint`, `compactGuard`, `longCacheTtl`. They show up as rows in `/config`. Disable the whole thing with `/plugin disable token-saver@token-saver`.
+Toggles live on the plugin, not in a settings splice: `quietBash`, `trimOutput`, `cacheBand`, `compactHint`, `compactGuard`, `longCacheTtl`, `keepWarm`, `keepWarmPings`. They show up as rows in `/config`. Disable the whole thing with `/plugin disable token-saver@token-saver`.
 
 ### Progress bars (mod only)
 
@@ -82,6 +82,12 @@ A settings hook can only add a note before `/compact`. The mod sits on the compa
 | subagent transcripts | Left alone. |
 
 "Cold" means idle longer than the prompt-cache TTL since the last response. Default TTL is 5 minutes; turn on `longCacheTtl` if your sessions get the 1-hour cache. `/tokens` shows which state you are in.
+
+**Keep-warm** (`keepWarm`, on by default) applies only to API billing with the 5-minute TTL. While you are idle, it re-reads the session's own cached prefix with one tiny request (`$.model.fork`) about 75 seconds before the cache lapses. A read costs about 0.1× the input price and restarts the TTL. Your next message then hits the cache instead of paying a 1.25× re-write.
+- It stops after `keepWarmPings` pings per idle stretch (default 5, about 20 minutes, the break-even if you come back half the time).
+- It stops on the first miss, and it never runs during a turn.
+- It is off on a subscription, which already caches the main thread for an hour; pings there would spend plan quota.
+- `/tokens` and the Context pane book what the pings cost and the re-writes they avoided, so the net can be negative if you stay away.
 
 Dev loop: `claude plugin validate ./plugins/token-saver` then `claude plugin test ./plugins/token-saver`.
 

@@ -1,7 +1,7 @@
 {
   "name": "token-saver",
   "version": "0.2.0",
-  "description": "Token-saver mod: quiet bash, trim output, cache band, /tokens, cold-cache compaction veto",
+  "description": "Token-saver mod: quiet bash, trim output, cache band, /tokens, cold-cache compaction veto, keep-warm pings",
   "author": {
     "name": "token-saver"
   },
@@ -41,6 +41,18 @@
       "title": "Prompt cache TTL is 1 hour",
       "description": "Off: 5-minute TTL (Claude Code's default). On: 1-hour TTL. Sets when the band and the compact guard call the cache cold.",
       "default": false
+    },
+    "keepWarm": {
+      "type": "boolean",
+      "title": "Keep the prompt cache warm while you are idle",
+      "description": "API billing with the 5-minute TTL only. Shortly before the cache lapses, re-reads the session's own cached prefix with one tiny request (about 0.1\u00d7 its input price) so your next message hits the cache instead of paying a 1.25\u00d7 re-write. Stops after the cap, on any miss, and never runs during a turn. Pings and their cost show in /tokens and the Context pane.",
+      "default": true
+    },
+    "keepWarmPings": {
+      "type": "number",
+      "title": "Keep-warm pings per idle stretch",
+      "description": "How many pings, about 4 minutes apart, before letting the cache lapse. 5 keeps it warm for about 20 minutes, the break-even if you come back half the time. 0 turns keep-warm off.",
+      "default": 5
     },
     "suggestSkills": {
       "type": "boolean",
