@@ -53,14 +53,15 @@ for (const surface of ['terminal', 'desktop'] as const) {
     for (const label of ['System ', 'Tools ', 'Files ', 'Messages ']) expect(await ui.find({ text: new RegExp(`^${label}$`) })).toBeDefined()
     expect(await ui.find({ text: /Free 486k/ })).toBeDefined()
     expect(await ui.find({ text: /^Cache$/ })).toBeDefined()
-    expect(await ui.find({ text: /Saved this session/ })).toBeDefined()
-    expect(await ui.find({ text: /rewrites · ~0 chars trimmed · 0 compactions vetoed/ })).toBeDefined()
-    expect(await ui.find({ text: /next mark 60% \(handoff\) · compact at 97%/ })).toBeDefined()
+    expect(await ui.find({ text: /^Saved$/ })).toBeDefined()
+    expect(await ui.find({ text: /^0 rewrites$/ })).toBeDefined()
+    expect(await ui.find({ text: /0 trimmed · 0 vetoes/ })).toBeDefined()
+    expect(await ui.find({ text: /next mark 60% · compact at 97%/ })).toBeDefined()
     expect(await ui.find({ text: /no response yet/ })).toBeDefined()
 
     if (surface === 'desktop') {
       const svgs = await ui.findAll({ type: 'Svg' })
-      expect(svgs.length).toBe(1)                            // the context bar; the cache bar waits for a first response
+      expect(svgs.length).toBe(2)                            // the context bar and the cache bar
       expect(String(svgs[0].props.source)).toContain('48%')  // the pill
       expect(String(svgs[0].props.source)).toContain('#d4d3cf')   // the compact-at tick
     } else {
@@ -93,5 +94,5 @@ test('context pane without a breakdown falls back to one Used entry and no tick'
   expect(await ui.find({ text: /120k \/ 200k \(60%\)/ })).toBeDefined()
   expect(await ui.find({ text: /^Used $/ })).toBeDefined()
   expect(await ui.find({ text: /Compact at/ })).toBeUndefined()
-  expect(await ui.find({ text: /next mark 75% \(compact\) · auto-compact off/ })).toBeDefined()
+  expect(await ui.find({ text: /next mark 75% · auto-compact off/ })).toBeDefined()
 })

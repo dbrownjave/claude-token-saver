@@ -352,6 +352,7 @@ function applyProgress(e) {
 }
 
 function pillText(row) {
+  if (row.plain) return row.stage || ''                       // a gauge: just the figure, no state prefix
   const lead = row.state === 'done' ? '✓ ' : row.state === 'failed' ? '✕ ' : row.state === 'waiting' ? '? ' : ''
   const count = row.total > 0 ? ` ${Math.max(1, Math.min(row.step || 1, row.total))}/${row.total}` : ''
   return `${lead}${row.stage || row.label}${count}`
@@ -402,6 +403,7 @@ const INKS = {
   failed:  { hot: [1.00, 0.60, 0.63], c0: [1.00, 0.50, 0.54], c1: [0.85, 0.25, 0.30] },
   done:    { hot: [0.62, 0.94, 0.76], c0: [0.45, 0.90, 0.68], c1: [0.20, 0.65, 0.45] },
   cold:    { hot: [0.70, 0.70, 0.74], c0: [0.52, 0.52, 0.57], c1: [0.33, 0.33, 0.38] },
+  orange:  { hot: [1.00, 0.74, 0.50], c0: [1.00, 0.62, 0.36], c1: [0.80, 0.40, 0.20] },
 }
 const TRACK_RGB = [0.165, 0.165, 0.18]      // #2a2a2e
 const BAR_H = 14, BAR_ROWS = 3, BAR_RADIUS = 4
@@ -424,7 +426,7 @@ function rowSeed(row) {
  * random points along the fill for `sparkleFor` seconds, then holds still. Returns the live bursts.
  */
 function burstsAt(row, t, seed) {
-  const live = row.state === 'running' || row.state === 'waiting'
+  const live = row.live === true || row.state === 'running' || row.state === 'waiting'
   const out = []
   if (live) {
     let T = 0
@@ -454,7 +456,7 @@ function burstsAt(row, t, seed) {
 
 /** Colour of one cell as [r,g,b] 0..1 composited over the track, or null where nothing paints. */
 function shadeCell(row, cx, cy, cols, rows, t, bursts, seed, pitchPx, W) {
-  const live = row.state === 'running' || row.state === 'waiting'
+  const live = row.live === true || row.state === 'running' || row.state === 'waiting'
   const pos = Math.max(row.shown, 0.02)
   const px = (cx + 0.5) * pitchPx
   if (px > pos * W + pitchPx) return null
@@ -614,7 +616,8 @@ function progressSettled() {
 // The Context pane (/tokens): the pack's own dashboard. One hue, our numbers, our animation.
 const CONTEXT_PANE = 'context'
 const BREAKDOWN_TTL = 10 * 1000     // $.session.usage({ breakdown: 'summary' }) is cached this long; redraws cost nothing
-const CTX = { heading: '#e6e6e6', text: '#c9c9cf', secondary: '#9a9aa0', dim: '#6a6a70', tick: '#d4d3cf', mark: '#6a6a70', warm: '#8b7cf6', cold: '#8a8a90' }
+const CTX = { heading: '#e6e5dc', text: '#dcddd5', legend: '#b1afa6', secondary: '#84837d', dim: '#797773', tick: '#d4d3cf', mark: '#84837d',
+  warm: '#ce9466', dot: '#e3883d', cold: '#8a8a90', track: '#2e2d29', cache: ['#629cde', '#a8a38c', '#da934b'] }
 let ctxCache = { at: 0, usage: null }
 let ctxLoading = null
 let ctxBusy = false
@@ -674,32 +677,29 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const marks = []
   if (compactPct !== null) marks.push({ frac: compactPct / 100, color: CTX.tick })
   if (nextMark) marks.push({ frac: nextMark.pct / 100, color: CTX.mark })
-  const state = pct >= 75 ? 'failed' : pct >= 60 ? 'waiting' : 'running'
+  const crossed = levels.filter((l) => Number(l.pct) <= pct).length
+  const state = ['done', 'waiting', 'orange', 'failed'][Math.min(crossed, 3)]   // green until your first mark, then amber, orange, red
   const ttlMin = Math.max(1, Math.round(ttl / MINUTE))
   const sent = sentOf(usageLast)
   let cache
   if (!clock || !clock.known) {
-    cache = { known: false, warm: false, title: 'Cache', accent: '', line: 'no response yet · the clock starts after the first reply', fill: 0, footer: 'No response yet: the cache clock starts after the first reply.' }
+    cache = { known: false, warm: false, accent: 'Cold', fill: 0, strong: 'no response yet', rest: '', foot: 'the clock starts after the first reply', footer: 'No response yet: the cache clock starts after the first reply.' }
   } else if (clock.warm) {
     const leftMin = Math.max(1, Math.round(clock.leftMs / MINUTE))
-    cache = { known: true, warm: true, title: 'Cache', accent: 'Warm', fill: clock.leftMs / ttl, pill: `${leftMin}m`,
-      line: `Hit ${hitPct(usageLast)}% · ${leftMin}m left of ${ttlMin}m`, footer: `Cache warm: next message reuses ${fmtK(sent)} from cache.` }
+    cache = { known: true, warm: true, accent: 'Warm', fill: clock.leftMs / ttl, strong: `Warmth ${pct100((100 * clock.leftMs) / ttl)}%`, rest: ` · Hit ${hitPct(usageLast)}%`,
+      foot: `${leftMin}m left of ${ttlMin}m`, footer: `Cache warm: next message reuses ${fmtK(sent)} from cache.` }
   } else {
-    const idleMin = Math.max(1, Math.round(clock.idleMs / MINUTE))
-    cache = { known: true, warm: false, title: 'Cache', accent: 'Cold', fill: 1, pill: 'cold',
-      line: `Hit ${hitPct(usageLast)}% · idle ${idleMin}m, past the ${ttlMin}m window`, footer: `Cache cold: next message re-caches ${fmtK(sent)}.` }
+    cache = { known: true, warm: false, accent: 'Cold', fill: 0, strong: 'Warmth 0%', rest: ` · Hit ${hitPct(usageLast)}%`,
+      foot: `idle ${Math.max(1, Math.round(clock.idleMs / MINUTE))}m, past ${ttlMin}m`, footer: `Cache cold: next message re-caches ${fmtK(sent)}.` }
   }
   const saved = stats || { rewrites: 0, savedChars: 0, vetoes: 0 }
-  const savedLine = [
-    `${saved.rewrites} rewrite${saved.rewrites === 1 ? '' : 's'}`,
-    `~${fmtK(saved.savedChars)} chars trimmed`,
-    `${saved.vetoes} compaction${saved.vetoes === 1 ? '' : 's'} vetoed`,
-  ].join(' · ')
+  const savedStrong = `${saved.rewrites} rewrite${saved.rewrites === 1 ? '' : 's'}`
+  const savedRest = ` · ${fmtK(saved.savedChars)} trimmed · ${saved.vetoes} veto${saved.vetoes === 1 ? '' : 'es'}`
   const hint = hintFor(pct, clock || { warm: false, leftMs: 0 })
   return {
     hasData: !!usage, pct, used, window, measure, state,
     header: { usedText: window ? `${fmtK(used)} / ${fmtK(window)} (${pct}%)` : `${fmtK(used)} (${pct}%)`, compactText: compactPct === null ? '' : `Compact at ${compactPct}%` },
-    marks, legend, free, nextMark, compactPct, cache, savedLine, hint,
+    marks, legend, free, nextMark, compactPct, cache, savedStrong, savedRest, hint,
   }
 }
 
@@ -712,6 +712,23 @@ function invalidate($) {
 }
 
 /** The pane's figures: one usage call with the summary breakdown (never 'full': that sends token-count requests), cached 10 s. */
+/** The dialog's cache bar: a rounded track, the fill a blue → grey → orange gradient. */
+function gradientBarSvg(fill, width, height = 10, id = 'g') {
+  const W = Math.max(40, Math.round(width)), H = height, f = Math.max(0, Math.min(1, fill)) * W
+  const [a, b, c] = CTX.cache
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs><linearGradient id="${id}" x1="0" x2="1"><stop offset="0" stop-color="${a}"/><stop offset="0.5" stop-color="${b}"/><stop offset="1" stop-color="${c}"/></linearGradient><clipPath id="c${id}"><rect width="${W}" height="${H}" rx="${H / 2}"/></clipPath></defs><rect width="${W}" height="${H}" rx="${H / 2}" fill="${CTX.track}"/><g clip-path="url(#c${id})"><rect width="${f.toFixed(1)}" height="${H}" fill="url(#${id})"/></g></svg>`
+}
+function gradientBarText(h, Text, fill, cells) {
+  const n = Math.round(Math.max(0, Math.min(1, fill)) * cells), parts = []
+  const [a, b, c] = CTX.cache
+  const third = Math.max(1, Math.round(n / 3))
+  if (n > 0) parts.push(h(Text, { color: a }, '█'.repeat(Math.min(n, third))))
+  if (n > third) parts.push(h(Text, { color: b }, '█'.repeat(Math.min(n - third, third))))
+  if (n > 2 * third) parts.push(h(Text, { color: c }, '█'.repeat(n - 2 * third)))
+  if (cells - n > 0) parts.push(h(Text, { color: CTX.track }, '░'.repeat(cells - n)))
+  return parts
+}
+
 async function loadContext($, now, columns) {
   if (ctxCache.at && now - ctxCache.at < BREAKDOWN_TTL) return ctxCache
   if (ctxLoading) return ctxLoading
@@ -1204,7 +1221,7 @@ export function register(on, options = {}) {
     // Header: Context · 484k / 1M (48%) · [our cells, compact tick, next mark] · Compact at 97%
     const left = 'Context', mid = view.header.usedText, right = view.header.compactText
     const barCols = Math.max(12, W - left.length - mid.length - (right ? right.length + 2 : 0) - 6)
-    const ctxRow = { id: 'context', label: 'Context', stage: `${view.pct}%`, step: 0, total: 0, state: view.state, target: view.pct / 100, shown: view.pct / 100, note: '' }
+    const ctxRow = { id: 'context', label: 'Context', stage: `${view.pct}%`, step: 0, total: 0, state: view.state, live: true, plain: true, target: view.pct / 100, shown: view.pct / 100, note: '' }
     const header = row({ alignItems: 'center', gap: 1 }, [
       t(left, { bold: true, color: CTX.heading }),
       sec(mid),
@@ -1212,29 +1229,31 @@ export function register(on, options = {}) {
       ...(right ? [dim(right)] : []),
     ])
     const legend = row({}, [
-      ...view.legend.flatMap((s, i) => [...(i ? [dim(' · ')] : []), t(`${s.label} `, { color: CTX.secondary }), t(fmtK(s.tokens), { color: CTX.text })]),
+      ...view.legend.flatMap((s, i) => [...(i ? [dim(' · ')] : []), t(`${s.label} `, { color: CTX.legend }), t(fmtK(s.tokens), { color: CTX.legend })]),
       dim(`   Free ${fmtK(view.free)}`),
       ...(view.hasData ? [] : [dim('   figures appear after the first response')]),
     ])
 
     // Two cards: the cache clock, and what the pack saved this session
     const half = Math.max(24, Math.floor((W - 2) / 2))
-    const cacheRow = { id: 'cache', label: 'Cache', stage: view.cache.pill || '', step: 0, total: 0, state: view.cache.warm ? 'running' : 'cold', target: view.cache.fill, shown: view.cache.fill, note: '', settledAt: 0 }
+    const cacheBar = Svg
+      ? h(Svg, { source: gradientBarSvg(view.cache.fill, (half - 2) * PX, 10, 'cache'), alt: `Cache ${view.cache.accent}`, height: 10 })
+      : row({}, gradientBarText(h, Text, view.cache.fill, half - 2))
     const cacheCard = col({ width: half }, [
-      row({}, [t('Cache', { bold: true, color: CTX.heading }), ...(view.cache.accent ? [t(' · ', { color: CTX.dim }), t(view.cache.accent, { bold: true, color: view.cache.warm ? CTX.warm : CTX.cold })] : [])]),
-      ...(view.cache.known ? [bar(cacheRow, half - 2, [], `Cache ${view.cache.accent}`)] : []),
-      sec(view.cache.line),
+      row({}, [t('Cache', { bold: true, color: CTX.heading }), t(' · ', { color: CTX.dim }), t(view.cache.accent, { bold: true, color: view.cache.warm ? CTX.warm : CTX.dim })]),
+      cacheBar,
+      row({}, [t(view.cache.strong, { bold: true, color: CTX.text }), sec(view.cache.rest)]),
+      dim(view.cache.foot),
     ])
     const savedCard = col({ width: half }, [
-      t('Saved this session', { bold: true, color: CTX.heading }),
-      sec(view.savedLine),
-      dim([view.nextMark ? `next mark ${view.nextMark.pct}% (${view.nextMark.id})` : 'past every mark', view.compactPct === null ? 'auto-compact off' : `compact at ${view.compactPct}%`].join(' · ')),
+      t('Saved', { bold: true, color: CTX.heading }),
+      row({}, [t(view.savedStrong, { bold: true, color: CTX.text }), sec(view.savedRest)]),
+      dim([view.nextMark ? `next mark ${view.nextMark.pct}%` : 'past every mark', view.compactPct === null ? 'auto-compact off' : `compact at ${view.compactPct}%`].join(' · ')),
     ])
 
     const footer = row({ alignItems: 'center', gap: 1 }, [
-      t('●', { color: view.cache.warm ? CTX.warm : CTX.cold }),
+      t('●', { color: view.cache.warm ? CTX.dot : CTX.dim }),
       t(view.cache.footer, { color: CTX.text }),
-      ...(view.hint ? [dim(' · '), t(view.hint.charAt(0).toUpperCase() + view.hint.slice(1), { color: CTX.secondary })] : []),
     ])
     const buttons = row({ gap: 1 }, [
       h(Button, { key: 'ctx-clear', label: 'Clear', hotkey: 'c', variant: 'primary', onPress: () => clearSession($) }),
