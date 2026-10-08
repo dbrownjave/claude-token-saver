@@ -89,6 +89,10 @@ A settings hook can only add a note before `/compact`. The mod sits on the compa
 - It is off on a subscription, which already caches the main thread for an hour; pings there would spend plan quota.
 - `/tokens` and the Context pane book what the pings cost and the re-writes they avoided, so the net can be negative if you stay away.
 
+## Glossary
+
+Every term the Context pane uses (context, the prompt cache, re-cache, keep-warm, marks, what was saved) has one definition, kept in `plugins/token-saver/hooks/glossary.js`: what it is, its live value in your session, and what to do. Press `?` in the pane to number its parts and explain each one with your numbers; `More in the glossary →` opens the full glossary at that term. `/tokens learn` prints the whole glossary as text, and `/tokens learn <term>` (an id or a name, such as `cache` or `keep-warm`) prints just that term. Money appears only on API billing with a known rate, never on a subscription.
+
 Dev loop: `claude plugin validate ./plugins/token-saver` then `claude plugin test ./plugins/token-saver`.
 
 | What | Where it works |

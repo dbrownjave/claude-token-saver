@@ -244,3 +244,68 @@ test('context pane on a subscription: the five-hour window card, and never a dol
   expect(await ui.find({ text: /Subscription: window maths appears once the 5-hour window moves/ })).toBeDefined()
   expect(await ui.find({ text: /\$/ })).toBeUndefined()
 })
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`context pane on ${surface}: ? explains the pane, and More opens the glossary at that term`, { options: { ...OPTIONS, inputPricePerM: 3 }, timeoutMs: SLOW }, async ($, on) => {
+    setup(on, () => USAGE)
+    await turn($)
+    const ui: any = await mount($, surface)
+    expect(await ui.find({ text: /^Explain this pane$/ })).toBeUndefined()
+    await ui.press({ key: 'ctx-explain' })
+    expect(await ui.find({ text: /^Explain this pane$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Live values, this session$/ })).toBeDefined()
+    const one = surface === 'terminal' ? /^¹ $/ : /^① $/, five = surface === 'terminal' ? /^⁵ $/ : /^⑤ $/
+    expect(await ui.find({ text: one })).toBeDefined()
+    expect(await ui.find({ text: five })).toBeDefined()
+    expect(await ui.find({ text: /Warm, 5m left: your next message reuses 484k \(≈ \$0\.15 instead of \$1\.81\)\./ })).toBeDefined()
+    expect(await ui.find({ text: /Recommended now: Later\./ })).toBeDefined()
+    expect(await ui.find({ key: 'ctx-more:cache' })).toBeDefined()
+    expect(await ui.find({ text: /undefined|NaN/ })).toBeUndefined()
+
+    await ui.press({ key: 'ctx-expand' })                         // open: markers 6 to 9 and their entries
+    expect(await ui.find({ text: /^What is inside each kind, with a button to trim it$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Groups$/ })).toBeDefined()
+
+    await ui.press({ key: 'ctx-more:cache' })
+    expect(await ui.find({ text: /^Glossary$/, type: 'Text' })).toBeDefined()
+    expect(await ui.find({ text: /^Explain this pane$/ })).toBeUndefined()
+    const focused = await ui.find({ text: /^Prompt cache$/ })
+    expect(focused?.props.color).toBe('claude')
+    expect(await ui.find({ text: /^▸ $/ })).toBeDefined()
+    expect(await ui.find({ text: /^Basics$/ })).toBeDefined()
+    expect(await ui.find({ text: /undefined|NaN/ })).toBeUndefined()
+    await ui.press({ key: 'ctx-glossary-back' })
+    expect(await ui.find({ text: /^Explain this pane$/ })).toBeDefined()
+    await ui.press({ key: 'ctx-explain' })
+    expect(await ui.find({ text: /^Explain this pane$/ })).toBeUndefined()
+  })
+}
+
+test('/tokens learn prints the glossary; a term prints just that term with its live value', { options: { ...OPTIONS, inputPricePerM: 3 }, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => USAGE)
+  await turn($)
+  const all = String((await ($ as any).command.run({ command: 'tokens', args: 'learn' })).text)
+  expect(all).toContain('Basics')
+  expect(all).toContain('Savings')
+  expect(all).not.toMatch(/undefined|NaN/)
+  const cache = String((await ($ as any).command.run({ command: 'tokens', args: 'learn cache' })).text)
+  expect(cache).toContain('Prompt cache')
+  expect(cache).toContain('Warm, 5m left: your next message reuses 484k')
+  expect(cache).not.toContain('Hit rate')
+  const none = String((await ($ as any).command.run({ command: 'tokens', args: 'learn zebra' })).text)
+  expect(none).toContain('No term matches')
+  expect(none).toContain('Prompt cache')
+})
+
+test('the glossary on a subscription never shows a dollar', { options: { ...OPTIONS, inputPricePerM: 3 }, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => ({ ...USAGE, cost: undefined, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(NOW + 3600_000).toISOString() }] }))
+  await turn($)
+  const all = String((await ($ as any).command.run({ command: 'tokens', args: 'learn' })).text)
+  expect(all).not.toContain('$')
+  expect(all).toContain('40% used, resets in 1h 0m.')
+  const ui: any = await mount($, 'desktop')
+  await ui.press({ key: 'ctx-explain' })
+  await ui.press({ key: 'ctx-glossary' })
+  expect(await ui.find({ text: /^Glossary$/, type: 'Text' })).toBeDefined()
+  expect(await ui.find({ text: /\$/ })).toBeUndefined()
+})

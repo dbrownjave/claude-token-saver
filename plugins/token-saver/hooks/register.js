@@ -8,6 +8,8 @@
  * VS Code's chat panel runs these hooks but does not draw UI.
  */
 
+import { GLOSSARY } from './glossary.js'
+
 const LIMIT = 8000
 const HEAD = 2500
 const TAIL = 1500
@@ -1302,16 +1304,22 @@ function drawContextPane(ui, view, o) {
   const size = term ? cells : px
   const rule = () => t('─'.repeat(term ? cells : 200), subtle, { wrap: 'truncate' })
   const blank = () => t(' ')
+  // Explain mode: small Claude-orange numbers on the parts it explains (superscripts on the terminal, one cell each)
+  const ex = ctxExplain
+  const mark = (n) => (ex ? t(`${term ? SUP[n] : CIRCLED[n]} `, 'claude') : null)
+  const markRow = (n, label) => (ex ? row({}, [mark(n), t(label, 'claude')]) : null)
 
   // 1. Title: Context   96k / 200k tok (48%) … ⌄   (room is left before the chevron for a "?" later)
   const title = row({ alignItems: 'center' }, [
-    t('Context', 'inactive'), t('   '), t(view.title.used, 'text'), view.title.pct ? t(view.title.pct, view.accent) : null,
+    t('Context', 'inactive'), t('   '), mark(1), t(view.title.used, 'text'), view.title.pct ? t(view.title.pct, view.accent) : null,
     grow(),
+    h(Button, { key: 'ctx-explain', label: '?', plain: true, onPress: o.onExplain }), t(term ? ' ' : '  '),
     h(Button, { key: 'ctx-expand', label: ctxExpanded ? '⌃' : '⌄', plain: true, onPress: o.onExpand }),
   ])
 
   // 2. The context bar, full width, nothing on it
-  const bar = contextBar(ui, geoOf(term, size, 14, 4), view, o.t, o.live)
+  const barEl = contextBar(ui, geoOf(term, ex ? (term ? cells - 2 : px - 16) : size, 14, 4), view, o.t, o.live)
+  const bar = ex ? row({ alignItems: 'center' }, [mark(2), barEl]) : barEl
 
   // 3. Bottom row: cache and saved on the left, the actions on the right
   const acts = paneActions(view)
@@ -1326,16 +1334,17 @@ function drawContextPane(ui, view, o) {
   const c = view.cache
   const sentence = () => c.sentence.map(([s, r]) => t(s, r))
   const bottom = row({ alignItems: 'center' }, [
-    ...cacheMini(ui, c), t(' '),
+    mark(3), ...cacheMini(ui, c), t(' '),
     ...(term ? [t(c.short, 'inactive')] : sentence()),
-    t(' · ', 'inactive'), t(view.savings.short, 'inactive'),
-    grow(), t(' '), buttons,
+    t(' · ', 'inactive'), mark(4), t(view.savings.short, 'inactive'),
+    grow(), t(' '), mark(5), buttons,
   ])
   // the terminal keeps the bottom row short; the whole sentence sits on its own line under it when it fits
   const sentLen = c.sentence.reduce((n, [s]) => n + s.length, 0)
   const under = term && sentLen <= cells ? row({}, sentence()) : null
   const msg = ctxMsg ? t(cap1(ctxMsg), 'inactive', { wrap: 'wrap' }) : null
-  if (!ctxExpanded) return col({}, [title, bar, bottom, under, msg])
+  const explain = ex ? explainSection(ui, view, o, { row, col, t, grow, rule, cells }) : []
+  if (!ctxExpanded) return col({}, [title, bar, bottom, under, msg, ...explain])
 
   // 4. Saved: the headline of the whole plugin
   const sv = view.savings
@@ -1418,7 +1427,205 @@ function drawContextPane(ui, view, o) {
     ]
   })
 
-  return col({}, [title, bar, blank(), saved, blank(), ...cardRows, blank(), memory, ...(groups.length ? [blank(), ...groups] : []), blank(), bottom, under, msg])
+  return col({}, [title, bar, blank(), markRow(6, 'Saved this session'), saved, blank(), markRow(7, 'Cards: what is next, keep-warm, cache'), ...cardRows, blank(),
+    markRow(8, 'Claude’s working memory'), memory, ...(groups.length ? [blank(), markRow(9, 'What is inside each kind, with a button to trim it'), ...groups] : []),
+    blank(), bottom, under, msg, ...explain])
+}
+
+/**
+ * Under the buttons in Explain mode: each numbered part (what it is, its live value, what to do, a way into the
+ * glossary), or the glossary itself with one term focused. The terminal wraps its own lines to the body width less 4.
+ */
+function explainSection(ui, view, o, k) {
+  const { Button, term } = ui
+  const { row, col, t, grow, rule } = k
+  const L = o.L
+  const width = Math.max(30, o.W - 4)
+  const gl = ctxGloss.open
+  const head = row({ alignItems: 'center' }, [
+    t(gl ? 'Glossary' : 'Explain this pane', 'text'), grow(), t('Live values, this session', 'inactive'), t(' '),
+    gl ? h(Button, { key: 'ctx-glossary-back', label: 'Back to Explain', onPress: o.onGlossaryBack })
+      : h(Button, { key: 'ctx-glossary', label: 'Glossary', onPress: () => o.onGlossary(null) }),
+  ])
+  // one entry: marker, name and what; the live value; → what to do; on Explain, a way into the glossary
+  const entry = (lead, name, what, live, todo, more, hot) => {
+    const nameColor = hot ? 'claude' : 'text'
+    const moreBtn = more ? h(Button, { key: `ctx-more:${more}`, label: 'More in the glossary →', plain: true, onPress: () => o.onGlossary(more) }) : null
+    if (term) {
+      const first = wrapWords(what, Math.max(10, width - lead.length - name.length - 2))
+      const restWhat = first.length > 1 ? wrapWords(first.slice(1).join(' '), width - 3) : []
+      return [
+        row({}, [t(lead, 'claude'), t(name, nameColor), t(`  ${first[0] || ''}`, 'inactive')]),
+        ...restWhat.map((l) => t(`   ${l}`, 'inactive')),
+        ...(live ? wrapWords(live, width - 3).map((l) => t(`   ${l}`, 'text')) : []),
+        ...(todo ? wrapWords(`→ ${todo}`, width - 3).map((l) => t(`   ${l}`, 'inactive')) : []),
+        moreBtn ? row({ paddingLeft: 3 }, [moreBtn]) : null,
+      ]
+    }
+    return [row({ marginTop: 1 }, [t(lead, 'claude'), col({ flexGrow: 1, flexShrink: 1 }, [
+      row({ flexWrap: 'wrap' }, [t(name, nameColor), t(`  ${what}`, 'inactive', { wrap: 'wrap' })]),
+      live ? t(live, 'text', { wrap: 'wrap' }) : null,
+      todo ? t(`→ ${todo}`, 'inactive', { wrap: 'wrap' }) : null,
+      moreBtn,
+    ])])]
+  }
+  const body = []
+  if (gl) {
+    for (const g of glossaryFor(L)) {
+      body.push(row({ marginTop: term ? 0 : 1 }, [t(g.group, 'claude')]))
+      for (const tm of g.terms) {
+        const hot = ctxGloss.focus === tm.id
+        body.push(...entry(hot ? '▸ ' : '  ', tm.name, tm.what, tm.live, tm.todo, null, hot))
+      }
+    }
+  } else {
+    for (const [n, name, what, live, todo, id] of explainEntries(view, L, ctxExpanded)) {
+      body.push(...entry(`${term ? SUP[n] : CIRCLED[n]} `, name, what, live, todo, id, false))
+    }
+  }
+  return [rule(), head, ...body].filter(Boolean)
+}
+
+// ---- Explain this pane, and the glossary (hooks/glossary.js, one source for the pane and /tokens learn) ----
+let ctxExplain = false
+let ctxGloss = { open: false, focus: null }
+const SUP = '⁰¹²³⁴⁵⁶⁷⁸⁹'
+const CIRCLED = '⓪①②③④⑤⑥⑦⑧⑨'
+const money = (x) => '$' + x.toFixed(2)
+
+/** Words to lines of at most `width` cells; a word longer than the line is left whole. */
+function wrapWords(text, width) {
+  const out = []
+  let line = ''
+  for (const w of String(text).split(/\s+/).filter(Boolean)) {
+    if (line && (line + ' ' + w).length > width) { out.push(line); line = w } else line = line ? line + ' ' + w : w
+  }
+  if (line) out.push(line)
+  return out
+}
+
+/**
+ * The live numbers the glossary and Explain read, from this session's real state. A number we do not have stays
+ * undefined, and its live line is dropped. `api` is "not a subscription": dollars appear only when a rate is known
+ * (`priced`), and never on a subscription.
+ */
+function liveNumbers(view, s) {
+  const b = view.breakdown, sv = view.savings, c = view.cache
+  const api = sv.mode !== 'subscription'
+  const priced = sv.priced
+  const usdOf = (tok) => (priced ? money((tok * sv.rate) / 1e6) : undefined)
+  const pctOf = (n) => `${((100 * n) / view.measure).toFixed(1)}%`
+  const rows = (b && view.memory.rows) || []
+  const sum = (pred) => { const r = rows.filter(pred); return r.length ? r.reduce((n, x) => n + x.tokens, 0) : undefined }
+  const live = (k) => sum((r) => !r.deferred && r.key === k)
+  const messages = live('messages'), mcp = live('mcp'), skills = live('skills'), system = live('system'), sysTools = live('tools'), memory = live('memory')
+  const mcpDef = sum((r) => r.deferred && r.key === 'mcp'), sysDef = sum((r) => r.deferred && r.key !== 'mcp')
+  const buffer = sum((r) => r.key === 'buffer'), free = sum((r) => r.key === 'free')
+  const tools = (b && Array.isArray(b.mcpTools) && b.mcpTools) || []
+  const mem = (b && Array.isArray(b.memoryFiles) && b.memoryFiles) || []
+  const memGroup = (view.groups || []).find((g) => g.id === 'memory')
+  const k = (n) => (n === undefined ? undefined : fmtK(n))
+  const next = view.nextMark, avg = avgGrowth()
+  const left = next ? Math.max(0, (view.measure * next.pct) / 100 - view.used) : 0
+  const msgs = next && avg > 0 ? Math.max(1, Math.ceil(left / avg)) : 0
+  const ttlMin = Math.max(1, Math.round(s.ttl / MINUTE))
+  const amt = c.amount
+  const warmCost = usdOf(view.used * 0.1), coldCost = usdOf(view.used * 1.25)
+  const five = view.five
+  let windowResets
+  const r = five && five.resetsAt ? Date.parse(five.resetsAt) : NaN
+  if (Number.isFinite(r)) { const ms = Math.max(0, r - s.now); windowResets = `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / MINUTE)}m` }
+  const usedPings = Number.isFinite(keepWarm.streak) ? Math.min(keepWarm.streak, s.keepWarmMax) : s.keepWarmMax
+  const T = s.totals
+  return {
+    api, priced, used: fmtK(view.used), win: view.window ? fmtK(view.window) : undefined, pct: view.window ? view.pct : undefined,
+    requests: T.turns, rate: priced ? money(sv.rate) : undefined,
+    messages: k(messages), messagesPct: messages === undefined ? undefined : pctOf(messages), mcp: k(mcp), mcpPct: mcp === undefined ? undefined : pctOf(mcp),
+    mcpServers: tools.length ? new Set(tools.filter((t) => t.isLoaded !== false).map((t) => t.serverName)).size : undefined,
+    mcpDeferred: mcpDef === undefined && sysDef === undefined ? undefined : fmtK(mcpDef || 0), sysDeferred: mcpDef === undefined && sysDef === undefined ? undefined : fmtK(sysDef || 0),
+    skills: k(skills), skillCount: b && b.skills ? Number(b.skills.totalSkills) || undefined : undefined,
+    system: k(system), sysTools: k(sysTools), memory: k(memory), memoryCount: mem.length || undefined, memoryTwice: !!(memGroup && memGroup.save),
+    buffer: k(buffer), free: k(free),
+    cacheLine: !c.known ? 'No reply yet, so nothing is cached.'
+      : c.warm ? `Warm, ${c.leftMin}m left: your next message reuses ${amt}${priced ? ` (≈ ${warmCost} instead of ${coldCost})` : ''}.`
+      : `Cold: your next message re-processes ${amt}${priced ? ` (≈ ${coldCost})` : ''}.`,
+    cacheState: !c.known ? 'Not started: the clock begins after the first reply.' : !c.warm ? 'Cold.' : c.cooling ? `Cooling: ${c.leftMin}m left.` : `Warm: ${c.leftMin}m left.`,
+    cacheWarm: c.known && c.warm, ttl: ttlMin >= 60 ? 'One hour' : `${ttlMin} minutes`, coldCost, hit: lastUsage ? hitPct(lastUsage) : undefined,
+    keepWarmOn: keepWarm.on && s.keepWarmMax > 0, keepWarmWhy: keepWarm.stopped || (s.longTtl ? 'the one-hour cache rarely lapses' : 'turned off in /config'),
+    pings: usedPings, pingCap: s.keepWarmMax,
+    nextMark: next ? `Next: ${next.id} at ${next.pct}%${msgs ? `, about ${msgs} message${msgs === 1 ? '' : 's'} away` : ''}.` : 'Past every mark.',
+    auto: view.compactPct === null ? undefined : view.compactPct,
+    saved: fmtK(sv.totalTok), savedUsd: usdOf(sv.totalTok), share: Math.round(sv.share * 100), cacheSaved: fmtK(sv.sources[0].tok),
+    keptOut: fmtK(sv.sources[1].tok), keptRequests: T.turns, rewrites: s.rewrites, vetoes: s.vetoes, vetoTok: fmtK(sv.sources[2].tok),
+    windowUsage: five ? pct100(five.percentUsed) : undefined, windowResets,
+    // for Explain
+    _msgs: msgs, _left: left,
+  }
+}
+
+/** The glossary with this session's numbers; a live line that needed a number we lack is left out. */
+function glossaryFor(L) {
+  const bad = /undefined|NaN|null/
+  return GLOSSARY(L).map((g) => ({
+    group: g.group,
+    terms: g.terms.map((t) => ({ ...t, live: typeof t.live === 'string' && !bad.test(t.live) ? t.live : '', todo: t.todo || '' })),
+  }))
+}
+
+/** The numbered parts of the pane, as design/m4.js explainEntries words them: [n, name, what, live, todo, termId]. */
+function explainEntries(view, L, open) {
+  const next = view.nextMark, c = view.cache, sv = view.savings
+  const colour = ['blue (calm)', 'amber (past watch)', 'orange (past handoff)', 'red (past compact)'][view.crossed]
+  const msgs = L._msgs
+  const acts = paneActions(view)
+  const card = nextCard(view, avgGrowth())
+  const runway = /^Runway (\d+)%$/.exec(card.strong)
+  const live3 = !c.known ? 'No reply yet, so nothing is cached.'
+    : c.warm ? `Warm, ${c.leftMin}m left: your next message reuses ${c.amount}${L.priced && L.coldCost ? ` (≈ ${money((view.used * 0.1 * sv.rate) / 1e6)} instead of ${L.coldCost})` : L.api ? ' at a tenth of the price' : ' at a tenth of the usage'}.`
+    : `Cold: your next message re-processes ${c.amount}${L.priced && L.coldCost ? ` (≈ ${L.coldCost})` : ''}.`
+  const entries = [
+    [1, 'Context', 'How full Claude’s working memory is: everything it has to read again before it can answer.',
+      `${L.used}${L.win ? ` of ${L.win}` : ''} tokens${L.win ? ` (${view.pct}%)` : ''}.${next ? ` Next mark: ${next.id} at ${next.pct}%${msgs ? `, about ${msgs} message${msgs === 1 ? '' : 's'} away` : ''}.` : ''}`,
+      next && next.hint === 'new-conversation' ? 'Before it fills, write a handoff, then Clear.' : 'Keep one task per conversation; Clear when the topic changes.', 'context'],
+    [2, 'The bar', 'The same number, drawn. Its colour follows your marks, and the ticks show where they are.',
+      `Now ${colour}. Marks at ${view.marksAll.map((m) => m.pct + '%').join(', ')}${view.compactPct === null ? '' : `; auto-compact at ${view.compactPct}%`}.`, '', 'marks'],
+    [3, 'Cache', 'Anthropic keeps a copy of this conversation for a while. Reusing it costs a tenth; letting it lapse means paying again in full.',
+      live3, c.known && c.warm ? 'Reply before it cools, and avoid switching model or editing CLAUDE.md mid-session.' : 'Clear beats Compact while cold: compacting would pay for everything again.', 'cache'],
+    [4, 'Saved', 'Tokens the plugin kept off your bill this session.',
+      !c.known && !sv.totalTok ? 'Nothing yet: it counts from the first reply.' : `${L.saved} tokens${L.savedUsd ? ` ≈ ${L.savedUsd}` : ''}, ${L.share}% of what you would have sent.`, 'Open the pane (⌄) to see where it came from.', 'saved'],
+    [5, 'Clear · Compact · Later', 'Clear starts fresh. Compact shrinks the conversation into a summary, cheap only while the cache is warm. Later closes this.',
+      `Recommended now: ${{ clear: 'Clear', compact: 'Compact', later: 'Later' }[acts.prim]}.`, '', 'compact'],
+  ]
+  if (open) {
+    const used = view.memory.rows.filter((r) => !r.deferred && r.key !== 'free' && r.key !== 'buffer').sort((a, b) => b.tokens - a.tokens)
+    const mcpGroup = (view.groups || []).find((g) => g.id === 'mcp')
+    const billing = view.savings.mode === 'subscription' && view.five ? `Usage ${pct100(view.five.percentUsed)}% of the 5-hour window` : L.keepWarmOn ? `Pings ${L.pings} of ${L.pingCap}` : 'Keep-warm off'
+    entries.push(
+      [6, 'Saved this session', 'Where the saving came from: cache reads, trimmed tool output, and cold compactions that were blocked.',
+        `Cache reads ${L.cacheSaved} · Trimmed ${L.keptOut} · Re-cache ${L.vetoTok}.`, 'Press Receipt for the money, line by line.', 'cut'],
+      [7, 'The cards', 'What is coming (your next mark), what keeps the cache alive while you are away, and how long it stays warm.',
+        `Runway ${runway ? runway[1] : 100}% · ${billing} · ${c.known && c.warm ? `${c.leftMin}m left` : 'Cold'}.`, '', 'keepwarm'],
+      [8, 'Claude’s working memory', 'Everything Claude re-reads each time it replies or uses a tool, by kind.',
+        used.length ? `Biggest: ${used[0].name} ${fmtK(used[0].tokens)} (${used[0].pct})${used[1] ? `, then ${used[1].name.toLowerCase()} ${fmtK(used[1].tokens)}` : ''}.` : '',
+        'Smaller memory means cheaper replies and more room before compaction.', 'mcp'],
+      [9, 'Groups', 'What is inside each kind, with a button that trims it.',
+        mcpGroup && mcpGroup.tokens ? `Turning off unused MCP servers could save up to ${fmtK(mcpGroup.tokens)} each time.` : '', 'Open a group, then press its button.', 'deferred'],
+    )
+  }
+  return entries
+}
+
+/** `/tokens learn [term]`: the glossary as plain text, grouped; or the terms whose id or name match. */
+function learnText(L, query) {
+  const groups = glossaryFor(L)
+  const term = (t) => [`${t.name}: ${t.what}`, ...(t.live ? [`  ${t.live}`] : []), ...(t.todo ? [`  → ${t.todo}`] : [])].join('\n')
+  const q = String(query || '').trim().toLowerCase()
+  if (!q) return ['Glossary · live values from this session', ...groups.map((g) => `\n${g.group}\n${g.terms.map(term).join('\n')}`)].join('\n')
+  const all = groups.flatMap((g) => g.terms)
+  let hits = all.filter((t) => t.id === q || t.name.toLowerCase() === q)
+  if (!hits.length) hits = all.filter((t) => t.id.includes(q) || t.name.toLowerCase().includes(q))
+  if (!hits.length) return `No term matches "${query.trim()}". Terms: ${all.map((t) => t.name).join(', ')}. /tokens learn prints them all.`
+  return hits.map(term).join('\n\n')
 }
 
 function toast($, text, timeoutMs = 6000) {
@@ -1545,7 +1752,7 @@ export function register(on, options = {}) {
     try {
       await $.command.register({
         name: 'tokens',
-        description: 'Context pane: window fill, rate limits, cache warmth, Clear / Compact. /tokens list prints it as text. No model turn.',
+        description: 'Context pane: window fill, rate limits, cache warmth, Clear / Compact; ? explains it. /tokens list prints it as text; /tokens learn [term] prints the glossary. No model turn.',
       })
       await $.command.register({
         name: 'loadout',
@@ -1652,6 +1859,16 @@ export function register(on, options = {}) {
 
   on('command.run', { command: 'tokens' }, async ($, e) => {
     const arg = (e.args || '').trim().toLowerCase()
+    if (arg === 'learn' || arg.startsWith('learn ')) {
+      // The glossary as text, with this session's numbers: /tokens learn [term or id]
+      const now = await $.clock.now()
+      const data = await loadContext($, now, 80)
+      if (homeCache === null) { try { homeCache = await homeDir($) } catch { homeCache = '' } }
+      const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
+      view.groups = drillGroups(view.breakdown, homeCache)
+      const L = liveNumbers(view, { ttl, now, keepWarmMax, longTtl: !!options.longCacheTtl, totals, rewrites, vetoes })
+      return { text: learnText(L, (e.args || '').trim().slice(5)) }
+    }
     if (arg === 'hide' || arg === 'show') {
       bandHidden = arg === 'hide'
       try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
@@ -1996,8 +2213,12 @@ export function register(on, options = {}) {
       const clock = cacheClock(now, ttl)
       const view = contextView(data.usage, ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
       view.groups = drillGroups(view.breakdown, homeCache)
+      const L = ctxExplain ? liveNumbers(view, { ttl, now, keepWarmMax, longTtl: !!options.longCacheTtl, totals, rewrites, vetoes }) : null
       return drawContextPane(ui, view, {
-        W, t: progressTick * TICK_S, now, ttl, keepWarmMax, longTtl: !!options.longCacheTtl, cardStyle: cardBars, live: clock.known,
+        W, t: progressTick * TICK_S, now, ttl, keepWarmMax, longTtl: !!options.longCacheTtl, cardStyle: cardBars, live: clock.known, L,
+        onExplain: () => { ctxExplain = !ctxExplain; if (!ctxExplain) ctxGloss = { open: false, focus: null }; invalidate($) },
+        onGlossary: (focus) => { ctxGloss = { open: true, focus }; invalidate($) },
+        onGlossaryBack: () => { ctxGloss = { open: false, focus: null }; invalidate($) },
         onExpand: () => { ctxExpanded = !ctxExpanded; invalidate($) },
         onReceipt: () => { ctxReceipt = !ctxReceipt; invalidate($) },
         onGroup: (id) => { if (ctxGroups.has(id)) ctxGroups.delete(id); else ctxGroups.add(id); invalidate($) },
