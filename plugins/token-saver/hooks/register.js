@@ -401,6 +401,7 @@ const INKS = {
   waiting: { hot: [1.00, 0.82, 0.48], c0: [1.00, 0.80, 0.40], c1: [0.80, 0.55, 0.18] },
   failed:  { hot: [1.00, 0.60, 0.63], c0: [1.00, 0.50, 0.54], c1: [0.85, 0.25, 0.30] },
   done:    { hot: [0.62, 0.94, 0.76], c0: [0.45, 0.90, 0.68], c1: [0.20, 0.65, 0.45] },
+  cold:    { hot: [0.70, 0.70, 0.74], c0: [0.52, 0.52, 0.57], c1: [0.33, 0.33, 0.38] },
 }
 const TRACK_RGB = [0.165, 0.165, 0.18]      // #2a2a2e
 const BAR_H = 14, BAR_ROWS = 3, BAR_RADIUS = 4
@@ -502,7 +503,7 @@ function shadeCell(row, cx, cy, cols, rows, t, bursts, seed, pitchPx, W) {
 }
 
 /** Desktop and the web surfaces: the slider's cells at 14 px, squared corners, a gradient text pill trailing the head. */
-function progressSvg(row, width) {
+function progressSvg(row, width, marks = []) {
   const W = Math.max(160, Math.floor(width)), H = BAR_H, rows = BAR_ROWS
   const pitch = H / rows, cellHalf = (3 / 4) * pitch / 2, cols = Math.ceil(W / pitch)
   const t = progressTick * TICK_S
@@ -529,7 +530,7 @@ function progressSvg(row, width) {
     `<defs><clipPath id="c${gid}"><rect width="${W}" height="${H}" rx="${BAR_RADIUS}"/></clipPath>` +
     `<linearGradient id="${gid}" x1="0" x2="1"><stop offset="0" stop-color="${toHex(ink.c0)}"/><stop offset="1" stop-color="${toHex(ink.c1)}"/></linearGradient></defs>` +
     `<rect width="${W}" height="${H}" rx="${BAR_RADIUS}" fill="#2a2a2e"/>` +
-    `<g clip-path="url(#c${gid})">${squares.join('')}</g>` +
+    `<g clip-path="url(#c${gid})">${squares.join('')}${marks.map((m) => `<rect x="${(m.frac * W - 0.5).toFixed(1)}" y="2" width="1" height="${H - 4}" fill="${m.color || '#d4d3cf'}" opacity="0.9"/>`).join('')}</g>` +
     `<rect x="${px.toFixed(1)}" y="1" width="${pw}" height="${H - 2}" rx="${BAR_RADIUS}" fill="url(#${gid})"/>` +
     `<text x="${(px + pw / 2).toFixed(1)}" y="${H / 2 + 3.5}" text-anchor="middle" font-family="-apple-system, Inter, Segoe UI, sans-serif" font-size="10" font-weight="600" fill="#ffffff">${esc(label)}</text>` +
     `</svg>`
@@ -556,14 +557,15 @@ function rasterCells(columns, colorAt, offset = 0) {
   for (let c = 0; c < columns; c++) {
     const g = c + offset
     const col = colorAt(g)
-    if (g % 2 === 1) { words[i++] = 0x20; words[i++] = DEFAULT; words[i++] = DEFAULT }                       // gap column
+    if (col === -2) { words[i++] = 0x2502; words[i++] = 0x9a9aa0; words[i++] = DEFAULT }                     // │ a mark
+    else if (g % 2 === 1) { words[i++] = 0x20; words[i++] = DEFAULT; words[i++] = DEFAULT }                  // gap column
     else { words[i++] = 0x2580; words[i++] = col === null ? 0x33333a : col; words[i++] = DEFAULT }            // ▀ square, dim on the bare track
   }
   return base64(new Uint8Array(words.buffer))
 }
 
 /** The terminal: the same cells, one row, split around a coloured text pill that trails the head. */
-function progressTrackText(row, cells, h, Text, Raster) {
+function progressTrackText(row, cells, h, Text, Raster, marks = []) {
   const t = progressTick * TICK_S
   const seed = rowSeed(row)
   const bursts = burstsAt(row, t, seed)
@@ -573,7 +575,9 @@ function progressTrackText(row, cells, h, Text, Raster) {
   const head = Math.round(cells * Math.max(row.shown, 0.02))
   const pillX = head + pillW <= cells ? head : Math.max(0, cells - pillW)
   const thumb = h(Text, { color: '#ffffff', backgroundColor: toHex(ink.c1), bold: true }, label.slice(0, pillW))
+  const markCols = new Set(marks.map((m) => Math.max(0, Math.min(cells - 1, Math.round(m.frac * cells)))))
   const colorAt = (x) => {
+    if (markCols.has(x)) return -2
     const c = shadeCell(row, x, 0, cells, 1, t, bursts, seed, 1, cells)
     if (!c) return null
     return parseInt(toHex(c).slice(1), 16)
@@ -592,10 +596,10 @@ function progressTrackText(row, cells, h, Text, Raster) {
   for (let x = 0; x < cells; x++) {
     if (x === pillX) { flush(); parts.push(thumb); x += pillW - 1; continue }
     const c = colorAt(x)
-    const key = c === null ? 'u' : toHex([(c >> 16) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255])
-    const props = c === null ? { color: '#3a3a40' } : { color: key }
+    const key = c === null ? 'u' : c === -2 ? 'm' : toHex([(c >> 16) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255])
+    const props = c === null ? { color: '#3a3a40' } : c === -2 ? { color: '#9a9aa0' } : { color: key }
     if (key !== runKey) { flush(); runKey = key; runProps = props }
-    run += c === null ? '·' : '▪'
+    run += c === null ? '·' : c === -2 ? '│' : '▪'
   }
   flush()
   return parts
@@ -604,6 +608,162 @@ function progressTrackText(row, cells, h, Text, Raster) {
 function progressSettled() {
   for (const r of progressRows.values()) if (Math.abs(r.target - r.shown) > 0.004) return false
   return true
+}
+
+// ---------------------------------------------------------------------------
+// The Context pane (/tokens): the pack's own dashboard. One hue, our numbers, our animation.
+const CONTEXT_PANE = 'context'
+const BREAKDOWN_TTL = 10 * 1000     // $.session.usage({ breakdown: 'summary' }) is cached this long; redraws cost nothing
+const CTX = { heading: '#e6e6e6', text: '#c9c9cf', secondary: '#9a9aa0', dim: '#6a6a70', tick: '#d4d3cf', mark: '#6a6a70', warm: '#8b7cf6', cold: '#8a8a90' }
+let ctxCache = { at: 0, usage: null }
+let ctxLoading = null
+let ctxBusy = false
+let ctxMsg = ''
+let ctxPaneOpen = false
+
+/** 484000 → "484k", 1000000 → "1M", 1500000 → "1.5M". */
+function fmtK(n) {
+  if (!n || n < 0) return '0'
+  if (n >= 999_500) {
+    const m = n / 1_000_000
+    const s = m >= 10 ? String(Math.round(m)) : m.toFixed(1).replace(/\.0$/, '')
+    return s + 'M'
+  }
+  if (n >= 1000) return Math.round(n / 1000) + 'k'
+  return String(Math.round(n))
+}
+
+function pct100(x) {
+  return Number.isFinite(x) ? Math.max(0, Math.min(100, Math.round(x))) : 0
+}
+
+/** Fold the breakdown's categories into the four groups the dialog shows, plus free space. */
+function groupBreakdown(b) {
+  const g = { system: 0, tools: 0, files: 0, messages: 0, free: 0, buffer: 0 }
+  for (const c of (b && b.categories) || []) {
+    const n = Number(c.tokens) || 0
+    const name = String(c.name || '').toLowerCase()
+    if (c.kind === 'free') g.free += n
+    else if (c.kind === 'buffer') g.buffer += n
+    else if (c.kind !== 'used') continue
+    else if (/mcp/.test(name)) g.tools += n
+    else if (/system|prompt/.test(name)) g.system += n
+    else if (/memory|skill|file|command/.test(name)) g.files += n
+    else if (/message/.test(name)) g.messages += n
+    else g.files += n
+  }
+  return g
+}
+
+/** The pane's view model: context fill + breakdown, our thresholds, cache warmth, and what the pack saved. */
+function contextView(usage, ttl, usageLast, clock, stats) {
+  const ctx = (usage && usage.context) || {}
+  const b = ctx.breakdown || null
+  const window = Number(ctx.window) || (b && Number(b.rawMaxTokens)) || 0
+  const used = b && Number.isFinite(b.totalTokens) ? b.totalTokens : Number.isFinite(ctx.tokens) ? ctx.tokens : sentOf(usageLast)
+  const measure = (b && Number(b.rawMaxTokens)) || window || Math.max(used, 1)
+  const pct = b && Number.isFinite(b.percentage) ? pct100(b.percentage) : Number.isFinite(ctx.percent) ? pct100(ctx.percent) : pct100((100 * used) / measure)
+  const g = b ? groupBreakdown(b) : null
+  const legend = g
+    ? [['System', g.system], ['Tools', g.tools], ['Files', g.files], ['Messages', g.messages]].filter(([, n]) => n > 0).map(([label, tokens]) => ({ label, tokens }))
+    : [{ label: 'Used', tokens: used }]
+  const free = g ? g.free : Math.max(0, measure - used)
+  const compactOn = !!(b && b.isAutoCompactEnabled && Number.isFinite(b.autoCompactThreshold) && b.autoCompactThreshold > 0)
+  const compactPct = compactOn ? pct100((100 * b.autoCompactThreshold) / measure) : null
+  const nextMark = levels.map((l) => ({ pct: Number(l.pct), id: l.id })).filter((l) => l.pct > pct).sort((x, y) => x.pct - y.pct)[0] || null
+  const marks = []
+  if (compactPct !== null) marks.push({ frac: compactPct / 100, color: CTX.tick })
+  if (nextMark) marks.push({ frac: nextMark.pct / 100, color: CTX.mark })
+  const state = pct >= 75 ? 'failed' : pct >= 60 ? 'waiting' : 'running'
+  const ttlMin = Math.max(1, Math.round(ttl / MINUTE))
+  const sent = sentOf(usageLast)
+  let cache
+  if (!clock || !clock.known) {
+    cache = { known: false, warm: false, title: 'Cache', accent: '', line: 'no response yet · the clock starts after the first reply', fill: 0, footer: 'No response yet: the cache clock starts after the first reply.' }
+  } else if (clock.warm) {
+    const leftMin = Math.max(1, Math.round(clock.leftMs / MINUTE))
+    cache = { known: true, warm: true, title: 'Cache', accent: 'Warm', fill: clock.leftMs / ttl, pill: `${leftMin}m`,
+      line: `Hit ${hitPct(usageLast)}% · ${leftMin}m left of ${ttlMin}m`, footer: `Cache warm: next message reuses ${fmtK(sent)} from cache.` }
+  } else {
+    const idleMin = Math.max(1, Math.round(clock.idleMs / MINUTE))
+    cache = { known: true, warm: false, title: 'Cache', accent: 'Cold', fill: 1, pill: 'cold',
+      line: `Hit ${hitPct(usageLast)}% · idle ${idleMin}m, past the ${ttlMin}m window`, footer: `Cache cold: next message re-caches ${fmtK(sent)}.` }
+  }
+  const saved = stats || { rewrites: 0, savedChars: 0, vetoes: 0 }
+  const savedLine = [
+    `${saved.rewrites} rewrite${saved.rewrites === 1 ? '' : 's'}`,
+    `~${fmtK(saved.savedChars)} chars trimmed`,
+    `${saved.vetoes} compaction${saved.vetoes === 1 ? '' : 's'} vetoed`,
+  ].join(' · ')
+  const hint = hintFor(pct, clock || { warm: false, leftMs: 0 })
+  return {
+    hasData: !!usage, pct, used, window, measure, state,
+    header: { usedText: window ? `${fmtK(used)} / ${fmtK(window)} (${pct}%)` : `${fmtK(used)} (${pct}%)`, compactText: compactPct === null ? '' : `Compact at ${compactPct}%` },
+    marks, legend, free, nextMark, compactPct, cache, savedLine, hint,
+  }
+}
+
+function toast($, text, timeoutMs = 6000) {
+  try { $.ui.toast(text, { timeoutMs }) } catch { /* no UI */ }
+}
+
+function invalidate($) {
+  try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
+}
+
+/** The pane's figures: one usage call with the summary breakdown (never 'full': that sends token-count requests), cached 10 s. */
+async function loadContext($, now, columns) {
+  if (ctxCache.at && now - ctxCache.at < BREAKDOWN_TTL) return ctxCache
+  if (ctxLoading) return ctxLoading
+  ctxLoading = (async () => {
+    let usage = null
+    try {
+      usage = await $.session.usage({ breakdown: 'summary', columns })
+    } catch {
+      try { usage = await $.session.usage() } catch { usage = null }
+    }
+    ctxCache = { at: now, usage }
+    return ctxCache
+  })().finally(() => { ctxLoading = null })
+  return ctxLoading
+}
+
+/** /clear from the pane: $.command.run is the documented route for a plugin; where it is missing, say so, never fake it. */
+async function clearSession($) {
+  try { await $.ui.close({ id: CONTEXT_PANE }) } catch { /* already closed */ }
+  try {
+    // Rejects on a build without command.run or one that refuses `clear`; then the person types it.
+    await $.command.run({ command: 'clear' })
+  } catch (err) {
+    toast($, `token-saver: could not run /clear (${err && err.message ? err.message : String(err)}) — type /clear`)
+  }
+}
+
+/** Compact from the pane: the mod's own guard (cold cache → veto, keep-list) applies as it does to a typed /compact. */
+async function compactNow($, ttl, compactGuard) {
+  if (ctxBusy) return
+  ctxBusy = true
+  ctxMsg = 'compacting…'
+  invalidate($)
+  try {
+    const clock = cacheClock(await $.clock.now(), ttl)
+    if (compactGuard && clock.known && !clock.warm) {
+      vetoes += 1
+      const ctx = await contextOf($)
+      ctxMsg = `compact vetoed: cache cold (idle ${mins(clock.idleMs)}m), it would re-send ~${fmt(ctx.tokens)} tokens. Prefer /handoff then /clear; /compact force overrides.`
+    } else {
+      const r = await $.session.compact({})
+      if (r && r.skip) ctxMsg = `compact skipped: ${r.skip}`
+      else if (r && Number.isFinite(r.tokensBefore)) ctxMsg = `compacted ${fmtK(r.tokensBefore)} → ${Number.isFinite(r.tokensAfter) ? fmtK(r.tokensAfter) : '?'}`
+      else ctxMsg = 'compacted'
+    }
+  } catch (err) {
+    ctxMsg = `compact failed: ${err && err.message ? err.message : String(err)}`
+  }
+  ctxBusy = false
+  ctxCache.at = 0
+  toast($, `token-saver: ${ctxMsg}`, 8000)
+  invalidate($)
 }
 
 function daysAgo(ts) {
@@ -639,7 +799,7 @@ export function register(on, options = {}) {
     try {
       await $.command.register({
         name: 'tokens',
-        description: 'Token-saver totals, cache clock and your context thresholds. No model turn.',
+        description: 'Context pane: window fill, rate limits, cache warmth, Clear / Compact. /tokens list prints it as text. No model turn.',
       })
       await $.command.register({
         name: 'loadout',
@@ -708,7 +868,7 @@ export function register(on, options = {}) {
         r.state === 'running' || r.state === 'waiting' || (r.state === 'done' && tNow - (r.settledAt || 0) < SH.sparkleFor + SH.MAX_AGE))
       if (moving) for (const r of progressRows.values()) r.shown += (r.target - r.shown) * 0.16
       // the shader runs at the tick rate while a row is live or a finished one still sparkles; afterwards a row costs nothing
-      if (changed || moving || animating) {
+      if (changed || moving || animating || (ctxPaneOpen && progressTick % 2 === 0)) {
         try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
       }
     })
@@ -750,6 +910,20 @@ export function register(on, options = {}) {
       try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
       return { text: bandHidden ? 'band hidden for this session · /tokens show brings it back' : 'band shown' }
     }
+    if (arg === '' || arg === 'pane') {
+      // The Context pane: the engine's own context dialog, drawn by the mod. Text where panes do not draw (vscode).
+      ctxCache.at = 0
+      try {
+        const opened = await $.ui.open({ id: CONTEXT_PANE, title: 'Context', focus: true, closeOnEscape: true, holdToasts: true, rows: 10 })
+        if (!opened || opened.isPlaced !== false) {
+          ctxMsg = ''
+          ctxPaneOpen = true
+          return { text: 'Context pane opened. Esc closes it. /tokens list prints the same as text.' }
+        }
+      } catch {
+        /* no panes on this surface: the text answer below */
+      }
+    }
     const ctx = await contextOf($)
     const clock = cacheClock(await $.clock.now(), ttl)
     const u = lastUsage || {}
@@ -782,8 +956,8 @@ export function register(on, options = {}) {
       try { cwd = await $.session.cwd() } catch { /* fine */ }
       void refreshSkills($, cwd)
       try {
-        await $.ui.open({ id: SKILLS_PANE, title: 'Loadout', focus: true, closeOnEscape: true, holdToasts: true })
-        return { text: 'Loadout pane opened. Esc closes it. /loadout list prints the same as text.' }
+        const opened = await $.ui.open({ id: SKILLS_PANE, title: 'Loadout', focus: true, closeOnEscape: true, holdToasts: true })
+        if (!opened || opened.isPlaced !== false) return { text: 'Loadout pane opened. Esc closes it. /loadout list prints the same as text.' }
       } catch {
         words.splice(0, words.length, 'status')
       }
@@ -994,6 +1168,88 @@ export function register(on, options = {}) {
       text(' '),
       dim(skillsMsg ? `${skillsMsg}  ·  loads in the next session (/clear)` : 'Park moves a skill out of every session; Link brings it back for this repo only. Loads in the next session (/clear).'),
       ...(d.scan_note ? [dim(d.scan_note)] : []),
+    ])
+  })
+
+  /**
+   * The Context pane. Top to bottom: header (title, fill, stacked bar, compaction mark), legend, four cards
+   * (session, weekly, model, cache), footer (cache line, Clear / Compact / Later). Svg bars where the surface
+   * has Svg, glyph runs on the terminal. Figures from loadContext(), cached 10 s.
+   */
+  on('ui.close', ($, e, next) => {
+    if (e && e.id === CONTEXT_PANE) ctxPaneOpen = false
+    return next(e)
+  })
+
+  on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => {
+    const el = $.ui.resolve(e)
+    const { Box, Text, Button } = el
+    const Svg = e.surface === 'terminal' ? undefined : el.Svg
+    const Raster = e.surface === 'terminal' ? el.Raster : undefined
+    const W = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
+    const now = await $.clock.now()
+    const data = await loadContext($, now, W)
+    const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes })
+    const PX = 6.5
+    const col = (props, children) => h(Box, { flexDirection: 'column', ...props }, ...children)
+    const row = (props, children) => h(Box, { flexDirection: 'row', ...props }, ...children)
+    const t = (str, props) => h(Text, props || null, str)
+    const dim = (str) => h(Text, { color: CTX.dim }, str)
+    const sec = (str) => h(Text, { color: CTX.secondary }, str)
+    const bar = (rowObj, cells, marks, alt) =>
+      Svg
+        ? h(Svg, { source: progressSvg(rowObj, cells * PX, marks), alt, height: BAR_H })
+        : row({}, progressTrackText(rowObj, cells, h, Text, Raster, marks))
+
+    // Header: Context · 484k / 1M (48%) · [our cells, compact tick, next mark] · Compact at 97%
+    const left = 'Context', mid = view.header.usedText, right = view.header.compactText
+    const barCols = Math.max(12, W - left.length - mid.length - (right ? right.length + 2 : 0) - 6)
+    const ctxRow = { id: 'context', label: 'Context', stage: `${view.pct}%`, step: 0, total: 0, state: view.state, target: view.pct / 100, shown: view.pct / 100, note: '' }
+    const header = row({ alignItems: 'center', gap: 1 }, [
+      t(left, { bold: true, color: CTX.heading }),
+      sec(mid),
+      bar(ctxRow, barCols, view.marks, `Context ${view.pct}%`),
+      ...(right ? [dim(right)] : []),
+    ])
+    const legend = row({}, [
+      ...view.legend.flatMap((s, i) => [...(i ? [dim(' · ')] : []), t(`${s.label} `, { color: CTX.secondary }), t(fmtK(s.tokens), { color: CTX.text })]),
+      dim(`   Free ${fmtK(view.free)}`),
+      ...(view.hasData ? [] : [dim('   figures appear after the first response')]),
+    ])
+
+    // Two cards: the cache clock, and what the pack saved this session
+    const half = Math.max(24, Math.floor((W - 2) / 2))
+    const cacheRow = { id: 'cache', label: 'Cache', stage: view.cache.pill || '', step: 0, total: 0, state: view.cache.warm ? 'running' : 'cold', target: view.cache.fill, shown: view.cache.fill, note: '', settledAt: 0 }
+    const cacheCard = col({ width: half }, [
+      row({}, [t('Cache', { bold: true, color: CTX.heading }), ...(view.cache.accent ? [t(' · ', { color: CTX.dim }), t(view.cache.accent, { bold: true, color: view.cache.warm ? CTX.warm : CTX.cold })] : [])]),
+      ...(view.cache.known ? [bar(cacheRow, half - 2, [], `Cache ${view.cache.accent}`)] : []),
+      sec(view.cache.line),
+    ])
+    const savedCard = col({ width: half }, [
+      t('Saved this session', { bold: true, color: CTX.heading }),
+      sec(view.savedLine),
+      dim([view.nextMark ? `next mark ${view.nextMark.pct}% (${view.nextMark.id})` : 'past every mark', view.compactPct === null ? 'auto-compact off' : `compact at ${view.compactPct}%`].join(' · ')),
+    ])
+
+    const footer = row({ alignItems: 'center', gap: 1 }, [
+      t('●', { color: view.cache.warm ? CTX.warm : CTX.cold }),
+      t(view.cache.footer, { color: CTX.text }),
+      ...(view.hint ? [dim(' · '), t(view.hint.charAt(0).toUpperCase() + view.hint.slice(1), { color: CTX.secondary })] : []),
+    ])
+    const buttons = row({ gap: 1 }, [
+      h(Button, { key: 'ctx-clear', label: 'Clear', hotkey: 'c', variant: 'primary', onPress: () => clearSession($) }),
+      h(Button, { key: 'ctx-compact', label: ctxBusy ? 'Compacting…' : 'Compact', hotkey: 'k', onPress: () => compactNow($, ttl, compactGuard) }),
+      h(Button, { key: 'ctx-later', label: 'Later', hotkey: 'l', role: 'dismiss', onPress: async () => { ctxPaneOpen = false; try { await $.ui.close({ id: CONTEXT_PANE }) } catch { /* closed */ } } }),
+    ])
+    return col({ gap: 0 }, [
+      header,
+      legend,
+      t(' '),
+      row({ gap: 2 }, [cacheCard, savedCard]),
+      t(' '),
+      footer,
+      buttons,
+      ...(ctxMsg ? [dim(ctxMsg)] : []),
     ])
   })
 

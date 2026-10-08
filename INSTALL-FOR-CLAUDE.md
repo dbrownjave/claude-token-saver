@@ -47,7 +47,7 @@ Tell them to open a new Claude Code session, then do these in order.
 
 1. In VS Code, open the Claude panel (Spark icon). Point at the prompt box: the fill is the window, the clock is the cache. The clock goes red when the TTL dies or right after compact. A model switch does not reset it.
 2. Run `/context`. That grid is the source of truth: system prompt, tools, memory, skills, messages, free space, autocompact buffer. If MCP is heavy, tell them to disable unused servers in `/mcp` at the start of a session, not in the middle of a task.
-3. Run `/tokens`. Same hint as the terminal band. No model turn. The VS Code panel will not draw the band.
+3. Run `/tokens`. It opens the Context pane (CLI and Desktop): context fill, cache clock, what the pack saved, and Clear / Compact / Later. `/tokens list` prints the same as text; the VS Code panel gets the text.
 4. Run `./install.sh bench` from the pack. Free. It shows a rewrite and a trimmed log. Failures stay intact.
 5. Run `./install.sh dash`. Free. Read versus write is request accounting, not a bill. The named miss cause is on `/usage`.
 
