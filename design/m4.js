@@ -3,7 +3,7 @@
 ;(() => {
   const M = window.MID
   const ACC = ['info', 'warn', 'brand', 'bad']
-  const STATE = { desk:localStorage.m4Desk || 'dark', term:localStorage.m4Term || 'dark', billing:localStorage.m4Billing || 'api', cardBars:localStorage.m4Bars || 'fire', cacheInd:localStorage.m4Ind || 'ember', savedUI:localStorage.m4Saved || 'hero' }   // the shipped default; 'ember' is the setting
+  const STATE = { desk:localStorage.m4Desk || 'dark', term:localStorage.m4Term || 'dark', billing:localStorage.m4Billing || 'api', cardBars:localStorage.m4Bars || 'fire', cacheInd:localStorage.m4Ind || 'ember', savedUI:localStorage.m4Saved || 'hero', savedAnim:localStorage.m4SavedAnim || 'sheen', distAnim:localStorage.m4DistAnim || 'pulse' }   // the shipped default; 'ember' is the setting
   const BAR_STYLES = [['smooth', 'Smooth'], ['cells', 'Cells'], ['ember', 'Cells + ember'], ['fire', 'Cells + fire']]
   const views = []
   const GAP = 10
@@ -11,7 +11,7 @@
   const savedTok = M.data.total
   const { nm, away } = M.data                              // the scenario's next mark and how far it is
   /* what the cards read that the plugin would track: context growth over the last turns (new), keep-warm, the 5-hour window */
-  const GROWTH = 6_000                                       // tokens a turn, averaged over the last five main-thread turns
+  const GROWTH = 6_000                                       // context added per message you send (turn.start → turn.complete), averaged over the last five
   const KEEPWARM = { pings:2, cap:5, every:4 }               // minutes between pings
   const WINDOW5H = { usage:34, time:54, resets:'2h 18m', share:7 }
 
@@ -113,7 +113,7 @@
     return [
       { id:'saved', label:'Saved this session', value:tok1(savedTok), meta:`≈ ${money(usd(savedTok, D))}`, metaRole:'ok', rows:[
         ['Cache reads', 'Billed at a tenth', tok1(s.cacheSaved)],
-        ['Trimmed output', `Kept out of ${s.keptTurns} turns`, tok1(s.keptOut)],
+        ['Trimmed output', `Kept out of ${s.keptTurns} requests`, tok1(s.keptOut)],
         ['Re-cache saved', `${plural(s.vetoes, 'cold compaction')} blocked`, tok1(s.vetoTok)],
         [D.month.name, ` at ${money(D.usd.rate)}/M`, tok1(D.month.tok), `≈ ${money(usd(D.month.tok, D))}`],
       ] },
@@ -141,7 +141,7 @@
     const own = STATE.savedUI !== 'card', all = cards(sc), cs = own ? all.filter((x) => x.title !== 'Saved') : all, parts = ['head', 'bar', 'line', 'foot']
     const grid = T === 'term' ? [cs.slice(0, 2), cs.slice(2)] : [cs]          // 80 columns fit two cards; 860 px fits a row
     const head = !own ? [] : T === 'term' ? [...savedTerm(STATE.savedUI, PALETTE_T(), sc.id).map((r) => ({ ro:'raw', r })), { ro:'gap' }] : [{ ro:'savedblock', ui:STATE.savedUI, key:sc.id }, { ro:'gap' }]
-    const out = [...head, ...grid.flatMap((row, i) => [...(i ? [{ ro:'gap' }] : []), ...parts.map((part) => ({ ro:'cards', pair:row, part }))]), { ro:'gap' }, { ro:'bar' }, ...CATS.map(([id, label, n, role, deferred]) => ({ ro:'cat', id, label, n, role, deferred })), { ro:'gap' }]
+    const out = [...head, ...grid.flatMap((row, i) => [...(i ? [{ ro:'gap' }] : []), ...parts.map((part) => ({ ro:'cards', pair:row, part }))]), { ro:'sep' }, { ro:'disttitle' }, { ro:'distsub' }, { ro:'bar' }, ...CATS.map(([id, label, n, role, deferred]) => ({ ro:'cat', id, label, n, role, deferred })), { ro:'gap' }]
     for (const g of DRILL) {
       const key = sc.id + ':' + g.id, open = OPEN_GROUPS.has(key)
       out.push({ ro:'group', g:{ label:g.label, value:tok1(g.tok), meta:String(g.count), rows:g.items }, open, key, drill:true })
@@ -185,7 +185,7 @@
       const lo = prev ? prev.p : 0, frac = (pct - lo) / (next.p - lo), left = Math.max(0, WIN * next.p / 100 - sc.used), turns = Math.max(1, Math.ceil(left / GROWTH))
       const then = { watch:'note decisions', handoff:'handoff + Clear', compact:'Compact while warm' }[next.id]
       const span = WIN * (next.p - lo) / 100, ext = Math.min(1, frac + GROWTH / span)   // dim: where the next turn should land
-      run = { title:cap1(next.id), accent:`In ≈${turns} turn${turns === 1 ? '' : 's'}`, tone:ACC[crossed(next.p)], bar:{ kind:'solid', fill:frac, ext, tone:ACC[crossed(pct)] },
+      run = { title:cap1(next.id), accent:`In ≈${turns} message${turns === 1 ? '' : 's'}`, tone:ACC[crossed(next.p)], bar:{ kind:'solid', fill:frac, ext, tone:ACC[crossed(pct)] },
         strong:`Runway ${Math.round(frac * 100)}%`, rest:` · ${tok1(left)} to go`, foot:`Then ${then}` }
     } else if (!cold) {
       run = { title:'Compact', accent:'Now', tone:'bad', bar:{ kind:'solid', fill:1, tone:'bad' }, strong:`Past ${MARKS[2].p}%`, rest:' · Cache warm', foot:`Cheap while warm: ${sc.cache.left}m left` }
@@ -220,6 +220,9 @@
     const grow = () => { const x = document.createElement('span'); x.style.flex = '1'; return x }
     if (ro.ro === 'gap') { row.style.minHeight = '10px'; return row }
     if (ro.ro === 'savedblock') return savedDesk(ro.ui, P, ro.key)
+    if (ro.ro === 'sep') { row.style.cssText += `;min-height:0;height:1px;background:${P.line};margin:12px 0 10px`; return row }
+    if (ro.ro === 'disttitle') { row.append(txt('Claude\u2019s working memory', P.text), grow(), txt(`${tok1(D.used)} of ${tok1(WIN)} tok`, P.faint)); return row }
+    if (ro.ro === 'distsub') { row.style.marginTop = '-2px'; row.append(txt('Re-read every time Claude replies or uses a tool', P.faint)); return row }
     if (ro.ro === 'cards') {
       row.style.gap = '24px'; row.style.alignItems = 'center'
       if (ro.part === 'bar') { row.style.minHeight = '22px' } else if (ro.part === 'head') { row.style.marginTop = '2px' }
@@ -269,6 +272,7 @@
       row.style.margin = ro.ro === 'bar' ? '2px 0 6px' : '0 0 4px 20px'
       const b = document.createElement('span'); b.className = 'mbar'; b.innerHTML = '<canvas></canvas>'
       b.__parts = ro.ro === 'bar' ? splitParts : (P) => [{ f:D.cache.left / D.cache.ttl, color:P.ok }]
+      if (ro.ro === 'bar') b.__dist = true
       row.append(b); return row
     }
     if (ro.ro === 'cat') {
@@ -293,7 +297,7 @@
       btn.style.cssText += `;height:20px;padding:0 8px;border-radius:6px;border-color:transparent;background:${fill};color:${P.brand};cursor:pointer`
       btn.onclick = (e) => { e.stopPropagation(); ran(cmd) }
       l.append(txt('↳ ', P.faint), btn)
-      row.append(l, txt(what, P.faint), grow(), num(`${save}/turn`, P.ok, COL_V * 1.2 + COL_P))
+      row.append(l, txt(what, P.faint), grow(), num(`${save} each time`, P.ok, COL_V * 1.4 + COL_P))
       return row
     }
     if (ro.ro === 'item') {
@@ -326,6 +330,9 @@
     const W = M.TW
     if (ro.ro === 'gap') return { html:'', text:'', len:0 }
     if (ro.ro === 'raw') return ro.r
+    if (ro.ro === 'distsub') { const l = 'Re-read every time Claude replies or uses a tool'; return { html:c(l, P.faint), text:l, len:l.length } }
+    if (ro.ro === 'sep') return { html:c('─'.repeat(W), P.line), text:'─'.repeat(W), len:W }
+    if (ro.ro === 'disttitle') { const r = `${tok1(D.used)} of ${tok1(WIN)} tok`, l = 'Claude\u2019s working memory'; return { html:c(l, P.text) + ' '.repeat(W - l.length - r.length) + c(r, P.faint), text:l + ' '.repeat(W - l.length - r.length) + r, len:W } }
     if (ro.ro === 'cards') {
       const CW = 36, cell = (cd) => {
         if (ro.part === 'head') { const t = cd.title + (cd.accent ? ` · ${cd.accent}` : ''); return { t, h:c(cd.title, P.text, true) + (cd.accent ? c(' · ', P.faint) + c(cd.accent, toneColor(cd.tone, P), true) : '') } }
@@ -376,9 +383,9 @@
     }
     if (ro.ro === 'act') {
       const [cmd, what, save] = ro.a
-      const b = `[ ${cmd} ]`, w = what.slice(0, 37).padEnd(37)
-      const t = `    ${('↳ ' + b).padEnd(16)}${w}${(save + '/turn').padStart(19)}`
-      return { html:'    ' + c('↳ ', P.faint) + c(b.padEnd(14), P.brand) + c(w, P.faint) + c((save + '/turn').padStart(19), P.ok), text:t, len:t.length }
+      const b = `[ ${cmd} ]`, w = what.slice(0, 35).padEnd(35)
+      const t = `    ${('↳ ' + b).padEnd(16)}${w}${(save + ' each time').padStart(21)}`
+      return { html:'    ' + c('↳ ', P.faint) + c(b.padEnd(14), P.brand) + c(w, P.faint) + c((save + ' each time').padStart(21), P.ok), text:t, len:t.length }
     }
     if (ro.ro === 'item') {
       const [name, detail, n, role] = ro.it
@@ -421,7 +428,7 @@
   const h01 = (n) => { const v = Math.sin(n * 127.1 + 311.7) * 43758.5453; return v - Math.floor(v) }
   const SOURCES = () => [
     { label:'Cache reads', note:'Billed at a tenth', tok:D.save.cacheSaved },
-    { label:'Trimmed output', note:`Kept out of ${D.save.keptTurns} turns`, tok:D.save.keptOut },
+    { label:'Trimmed output', note:`Kept out of ${D.save.keptTurns} requests`, tok:D.save.keptOut },
     { label:'Re-cache saved', note:`${plural(D.save.vetoes, 'cold compaction')} blocked`, tok:D.save.vetoTok },
   ]
   const usdOf = (n) => money(usd(n, D))
@@ -468,11 +475,11 @@
     if (ui === 'hero') {
       const share = heroShare(), parts = src.map((x, i) => ({ f:share * x.tok / savedTok, color:shadeOf(i, P) }))
       box.append(row(t('Saved ', P.text), t(`${tok1(savedTok)} tok`, P.ok), t(' this session · ', P.faint), t(`Cut ${Math.round(share * 100)}% of input`, P.text), sp(), ...money2))
-      if (STATE.cardBars === 'smooth') box.append(bar([...parts.map((pt) => [pt.f, pt.color])]))
+      if (STATE.savedAnim === 'fire' && STATE.cardBars === 'smooth') box.append(bar([...parts.map((pt) => [pt.f, pt.color])]))
       else {
         // our progress bar: cells, burning per the cardBars setting; each source keeps its green, one fire at the head
         const holder = el('position:relative;height:10px;margin:6px 0'), cv = document.createElement('canvas')
-        cv.className = 'cardbar'; cv.style.display = 'block'; cv.__card = { title:'saved-hero', bar:{ kind:'segments', fill:share, parts } }; cv.__style = STATE.cardBars
+        cv.className = 'cardbar'; cv.style.display = 'block'; cv.__card = { title:'saved-hero', bar:{ kind:'segments', fill:share, parts } }; cv.__style = STATE.savedAnim === 'fire' ? STATE.cardBars : 'saved-' + STATE.savedAnim
         holder.append(cv); box.append(holder)
       }
       const key = row(); key.style.gap = '18px'
@@ -508,12 +515,12 @@
       box.append(row(t(`Paid ${Math.round((1 - f) * 100)}%`, P.faint), sp(), t('Saved ', P.text), t(api ? `≈ ${usdOf(savedTok)}` : `${tok1(savedTok)} tok`, P.ok), t(` (${Math.round(f * 100)}%)`, P.faint)))
       box.append(row(t(src.map((x) => `${x.label} ${api ? usdOf(x.tok) : tok1(x.tok)}`).join(' · '), P.faint)))
     } else if (ui === 'turns') {
-      box.append(row(t('Saved ', P.text), t(`${tok1(savedTok)} tok`, P.ok), t(` over ${PER_TURN.length} turns`, P.faint), sp(), ...money2))
+      box.append(row(t('Saved ', P.text), t(`${tok1(savedTok)} tok`, P.ok), t(` over ${PER_TURN.length} requests`, P.faint), sp(), ...money2))
       const max = Math.max(...PER_TURN), chart = el('display:flex;align-items:flex-end;gap:3px;height:34px;margin:6px 0')
       PER_TURN.forEach((v, i) => chart.append(el(`flex:1;height:${Math.max(8, 100 * v / max).toFixed(0)}%;border-radius:2px;background:${i === PER_TURN.length - 1 ? P.ok : M.hex(M.mix(P.ok, trackC, 0.45))}`)))
       box.append(chart)
       const avg = Math.round(savedTok / PER_TURN.length)
-      box.append(row(t(`Last turn +${tok1(PER_TURN[PER_TURN.length - 1])}`, P.text), t(` · Average ${tok1(avg)}/turn · ${D.month.name} ${tok1(D.month.tok)}`, P.faint)))
+      box.append(row(t(`Last request +${tok1(PER_TURN[PER_TURN.length - 1])}`, P.text), t(` · Average ${tok1(avg)} each time · ${D.month.name} ${tok1(D.month.tok)}`, P.faint)))
     }
     return box
   }
@@ -562,10 +569,10 @@
       out.push(spread([[`Paid ${Math.round((1 - f) * 100)}%`, P.faint]], [['Saved ', P.text], [api ? `≈ ${usdOf(savedTok)}` : `${tok1(savedTok)} tok`, P.ok], [` (${Math.round(f * 100)}%)`, P.faint]]))
       out.push(L([[src.map((x) => `${x.label} ${api ? usdOf(x.tok) : tok1(x.tok)}`).join(' · ').slice(0, W), P.faint]]))
     } else if (ui === 'turns') {
-      out.push(spread([['Saved ', P.text], [`${tok1(savedTok)} tok`, P.ok], [` over ${PER_TURN.length} turns`, P.faint]], money2))
+      out.push(spread([['Saved ', P.text], [`${tok1(savedTok)} tok`, P.ok], [` over ${PER_TURN.length} requests`, P.faint]], money2))
       const max = Math.max(...PER_TURN), ramp = '▁▂▃▄▅▆▇█'
       out.push(L(PER_TURN.flatMap((v, i) => [[ramp[Math.max(0, Math.min(7, Math.round(v / max * 8) - 1))].repeat(2), i === PER_TURN.length - 1 ? P.ok : M.hex(M.mix(P.ok, trackC, 0.45))], [i < PER_TURN.length - 1 ? ' ' : '', null]])))
-      out.push(L([[`Last turn +${tok1(PER_TURN[PER_TURN.length - 1])}`, P.text], [` · Average ${tok1(Math.round(savedTok / PER_TURN.length))}/turn · ${D.month.name} ${tok1(D.month.tok)}`, P.faint]]))
+      out.push(L([[`Last request +${tok1(PER_TURN[PER_TURN.length - 1])}`, P.text], [` · Average ${tok1(Math.round(savedTok / PER_TURN.length))} each time · ${D.month.name} ${tok1(D.month.tok)}`, P.faint]]))
     }
     return out
   }
@@ -620,6 +627,7 @@
       if (v.pane) v.pane.querySelectorAll('.mbar').forEach((b) => {
         const W = Math.floor(b.clientWidth); if (!W) return
         if (b.__bar === 'ctx') paintFire(b.firstChild, ctxInfo(v.pane.__sc, v.P, W), opt, t, { marks:MARKS.map((m) => m.p), auto:AUTO, pct:pctOfUsed(v.pane.__sc.used), track:v.P.track, buffer:M.hex(M.mix(v.P.track, v.P.faint, 0.3)), mark:v.P.dim, markFaint:v.P.faint })
+        else if (b.__dist && STATE.distAnim !== 'still') paintDist(b.firstChild, W, v.P, t, b.__parts(v.P))
         else M.paintFlat(b.firstChild, W, v.P, b.__parts ? b.__parts(v.P).map((pt) => ({ ...pt, color:pt.color || null })) : M.flatParts(b.__bar, v.P))
       })
       if (v.pane) v.pane.querySelectorAll('canvas.cardbar').forEach((cv) => paintCard(cv, v.P, t, opt))
@@ -641,6 +649,27 @@
     const sizeUp = () => { if (cv.width !== W * d) { cv.width = W * d; cv.height = H * d; cv.style.width = W + 'px'; cv.style.height = H + 'px' } }
     const cell = (ctx, cx, cy, col) => { ctx.fillStyle = col; ctx.beginPath(); ctx.roundRect(((cx + 0.5) * pitch - half) * d, ((cy + 0.5) * pitch - half) * d, half * 2 * d, half * 2 * d, 0.7 * d); ctx.fill() }
     let ctx
+    if (style === 'saved-sheen' || style === 'saved-accrue' || style === 'saved-still') {
+      // Saved moves differently from the fire: a glint sweeping right every 3.2 s (money catching the light),
+      // or green sparks popping across the fill (savings adding up). The cells keep their source colours.
+      sizeUp(); ctx = cv.getContext('2d'); ctx.clearRect(0, 0, cv.width, cv.height)
+      ctx.fillStyle = trackC; ctx.beginPath(); ctx.roundRect(0, 0, cv.width, cv.height, 3 * d); ctx.fill()
+      const fillW = b.fill * W, tick = Math.floor(t / 0.07), PERIOD = 3.2, sweep = ((t % PERIOD) / PERIOD) * (fillW + 120) - 60
+      for (let cx = 0; cx < cols; cx++) {
+        const px = (cx + 0.5) * pitch; if (px > fillW) break
+        const base = segAt(px / W).color
+        for (let cy = 0; cy < rows; cy++) {
+          let k = 0
+          if (style === 'saved-sheen') { const dx = (px - sweep + cy * 3) / 22; k = 0.55 * Math.exp(-dx * dx) }      // a slanted band
+          else if (style === 'saved-accrue') {
+            const L = 46, ph = h01(cx * 7.3 + cy * 13.1), local = (tick + Math.floor(ph * L)) % L, gen = Math.floor((tick + ph * L) / L)
+            if (local < 6 && h01(cx * 3.7 + cy * 31.3 + gen * 17.9) < 0.16) k = 0.7 * (1 - local / 6)                // a spark that fades in six ticks
+          }
+          cell(ctx, cx, cy, k > 0.01 ? M.hex(M.mix(base, '#ffffff', k)) : base)
+        }
+      }
+      return
+    }
     if (style === 'cells') {
       sizeUp(); ctx = cv.getContext('2d'); ctx.clearRect(0, 0, cv.width, cv.height)
       ctx.fillStyle = trackC; ctx.beginPath(); ctx.roundRect(0, 0, cv.width, cv.height, 3 * d); ctx.fill()
@@ -669,6 +698,29 @@
     if (b.ext > b.fill) for (let cx = 0; cx < cols; cx++) { const f = (cx + 0.5) / cols; if (f > b.fill + 1 / cols && f <= b.ext) for (let cy = 0; cy < rows; cy++) cell(ctx, cx, cy, dim) }
     if (b.tick != null) { ctx.fillStyle = P.text; ctx.fillRect((b.tick * W - 1) * d, 0, 2 * d, H * d) }
   }
+  /* the distribution bar: a light wave runs through the used part once a cycle (everything here is re-sent every turn),
+     or each category breathes out of step with its neighbours. Free space and the buffer stay still. */
+  function paintDist(cv, W, P, t, parts) {
+    const H = 14, pitch = 3.5, half = 0.75 * pitch / 2, d = 2, rows = 4, cols = Math.ceil(W / pitch)
+    if (cv.width !== W * d) { cv.width = W * d; cv.height = H * d; cv.style.width = W + 'px'; cv.style.height = H + 'px' }
+    const ctx = cv.getContext('2d'); ctx.clearRect(0, 0, cv.width, cv.height)
+    ctx.fillStyle = P.track; ctx.beginPath(); ctx.roundRect(0, 0, cv.width, cv.height, 4 * d); ctx.fill()
+    let usedEnd = 0; for (const pt of parts) { if (!pt.color) break; usedEnd += pt.f }
+    const PERIOD = 2.8, wave = ((t % PERIOD) / PERIOD) * (usedEnd * W + 160) - 60
+    for (let cx = 0; cx < cols; cx++) {
+      const f = (cx + 0.5) / cols, px = f * W
+      let a = 0, col = null, idx = 0
+      for (const pt of parts) { a += pt.f; if (f < a) { col = pt.color; break } idx++ }
+      if (!col) continue
+      let k = 0
+      if (f <= usedEnd) {
+        if (STATE.distAnim === 'pulse') { const dx = (px - wave) / 26; k = 0.42 * Math.exp(-dx * dx) }
+        else if (STATE.distAnim === 'breathe') k = 0.14 * (1 + Math.sin(t * 1.6 + idx * 1.1)) / 2 * 2
+      }
+      const c = k > 0.01 ? M.hex(M.mix(col, '#ffffff', k)) : col
+      for (let cy = 0; cy < rows; cy++) { ctx.fillStyle = c; ctx.beginPath(); ctx.roundRect(((cx + 0.5) * pitch - half) * d, ((cy + 0.5) * pitch - half) * d, half * 2 * d, half * 2 * d, 0.9 * d); ctx.fill() }
+    }
+  }
   function rasterCtx(info, P, opt, t) {
     const r = runOpt(opt, info, t), out = []
     for (let cx = 0; cx < info.cols; cx++) {
@@ -686,12 +738,16 @@
     ctl.innerHTML = `
       <div class="grp">Desktop ${['dark', 'light'].map((k) => `<button data-desk="${k}" class="${STATE.desk === k ? 'on' : ''}">${k}</button>`).join(' ')}</div>
       <div class="grp">Terminal ${['dark', 'light', 'dark-daltonized', 'light-daltonized'].map((k) => `<button data-term="${k}" class="${STATE.term === k ? 'on' : ''}">${k}</button>`).join(' ')}</div>
+      <div class="grp">Saved animation ${[['sheen', 'Sheen'], ['accrue', 'Accrue'], ['fire', 'Fire'], ['still', 'Still']].map(([k, l]) => `<button data-sanim="${k}" class="${STATE.savedAnim === k ? 'on' : ''}">${l}</button>`).join(' ')}</div>
+      <div class="grp">Distribution animation ${[['pulse', 'Re-send pulse'], ['breathe', 'Breathe'], ['still', 'Still']].map(([k, l]) => `<button data-danim="${k}" class="${STATE.distAnim === k ? 'on' : ''}">${l}</button>`).join(' ')}</div>
       <div class="grp">Saved UI ${SAVED_UIS.map(([k, l]) => `<button data-saved="${k}" class="${STATE.savedUI === k ? 'on' : ''}">${l.replace(/^S\d · /, '')}</button>`).join(' ')}</div>
       <div class="grp">Cache indicator ${INDICATORS.map(([k, l]) => `<button data-ind="${k}" class="${STATE.cacheInd === k ? 'on' : ''}">${l}</button>`).join(' ')}</div>
       <div class="grp">Card bars ${BAR_STYLES.map(([k, l]) => `<button data-bars="${k}" class="${STATE.cardBars === k ? 'on' : ''}">${l}</button>`).join(' ')}</div>
       <div class="grp">Billing ${[['api', 'API'], ['sub', 'Subscription']].map(([k, l]) => `<button data-bill="${k}" class="${STATE.billing === k ? 'on' : ''}">${l}</button>`).join(' ')}</div>`
     ctl.querySelectorAll('[data-desk]').forEach((b) => { b.onclick = () => { STATE.desk = localStorage.m4Desk = b.dataset.desk; build() } })
     ctl.querySelectorAll('[data-term]').forEach((b) => { b.onclick = () => { STATE.term = localStorage.m4Term = b.dataset.term; build() } })
+    ctl.querySelectorAll('[data-sanim]').forEach((b) => { b.onclick = () => { STATE.savedAnim = localStorage.m4SavedAnim = b.dataset.sanim; build() } })
+    ctl.querySelectorAll('[data-danim]').forEach((b) => { b.onclick = () => { STATE.distAnim = localStorage.m4DistAnim = b.dataset.danim; build() } })
     ctl.querySelectorAll('[data-saved]').forEach((b) => { b.onclick = () => { STATE.savedUI = localStorage.m4Saved = b.dataset.saved; build() } })
     ctl.querySelectorAll('[data-ind]').forEach((b) => { b.onclick = () => { STATE.cacheInd = localStorage.m4Ind = b.dataset.ind; build() } })
     ctl.querySelectorAll('[data-bars]').forEach((b) => { b.onclick = () => { STATE.cardBars = localStorage.m4Bars = b.dataset.bars; build() } })
@@ -717,7 +773,7 @@
       breakdown:'A two-column card: the "Cut 61% of input" bar on the left, each source with its own mini bar on the right. The most detail without opening anything.',
       receipt:'Reads like a bill: each source with dotted leaders, a rule, the total, what you paid, and what you would have paid without the plugin. Honest and familiar.',
       versus:'One bar of what you would have paid, split into what you paid and what was saved. It is the "paying for itself" story in one picture.',
-      turns:'The saving on each turn as a small column chart, the last turn highlighted. It shows the saving growing as the session goes on (needs per-turn tracking).',
+      turns:'The saving on each request as a small column chart, the last one highlighted. It shows the saving growing as the session goes on (needs per-turn tracking).',
     }
     for (const [k, l] of SAVED_UIS.filter(([k]) => k !== 'card')) {
       const wrap = document.createElement('div'); wrap.style.marginBottom = '26px'
