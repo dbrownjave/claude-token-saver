@@ -464,7 +464,6 @@ const INKS = {
   green:   { hot: [0.66, 0.90, 0.66], c0: [0.48, 0.78, 0.48], c1: [0.25, 0.50, 0.28] },
   yellow:  { hot: [0.98, 0.86, 0.45], c0: [0.86, 0.72, 0.28], c1: [0.60, 0.48, 0.14] },
 }
-const SEG_INK = { messages: 'blue', tools: 'orange', files: 'green', system: 'yellow', buffer: 'cold' }
 const TRACK_RGB = [0.165, 0.165, 0.18]      // #2a2a2e
 const BAR_H = 14, BAR_ROWS = 3, BAR_RADIUS = 4
 
@@ -674,18 +673,45 @@ function progressSettled() {
 }
 
 // ---------------------------------------------------------------------------
-// The Context pane (/tokens): the pack's own dashboard. One hue, our numbers, our animation.
+// The Context pane (/tokens): the pack's own dashboard, drawn to the M4 design (design/m4.js). Closed: the title with
+// the fill, the context bar (F1 fire, ink in the threshold colour), the cache and saved line, Clear / Compact / Later.
+// Open (⌄): what was saved, three cards (next mark, billing, cache), Claude's working memory by kind, drill-down groups.
 const CONTEXT_PANE = 'context'
 const BREAKDOWN_TTL = 10 * 1000     // $.session.usage({ breakdown: 'summary' }) is cached this long; redraws cost nothing
-const CTX = { heading: '#e6e5dc', text: '#dcddd5', legend: '#b1afa6', secondary: '#84837d', dim: '#797773', tick: '#d4d3cf', mark: '#84837d',
-  warm: '#ce9466', dot: '#e3883d', cold: '#8a8a90', track: '#2e2d29', cache: ['#629cde', '#a8a38c', '#da934b'] }
 let ctxCache = { at: 0, usage: null }
 let ctxLoading = null
 let ctxBusy = false
 let ctxMsg = ''
 let ctxPaneOpen = false
 let ctxExpanded = false
-const SEG = { messages: '#4a7fe0', tools: '#d9792e', files: '#5aa05a', system: '#c9a227', buffer: '#6a6a70', free: '#2e2e33' }
+let ctxReceipt = false
+const ctxGroups = new Set()          // which drill-down groups are open
+let homeCache = null                 // $HOME, read once, to shorten memory-file paths
+/** Context added per message: tokens at turn.complete less tokens at turn.start, the last five. */
+const growth = []
+let turnStartTokens = null
+const GROWTH_KEEP = 5
+
+/** Threshold colour by marks crossed: calm blue, then amber, Claude orange, red. Theme keys for Text. */
+const ACC = ['permission', 'warning', 'claude', 'error']
+/** The same theme keys as hex, per surface (design/theme/claude-themes.json, dark), for the bars' ink. */
+const THEME_HEX = {
+  terminal: { permission: '#b1b9f9', warning: '#ffc107', claude: '#d77757', error: '#ff6b80', success: '#4eba65', text: '#ffffff', inactive: '#999999', subtle: '#505050' },
+  desktop: { permission: '#74abe2', warning: '#fab219', claude: '#d97757', error: '#dd5353', success: '#65bb30', text: '#faf9f5', inactive: '#9c9a92', subtle: '#4a4945' },
+}
+const CACHE_GRAD = ['#629cde', '#a8a38c', '#da934b']
+const CACHE_TRACK = '#2e2d29'
+const WARM = '#ce9466'
+const COLD = '#629cde'
+const BAR_TRACK = '#2a2a2e'
+const BUFFER_CELL = '#45454b'
+const MARK_TICK = '#c2c0b6'
+const AUTO_TICK = '#7d7b75'
+/** Claude's working memory: one family around Claude's orange, so it never reads as a signal colour. */
+const MEM = { messages: '#e07a52', mcp: '#f2a07b', skills: '#c6613f', system: '#f6c9a8', tools: '#9e9a97', memory: '#b98b72', agents: '#d9a888', other: '#a8968a', buffer: '#64635e', free: '#46453f' }
+const MEM_RANK = ['messages', 'mcp', 'skills', 'system', 'tools', 'memory', 'agents', 'other']
+const PX = 6.5                      // desktop px per body column
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
 /** 484000 → "484k", 1000000 → "1M", 1500000 → "1.5M". */
 function fmtK(n) {
@@ -703,25 +729,383 @@ function pct100(x) {
   return Number.isFinite(x) ? Math.max(0, Math.min(100, Math.round(x))) : 0
 }
 
-/** Fold the breakdown's categories into the four groups the dialog shows, plus free space. */
-function groupBreakdown(b) {
-  const g = { system: 0, tools: 0, files: 0, messages: 0, free: 0, buffer: 0 }
-  for (const c of (b && b.categories) || []) {
-    const n = Number(c.tokens) || 0
-    const name = String(c.name || '').toLowerCase()
-    if (c.kind === 'free') g.free += n
-    else if (c.kind === 'buffer') g.buffer += n
-    else if (c.kind !== 'used') continue
-    else if (/mcp/.test(name)) g.tools += n
-    else if (/system|prompt/.test(name)) g.system += n
-    else if (/memory|skill|file|command/.test(name)) g.files += n
-    else if (/message/.test(name)) g.messages += n
-    else g.files += n
-  }
-  return g
+const cap1 = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s)
+const rgb01 = (hex) => hexRgb(hex).map((v) => v / 255)
+const mixHex = (a, b, t) => toHex(mix3(rgb01(a), rgb01(b), t))
+const gradAt = (f) => (f < 0.5 ? mixHex(CACHE_GRAD[0], CACHE_GRAD[1], f / 0.5) : mixHex(CACHE_GRAD[1], CACHE_GRAD[2], (f - 0.5) / 0.5))
+const avgGrowth = () => (growth.length ? growth.reduce((a, b) => a + b, 0) / growth.length : 0)
+function crossedAt(p) {
+  return Math.min(3, levels.filter((l) => Number(l.pct) <= p).length)
+}
+function seedOf(s) {
+  let x = 7
+  for (let i = 0; i < s.length; i++) x = (x * 31 + s.charCodeAt(i)) % 997
+  return x
 }
 
-/** The pane's view model: context fill + breakdown, our thresholds, cache warmth, and what the pack saved. */
+// ---- F1 "Comet", ported from design/fire/F1.js: a white-hot core at the head, a flickering body, wind-blown
+// tongues and embers carried left, cooling white → hot → c0 → c1 into a calm bed. Pure: a frame is a function of t.
+const FC = {
+  CORE: 2.2, NOSE: 1.5, ZONE: 175, BODY_LEN: 17, TONGUE_LEN: 80, WIND: 170, BODY_CELL: 7, TONGUE_CELL: 30,
+  EMBER_GAP: 0.018, EMBER_V_LO: 150, EMBER_V_HI: 310, EMBER_D_LO: 30, EMBER_D_HI: 165, EMBER_SPREAD: 1.6, STREAK: 1.1, TICK: 0.07,
+  BED_LO: 0.55, BED_HI: 0.86,
+}
+const WHITE = [1, 1, 1]
+function mix3(a, b, t) {
+  return [mixN(a[0], b[0], t), mixN(a[1], b[1], t), mixN(a[2], b[2], t)]
+}
+function vnoise(u, row) {
+  const i = Math.floor(u), f = u - i, s = f * f * (3 - 2 * f)
+  return mixN(hash21(i, row), hash21(i + 1, row), s)
+}
+/** The heat ramp: 0 is the bed (or the track ahead), then c1, c0, hot, white, in four even steps. */
+function f1Ramp(h, base, ink) {
+  if (h <= 0) return base
+  if (h >= 1) return WHITE
+  const k = h * 4, i = Math.floor(k), f = k - i
+  const stops = [base, ink.c1, ink.c0, ink.hot, WHITE]
+  return mix3(stops[i], stops[i + 1], f)
+}
+/** A bar for the shader. `ink` from one colour: hot = toward white, c0 = itself, c1 = toward black. */
+function inkOf(hex) {
+  const c = rgb01(hex)
+  return { hot: mix3(c, WHITE, 0.45), c0: c, c1: mix3(c, [0, 0, 0], 0.35) }
+}
+function fireBar(geo, shown, live, seed, ink, trackHex) {
+  const s = Math.max(Math.min(shown, 1), 0.02)
+  return { W: geo.W, H: geo.H, rows: geo.rows, pitch: geo.pitch, cols: geo.cols, shown: s, head: s * geo.W, live, seed, wind: 1, ink, track: rgb01(trackHex) }
+}
+function f1Frame(bar, t) {
+  const { W, pitch, rows, cols, head, live, seed } = bar
+  const U = Math.sqrt((W * pitch) / (826 * 3.5))
+  const wind = Math.max(bar.wind ?? 1, 0.05)
+  const hc = Math.max(0, Math.round(head / pitch - 0.5))
+  const zone = FC.ZONE * U
+  const lo = Math.max(0, Math.floor((head - zone) / pitch)), hi = Math.min(cols - 1, hc + 2)
+  const n = Math.max(0, hi - lo + 1)
+  const heat = new Float32Array(rows * n)
+  const mid = (rows - 1) / 2
+  const pulse = live ? 0.93 + 0.07 * Math.sin(t * 23 + seed) * Math.sin(t * 9.7) : 0.5 + 0.08 * Math.sin(t * 2.1)
+  const drift = live ? FC.WIND * U * wind * t : 0
+  for (let cy = 0; cy < rows; cy++) {
+    const off = Math.abs(cy - mid) / Math.max(mid, 1)
+    const rowK = 1 - 0.35 * off
+    for (let cx = lo; cx <= hi; cx++) {
+      const p = (cx + 0.5) * pitch, d = head - p
+      let h
+      if (d < -0.5 * pitch) {
+        h = d >= -FC.NOSE * pitch ? (live ? 0.8 : 0.5) * pulse * (1 - 0.7 * off) : 0
+      } else if (d <= FC.CORE * pitch) {
+        h = live ? (d < 0.3 * pitch ? 1 - 0.12 * off : 1) * pulse + 0.05 : 0.62 + pulse * 0.2
+      } else {
+        const du = d / U
+        const u = (p + drift) / U
+        const flick = vnoise(u / FC.BODY_CELL, cy * 7.3 + seed)
+        const body = Math.exp(-(du - (FC.CORE * pitch) / U) / (FC.BODY_LEN * rowK)) * (live ? 0.62 + 0.5 * flick : 0.75)
+        let tongue = 0
+        if (live) {
+          const tn = vnoise((u + (1.3 * drift) / U) / FC.TONGUE_CELL, cy * 3.1 + seed * 0.37)
+          const s = clamp01((tn - 0.48) / 0.3)
+          tongue = s * s * Math.exp(-du / (FC.TONGUE_LEN * rowK)) * 1.2
+        }
+        h = Math.max(body, tongue)
+      }
+      heat[cy * n + (cx - lo)] = Math.min(h, 1)
+    }
+  }
+  if (live) {
+    const span = FC.EMBER_D_HI / FC.EMBER_V_LO / wind
+    const iHi = Math.floor(t / FC.EMBER_GAP), iLo = Math.max(0, Math.floor((t - span) / FC.EMBER_GAP) - 1)
+    for (let i = iLo; i <= iHi; i++) {
+      const born = (i + 0.8 * hash21(i, seed + 1.7)) * FC.EMBER_GAP
+      const age = t - born
+      if (age < 0) continue
+      const hv = hash21(i, seed + 5.3), hd = hash21(i, seed + 9.1), hy = hash21(i, seed + 13.9)
+      const v = mixN(FC.EMBER_V_LO, FC.EMBER_V_HI, hv) * U * wind
+      const reach = mixN(FC.EMBER_D_LO, FC.EMBER_D_HI, hd * hd) * U
+      const life = reach / v
+      if (age >= life) continue
+      const k = age / life
+      const x = head - FC.CORE * pitch - v * age
+      if (x < 0) continue
+      const y0 = mid + (hy - 0.5) * rows * 0.7
+      const y = Math.max(0, Math.min(rows - 1, mid + (y0 - mid) * (1 + FC.EMBER_SPREAD * k)))
+      const cy = Math.round(y)
+      const h0 = (0.85 + 0.3 * hash21(i, seed + 21.1)) * Math.pow(1 - k, 0.7)
+      const tail = v * FC.TICK * FC.STREAK
+      const c0 = Math.floor(x / pitch), c1 = Math.floor((x + tail) / pitch)
+      for (let c = c0; c <= c1; c++) {
+        if (c < lo || c > hi) continue
+        const along = c1 > c0 ? (c - c0) / (c1 - c0) : 0
+        const hh = h0 * (1 - 0.65 * along)
+        const j = cy * n + (c - lo)
+        if (hh > heat[j]) heat[j] = hh
+      }
+    }
+  }
+  return { lo, hi, n, heat }
+}
+function f1Shade(cx, cy, bar, s) {
+  const { pitch, head, ink, track } = bar
+  const p = (cx + 0.5) * pitch
+  const h = cx >= s.lo && cx <= s.hi ? s.heat[cy * s.n + (cx - s.lo)] : 0
+  if (p > head + 0.5 * pitch) return h <= 0 ? null : f1Ramp(h, track, ink)
+  const g = Math.min(p / Math.max(head, 1), 1)
+  const a = mixN(FC.BED_LO, FC.BED_HI, g) * (0.94 + 0.06 * hash21(cx, cy + bar.seed))
+  const bed = mix3(track, mix3(ink.c1, ink.c0, 0.3 * g * g), a)
+  return f1Ramp(h, bed, ink)
+}
+/** The head's soft glow: one radial gradient, screen-blended (desktop only). */
+function f1Glow(bar, t) {
+  const U = Math.sqrt((bar.W * bar.pitch) / (826 * 3.5))
+  const live = bar.live
+  const pulse = live ? 0.9 + 0.1 * Math.sin(t * 23 + bar.seed) * Math.sin(t * 9.7) : 0.85 + 0.15 * Math.sin(t * 2.1)
+  return { x: bar.head - (live ? 12 : 4) * U, y: bar.H / 2, rx: (live ? 38 : 14) * U, ry: bar.H * (live ? 0.95 : 0.7), rgb: mix3(WHITE, bar.ink.hot, live ? 0.35 : 0.8), alpha: (live ? 0.34 : 0.14) * pulse }
+}
+
+// ---- Cell bars, per surface: an Svg of rounded squares on the desktop, a half-block Raster on the terminal.
+/** Where a bar's cells sit. Desktop: `size` px wide, pitch = H / rows. Terminal: `size` columns, two half-block rows. */
+function geoOf(term, size, H, rows) {
+  if (term) {
+    const cols = Math.max(1, Math.min(512, Math.floor(size)))
+    return { term: true, cols, rows: 2, pitch: 8, H: 16, W: cols * 8 }
+  }
+  const W = Math.max(20, Math.floor(size)), pitch = H / rows
+  return { term: false, W, H, rows, pitch, cols: Math.ceil(W / pitch) }
+}
+/**
+ * One bar. `colorAt(cx, cy)` → [r,g,b] in 0..1, or null for the bare track. `o.ticks`: [{ frac, color, w }] drawn on
+ * top; `o.glow` (desktop): an f1Glow. Returns null where the surface has neither Svg nor Raster.
+ */
+function cellBar(ui, key, geo, colorAt, o = {}) {
+  const track = o.track || BAR_TRACK
+  if (geo.term) {
+    const trackN = parseInt(track.slice(1), 16)
+    const num = (c) => (c ? parseInt(toHex(c).slice(1), 16) : trackN)
+    const ticks = new Map((o.ticks || []).map((m) => [Math.max(0, Math.min(geo.cols - 1, Math.floor(m.frac * geo.cols))), m.color]))
+    if (typeof ui.Raster === 'function') {
+      const words = new Uint32Array(geo.cols * 3)
+      for (let cx = 0, i = 0; cx < geo.cols; cx++) {
+        const a = colorAt(cx, 0), b = colorAt(cx, 1), tk = ticks.get(cx)
+        if (tk) { words[i++] = 0x2502; words[i++] = parseInt(tk.slice(1), 16); words[i++] = num(b) }   // │ a mark
+        else { words[i++] = 0x2580; words[i++] = num(a); words[i++] = num(b) }                         // ▀ top cell fg, bottom bg
+      }
+      return h(ui.Raster, { key, columns: geo.cols, rows: 1, cells: base64(new Uint8Array(words.buffer)) })
+    }
+    const parts = []
+    let run = '', runKey = '', runProps = null
+    for (let cx = 0; cx < geo.cols; cx++) {
+      const tk = ticks.get(cx)
+      const a = tk || toHex(colorAt(cx, 0) || rgb01(track)), b = toHex(colorAt(cx, 1) || rgb01(track))
+      const k = `${a}${b}${tk ? '|' : ''}`
+      if (k !== runKey) { if (run) parts.push(h(ui.Text, runProps, run)); run = ''; runKey = k; runProps = { color: a, backgroundColor: b } }
+      run += tk ? '│' : '▀'
+    }
+    if (run) parts.push(h(ui.Text, runProps, run))
+    return h(ui.Box, { flexDirection: 'row' }, ...parts)
+  }
+  if (typeof ui.Svg !== 'function') return null
+  const { W, H, pitch, rows, cols } = geo
+  // one cell shape, placed with <use>: a frame is redrawn every other tick, so keep the markup small
+  const half = 0.375 * pitch, size = (half * 2).toFixed(2), rx = Math.min(0.9, half * 0.35).toFixed(2)
+  const cid = `c${key.replace(/[^a-z0-9]/gi, '')}`
+  const cells = []
+  for (let cy = 0; cy < rows; cy++) {
+    const run = []
+    for (let cx = 0; cx < cols; cx++) {
+      const c = colorAt(cx, cy)
+      if (c) run.push(`<use href="#${cid}" x="${((cx + 0.5) * pitch - half).toFixed(1)}" fill="${toHex(c)}"/>`)
+    }
+    if (run.length) cells.push(`<g transform="translate(0 ${((cy + 0.5) * pitch - half).toFixed(2)})">${run.join('')}</g>`)
+  }
+  const ticks = (o.ticks || []).map((m) => `<rect x="${(m.frac * W - (m.w || 1.5) / 2).toFixed(1)}" y="0" width="${m.w || 1.5}" height="${H}" fill="${m.color}"/>`)
+  let defs = `<rect id="${cid}" width="${size}" height="${size}" rx="${rx}"/>`, glow = ''
+  const g = o.glow
+  if (g && g.alpha > 0) {
+    const id = `gl${key.replace(/[^a-z0-9]/gi, '')}`, c = toHex(g.rgb)
+    defs += `<radialGradient id="${id}"><stop offset="0" stop-color="${c}" stop-opacity="${g.alpha.toFixed(3)}"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></radialGradient>`
+    glow = `<ellipse cx="${g.x.toFixed(1)}" cy="${g.y.toFixed(1)}" rx="${g.rx.toFixed(1)}" ry="${g.ry.toFixed(1)}" fill="url(#${id})" style="mix-blend-mode:screen"/>`
+  }
+  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs>${defs}</defs>` +
+    `<rect width="${W}" height="${H}" rx="${o.radius ?? Math.min(4, H / 2)}" fill="${track}"/>${cells.join('')}${glow}${ticks.join('')}</svg>`
+  return h(ui.Svg, { source, alt: o.alt || key, height: H, width: W })
+}
+
+/** The context bar: F1 in the threshold colour, ticks at the marks still ahead, the auto-compact buffer drawn still. */
+function contextBar(ui, geo, view, t, live) {
+  const info = fireBar(geo, view.pct / 100, live, 31, inkOf(ui.hex(view.accent)), BAR_TRACK)
+  const st = f1Frame(info, t)
+  const autoX = view.compactPct === null ? Infinity : (view.compactPct / 100) * geo.W
+  const buf = rgb01(BUFFER_CELL)
+  const colorAt = (cx, cy) => {
+    const px = (cx + 0.5) * geo.pitch
+    if (px >= autoX && px > info.head + 3 * geo.pitch) return buf
+    return f1Shade(cx, cy, info, st)
+  }
+  const ticks = view.marksAll.filter((m) => m.pct > view.pct && m.pct < 100).map((m) => ({ frac: m.pct / 100, color: MARK_TICK, w: 1.5 }))
+  if (view.compactPct !== null) ticks.push({ frac: view.compactPct / 100, color: AUTO_TICK, w: 1 })
+  return cellBar(ui, 'ctx-bar', geo, colorAt, { ticks, glow: geo.term ? null : f1Glow(info, t), alt: `Context ${view.pct}%` })
+}
+
+/** A card's bar: F1 live ('fire') or calm ('ember'); a dim run to where it is heading; a tick (the time in a window). */
+function cardBar(ui, key, geo, bar, t, style) {
+  const grad = bar.ink === 'grad'
+  const inkHex = grad ? CACHE_GRAD[2] : ui.hex(bar.ink || 'inactive')
+  const ink = grad ? { hot: mix3(rgb01(CACHE_GRAD[2]), WHITE, 0.45), c0: rgb01(CACHE_GRAD[2]), c1: rgb01(CACHE_GRAD[0]) } : inkOf(inkHex)
+  const lit = bar.fill > 0
+  const info = fireBar(geo, bar.fill, style === 'fire', seedOf(key), ink, CACHE_TRACK)
+  const st = lit ? f1Frame(info, t) : null
+  const dim = bar.ext > bar.fill ? rgb01(mixHex(inkHex, CACHE_TRACK, 0.55)) : null
+  const colorAt = (cx, cy) => {
+    const c = lit ? f1Shade(cx, cy, info, st) : null
+    if (c) return c
+    const f = (cx + 0.5) / geo.cols
+    return dim && f > bar.fill + 1 / geo.cols && f <= bar.ext ? dim : null
+  }
+  const ticks = bar.tick === null || bar.tick === undefined ? [] : [{ frac: bar.tick, color: ui.hex('text'), w: 2 }]
+  return cellBar(ui, key, geo, colorAt, { track: CACHE_TRACK, ticks, glow: geo.term || !lit ? null : f1Glow(info, t), radius: 3, alt: key })
+}
+
+/** The Saved bar: three greens, one per source; a soft white glint sweeps across the fill every 3.2 s. */
+function savedBar(ui, geo, parts, share, t) {
+  const fillW = share * geo.W
+  let acc = 0
+  const segs = parts.map((p) => ({ end: (acc += p.f) * geo.W, rgb: rgb01(p.color) }))
+  const sweep = ((t % 3.2) / 3.2) * (fillW + 120) - 60
+  const colorAt = (cx, cy) => {
+    const px = (cx + 0.5) * geo.pitch
+    if (px > fillW || !segs.length) return null
+    const base = (segs.find((s) => px <= s.end) || segs[segs.length - 1]).rgb
+    const dx = (px - sweep + cy * 3) / 22
+    const k = 0.55 * Math.exp(-dx * dx)
+    return k > 0.01 ? mix3(base, WHITE, k) : base
+  }
+  return cellBar(ui, 'saved-bar', geo, colorAt, { track: CACHE_TRACK, radius: 3, alt: `Saved, ${Math.round(share * 100)}% of input` })
+}
+
+/** Working memory: a cell per slice of the window by kind; a light wave runs through the used part every 2.8 s. */
+function memoryBar(ui, geo, parts, t) {
+  let acc = 0, usedEnd = 0, open = true
+  const segs = parts.map((p) => {
+    acc += p.f
+    if (open && p.color) usedEnd = acc
+    else open = false
+    return { end: acc, rgb: p.color ? rgb01(p.color) : null }
+  })
+  const wave = ((t % 2.8) / 2.8) * (usedEnd * geo.W + 160) - 60
+  const colorAt = (cx, cy) => {
+    const f = (cx + 0.5) / geo.cols
+    const s = segs.find((x) => f < x.end)
+    if (!s || !s.rgb) return null
+    if (f > usedEnd) return s.rgb
+    const dx = ((cx + 0.5) * geo.pitch - wave) / 26
+    const k = 0.42 * Math.exp(-dx * dx)
+    return k > 0.01 ? mix3(s.rgb, WHITE, k) : s.rgb
+  }
+  return cellBar(ui, 'mem-bar', geo, colorAt, { alt: "Claude's working memory by kind" })
+}
+
+/** Five tiny cells for the closed pane: lit count is the warmth along the cache gradient; cold is all frozen blue. */
+function cacheMini(ui, cache) {
+  const FROZEN = mixHex(COLD, CACHE_TRACK, 0.45)
+  const lit = cache.warm ? Math.max(1, Math.ceil(cache.fill * 5)) : 0
+  const colors = Array.from({ length: 5 }, (_, i) => (cache.warm ? (i < lit ? gradAt((i + 0.5) / 5) : CACHE_TRACK) : cache.known ? FROZEN : CACHE_TRACK))
+  if (ui.term || typeof ui.Svg !== 'function') return colors.map((c, i) => h(ui.Text, { key: `mini${i}`, color: c }, '▪'))
+  const rects = colors.map((c, i) => `<rect x="${i * 7}" y="2.5" width="5" height="5" rx="1" fill="${c}"/>`).join('')
+  return [h(ui.Svg, { source: `<svg xmlns="http://www.w3.org/2000/svg" width="33" height="10" viewBox="0 0 33 10">${rects}</svg>`, alt: `Cache ${cache.accent}`, width: 33, height: 10 })]
+}
+
+/** Fold one breakdown row to a working-memory kind (colour and order). */
+function memKey(c) {
+  if (c.kind === 'free') return 'free'
+  if (c.kind === 'buffer') return 'buffer'
+  const n = String(c.name || '').toLowerCase()
+  if (/mcp/.test(n)) return 'mcp'
+  if (/skill/.test(n)) return 'skills'
+  if (/system prompt/.test(n)) return 'system'
+  if (/system tool|^tools?$/.test(n)) return 'tools'
+  if (/memory/.test(n)) return 'memory'
+  if (/agent/.test(n)) return 'agents'
+  if (/message/.test(n)) return 'messages'
+  return 'other'
+}
+
+const AGENT_SOURCE = { projectSettings: 'Project', userSettings: 'User', localSettings: 'Local', policySettings: 'Managed', plugin: 'Plugin', flagSettings: 'Flag' }
+const SKILL_SOURCE = { 'built-in': 'Built-in', bundled: 'Built-in', userSettings: 'User', projectSettings: 'Project', localSettings: 'Local', mcp: 'MCP', syncedSkills: 'Synced', plugin: 'Plugin' }
+
+/** Biggest first, at most six, the rest folded into one "N more" row. */
+function topItems(items, more = 'more') {
+  const sorted = [...items].sort((a, b) => b.tokens - a.tokens)
+  if (sorted.length <= 6) return sorted
+  const rest = sorted.slice(6)
+  return [...sorted.slice(0, 6), { name: `${rest.length} ${more}`, detail: '', tokens: rest.reduce((n, x) => n + x.tokens, 0) }]
+}
+function basename(p) {
+  return String(p || '').split(/[\\/]/).pop()
+}
+
+/** The drill-down groups, like the › rows in Claude's /context: what is inside each kind, and the command that trims it. */
+function drillGroups(b, home) {
+  const out = []
+  if (!b) return out
+  const mcp = Array.isArray(b.mcpTools) ? b.mcpTools : []
+  if (mcp.length) {
+    const servers = new Map()
+    for (const tl of mcp) {
+      const s = servers.get(tl.serverName) || { name: String(tl.serverName || 'mcp'), loaded: 0, deferred: 0, tools: 0, loadedTools: 0 }
+      s.tools += 1
+      if (tl.isLoaded === false) s.deferred += Number(tl.tokens) || 0
+      else { s.loaded += Number(tl.tokens) || 0; s.loadedTools += 1 }
+      servers.set(tl.serverName, s)
+    }
+    const live = [...servers.values()].filter((s) => s.loadedTools > 0)
+    const asleep = [...servers.values()].filter((s) => s.loadedTools === 0)
+    const items = topItems(live.map((s) => ({ name: s.name, detail: `${s.tools} tool${s.tools === 1 ? '' : 's'}`, tokens: s.loaded })), 'more servers')
+    if (asleep.length) {
+      const tools = asleep.reduce((n, s) => n + s.tools, 0)
+      items.push({ name: `${asleep.length} deferred server${asleep.length === 1 ? '' : 's'}`, detail: `${tools} tool${tools === 1 ? '' : 's'} · Deferred`, tokens: asleep.reduce((n, s) => n + s.deferred, 0) })
+    }
+    const loaded = live.reduce((n, s) => n + s.loaded, 0)
+    out.push({ id: 'mcp', label: 'MCP tools', tokens: loaded, count: mcp.length, items, cmd: 'mcp', what: "Turn off servers you don't use", save: loaded ? `Up to −${fmtK(loaded)}` : '' })
+  }
+  const mem = Array.isArray(b.memoryFiles) ? b.memoryFiles : []
+  if (mem.length) {
+    const seen = new Set()
+    let dupTok = 0, dupName = ''
+    const items = mem.map((f) => {
+      const id = `${basename(f.path)}:${f.tokens}`
+      const twice = seen.has(id)
+      seen.add(id)
+      if (twice) { dupTok += Number(f.tokens) || 0; dupName = dupName || basename(f.path) }
+      const path = home && String(f.path).startsWith(home + '/') ? '~' + String(f.path).slice(home.length) : String(f.path)
+      return { name: path, detail: twice ? `${f.type || 'File'} · Loaded twice` : String(f.type || ''), tokens: Number(f.tokens) || 0, warn: twice }
+    })
+    out.push({ id: 'memory', label: 'Memory files', tokens: items.reduce((n, x) => n + x.tokens, 0), count: mem.length, items: topItems(items),
+      cmd: 'memory', what: dupTok ? `Drop the duplicate ${dupName}` : "Trim what Claude doesn't need", save: dupTok ? `−${fmtK(dupTok)}` : '' })
+  }
+  const agents = Array.isArray(b.agents) ? b.agents : []
+  if (agents.length) {
+    const items = agents.map((a) => ({ name: String(a.agentType), detail: AGENT_SOURCE[a.source] || String(a.source || ''), tokens: Number(a.tokens) || 0 }))
+    const tok = items.reduce((n, x) => n + x.tokens, 0)
+    out.push({ id: 'agents', label: 'Custom agents', tokens: tok, count: agents.length, items: topItems(items), cmd: 'agents', what: 'Remove agents you never spawn', save: tok ? `Up to −${fmtK(tok)}` : '' })
+  }
+  const sk = b.skills && Array.isArray(b.skills.skillFrontmatter) ? b.skills : null
+  if (sk && sk.skillFrontmatter.length) {
+    const items = sk.skillFrontmatter.map((s) => ({ name: String(s.name), detail: s.source === 'plugin' && s.pluginName ? String(s.pluginName) : SKILL_SOURCE[s.source] || String(s.source || ''), tokens: Number(s.tokens) || 0, builtin: s.source === 'built-in' || s.source === 'bundled' }))
+    const parkable = items.filter((x) => !x.builtin).reduce((n, x) => n + x.tokens, 0)
+    out.push({ id: 'skills', label: 'Skills', tokens: Number(sk.tokens) || items.reduce((n, x) => n + x.tokens, 0), count: Number(sk.totalSkills) || items.length,
+      items: topItems(items), cmd: 'loadout', what: 'Park skills you never call', save: parkable ? `Up to −${fmtK(parkable)}` : '' })
+  } else if (skillsData && !skillsData.error && Array.isArray(skillsData.active) && skillsData.active.length) {
+    // no skill listing in the breakdown: the loadout scan's own figures
+    const items = skillsData.active.map((s) => ({ name: String(s.name), detail: (skillsData.unused || []).includes(s.name) ? 'Unused 30+ days' : '', tokens: Number(s.per_turn) || 0 }))
+    const unused = items.filter((x) => x.detail).reduce((n, x) => n + x.tokens, 0)
+    out.push({ id: 'skills', label: 'Skills', tokens: Number(skillsData.per_turn_tokens) || items.reduce((n, x) => n + x.tokens, 0), count: items.length,
+      items: topItems(items), cmd: 'loadout', what: 'Park skills you never call', save: unused ? `Up to −${fmtK(unused)}` : '' })
+  }
+  return out
+}
+
+/** The pane's view model: context fill and breakdown, our thresholds, cache warmth, and what the pack saved. */
 function contextView(usage, ttl, usageLast, clock, stats) {
   const ctx = (usage && usage.context) || {}
   const b = ctx.breakdown || null
@@ -729,96 +1113,312 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const used = b && Number.isFinite(b.totalTokens) ? b.totalTokens : Number.isFinite(ctx.tokens) ? ctx.tokens : sentOf(usageLast)
   const measure = (b && Number(b.rawMaxTokens)) || window || Math.max(used, 1)
   const pct = b && Number.isFinite(b.percentage) ? pct100(b.percentage) : Number.isFinite(ctx.percent) ? pct100(ctx.percent) : pct100((100 * used) / measure)
-  const g = b ? groupBreakdown(b) : null
-  const legend = g
-    ? [['System', g.system], ['Tools', g.tools], ['Files', g.files], ['Messages', g.messages]].filter(([, n]) => n > 0).map(([label, tokens]) => ({ label, tokens }))
-    : [{ label: 'Used', tokens: used }]
-  const free = g ? g.free : Math.max(0, measure - used)
-  const segments = (g
-    ? [['messages', g.messages], ['tools', g.tools], ['files', g.files], ['system', g.system], ['buffer', g.buffer]]
-    : [['messages', used]]).filter(([, n]) => n > 0).map(([id, tokens]) => ({ id, tokens, frac: Math.max(0, Math.min(1, tokens / measure)), color: SEG[id], ink: SEG_INK[id] }))
-  let acc = 0
-  for (const sg of segments) { acc += sg.frac; sg.end = acc }
   const compactOn = !!(b && b.isAutoCompactEnabled && Number.isFinite(b.autoCompactThreshold) && b.autoCompactThreshold > 0)
   const compactPct = compactOn ? pct100((100 * b.autoCompactThreshold) / measure) : null
-  const nextMark = levels.map((l) => ({ pct: Number(l.pct), id: l.id })).filter((l) => l.pct > pct).sort((x, y) => x.pct - y.pct)[0] || null
-  const marks = []
-  if (compactPct !== null) marks.push({ frac: compactPct / 100, color: CTX.tick })
-  if (nextMark) marks.push({ frac: nextMark.pct / 100, color: CTX.mark })
-  const crossed = levels.filter((l) => Number(l.pct) <= pct).length
-  const state = ['done', 'waiting', 'orange', 'failed'][Math.min(crossed, 3)]   // green until your first mark, then amber, orange, red
+  const marksAll = levels.map((l) => ({ pct: Number(l.pct), id: String(l.id || ''), hint: l.hint })).filter((m) => Number.isFinite(m.pct)).sort((x, y) => x.pct - y.pct)
+  const crossed = Math.min(3, marksAll.filter((m) => m.pct <= pct).length)
+  const nextMark = marksAll.find((m) => m.pct > pct) || null
+  const prevMark = [...marksAll].reverse().find((m) => m.pct <= pct) || null
+  const handoffPct = (marksAll.find((m) => m.hint === 'new-conversation') || { pct: 60 }).pct
+  const compactMarkPct = (marksAll.find((m) => m.hint === 'compact-if-warm') || { pct: 75 }).pct
+
+  // the cache: what it means for the next message
   const ttlMin = Math.max(1, Math.round(ttl / MINUTE))
-  const sent = sentOf(usageLast)
+  const amount = fmtK(used || sentOf(usageLast))
+  const hit = hitPct(usageLast)
   let cache
   if (!clock || !clock.known) {
-    cache = { known: false, warm: false, accent: 'Cold', fill: 0, strong: 'no response yet', rest: '', foot: 'the clock starts after the first reply', footer: 'No response yet: the cache clock starts after the first reply.' }
+    cache = { known: false, warm: false, cooling: false, leftMin: 0, fill: 0, accent: 'Cold', strong: 'No response yet', rest: '', foot: 'The clock starts after the first reply', short: 'Cache after 1st reply',
+      sentence: [['No response yet: the cache clock starts after the first reply', 'inactive']] }
   } else if (clock.warm) {
     const leftMin = Math.max(1, Math.round(clock.leftMs / MINUTE))
-    cache = { known: true, warm: true, accent: 'Warm', fill: clock.leftMs / ttl, strong: `Warmth ${pct100((100 * clock.leftMs) / ttl)}%`, rest: ` · Hit ${hitPct(usageLast)}%`,
-      foot: `${leftMin}m left of ${ttlMin}m`, footer: `Cache warm: next message reuses ${fmtK(sent)} from cache.` }
+    // "cooling" in the last five minutes, or the last third of a short TTL (a 5-minute TTL would otherwise always cool)
+    const cooling = clock.leftMs <= Math.min(5 * MINUTE, ttl / 3)
+    cache = { known: true, warm: true, cooling, leftMin, fill: clock.leftMs / ttl, accent: 'Warm', strong: `Warmth ${pct100((100 * clock.leftMs) / ttl)}%`, rest: ` · Hit ${hit}%`,
+      foot: `${leftMin}m left of ${ttlMin}m`, short: `Warm ${leftMin}m`,
+      sentence: cooling
+        ? [['Cache cooling: ', 'inactive'], [`${leftMin}m left to reuse `, 'inactive'], [amount, 'text'], [' from cache', 'inactive']]
+        : [['Cache warm: next message reuses ', 'inactive'], [amount, 'text'], [' from cache', 'inactive'], [` · ${leftMin}m left`, 'inactive']] }
   } else {
-    cache = { known: true, warm: false, accent: 'Cold', fill: 0, strong: 'Warmth 0%', rest: ` · Hit ${hitPct(usageLast)}%`,
-      foot: `idle ${Math.max(1, Math.round(clock.idleMs / MINUTE))}m, past ${ttlMin}m`, footer: `Cache cold: next message re-caches ${fmtK(sent)}.` }
+    cache = { known: true, warm: false, cooling: false, leftMin: 0, fill: 0, accent: 'Cold', strong: 'Warmth 0%', rest: ` · Hit ${hit}%`,
+      foot: `Idle ${Math.max(1, Math.round(clock.idleMs / MINUTE))}m, past ${ttlMin}m`, short: 'Cold',
+      sentence: [['Cache cold: next message re-caches ', 'inactive'], [amount, 'text']] }
   }
+  cache.amount = amount
+
+  // what the pack saved, in the currency you pay in
   const saved = stats || {}
   const T = saved.totals || { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0 }
   const limits = (usage && usage.rateLimits) || []
-  const five = limits.find((r) => r.kind === 'five_hour')
+  const five = limits.find((r) => r.kind === 'five_hour') || null
   const hasCost = !!(usage && usage.cost && Number.isFinite(usage.cost.usd))
   const mode = hasCost ? 'api' : five ? 'subscription' : 'unknown'
   const inputAll = T.input + T.cacheRead + T.cacheWrite
-  // API: the price per million input tokens, set in /config or derived from the engine's own ledger
-  // (input 1×, cache write 1.25×, cache read 0.1×, output 5×: the pricing model's ratios)
+  // spend in fresh-input-token equivalents: input 1×, cache write 1.25×, cache read 0.1×, output 5× (the pricing ratios)
   const billedUnits = T.input + 1.25 * T.cacheWrite + 0.1 * T.cacheRead + 5 * T.output
   const rate = Number(saved.rate) || (hasCost && billedUnits > 50_000 ? (usage.cost.usd / billedUnits) * 1e6 : 0)
-  const cachePct = inputAll ? Math.round((100 * T.cacheRead) / inputAll) : 0
-  const cacheSavedTok = Math.round(T.cacheRead * 0.9)
-  const keptOutTok = T.keptOut
-  const vetoTok = Math.round(T.vetoTokens * 1.25)
   const kw = saved.keepWarm || { pings: 0, savedTok: 0, costTok: 0 }
   const warmNet = kw.savedTok - kw.costTok                 // can be negative: pings you never came back for
-  const totalSavedTok = cacheSavedTok + keptOutTok + vetoTok + warmNet
-  const usd = (tok) => (mode === 'api' && rate ? `$${((tok * rate) / 1e6).toFixed(2)}` : '')
-  // subscription: tokens per 1% of the five-hour window, learned as the window moves during this session
+  const sources = [
+    { label: 'Cache reads', tok: Math.round(T.cacheRead * 0.9) },
+    { label: 'Trimmed output', tok: T.keptOut },
+    { label: 'Re-cache saved', tok: Math.max(0, Math.round(T.vetoTokens * 1.25) + warmNet) },
+  ]
+  const totalTok = Math.max(0, sources[0].tok + sources[1].tok + Math.round(T.vetoTokens * 1.25) + warmNet)
+  const share = totalTok > 0 ? totalTok / (totalTok + billedUnits) : 0
+  const priced = mode === 'api' && rate > 0
+  const usd = (tok) => (priced ? `$${((tok * rate) / 1e6).toFixed(2)}` : '')
   const base = saved.limitBase
   const tokPerPct = base && five && five.percentUsed - base.pct >= 1 ? (inputAll - base.tokens) / (five.percentUsed - base.pct) : 0
-  const win = (tok) => (mode === 'subscription' && tokPerPct > 0 ? `≈${Math.max(1, Math.round(tok / tokPerPct))}% of the 5-hour window` : '')
-  const worth = (tok) => usd(tok) || win(tok)
-  const headline = mode === 'api' && rate ? usd(totalSavedTok) : `${fmtK(totalSavedTok)} tok`
+  const spent = hasCost ? usage.cost.usd : 0
+  const right = mode === 'api'
+    ? [...(priced ? [[`≈ ${usd(totalTok)}`, 'success'], [` · Spent $${spent.toFixed(2)}`, 'inactive']] : [[`Spent $${spent.toFixed(2)}`, 'inactive']])]
+    : mode === 'subscription' && tokPerPct > 0 && totalTok > 0 ? [[`≈ ${Math.max(1, Math.round(totalTok / tokPerPct))}% of the 5-hour window`, 'success']] : []
   const month = saved.month || null
-  const savings = {
-    mode, rate, totalTok: totalSavedTok, total: headline, totalWorth: mode === 'api' && rate ? `${fmtK(totalSavedTok)} tok` : worth(totalSavedTok),
-    month: month && month.tok > totalSavedTok ? (mode === 'api' && rate ? usd(month.tok) : `${fmtK(month.tok)} tok`) : '',
-    perTurn: T.turns ? (mode === 'api' && rate ? `${usd(Math.round(totalSavedTok / T.turns))} per turn` : `${fmtK(Math.round(totalSavedTok / T.turns))} tok per turn`) : '',
-    lines: [
-      `${fmtK(T.cacheRead)} served from cache, ${cachePct}% of input${worth(cacheSavedTok) ? ` · ${worth(cacheSavedTok)}` : ''}`,
-      `${fmtK(Math.round(saved.savedChars / 4))} tok trimmed, kept out of ${T.turns} turn${T.turns === 1 ? '' : 's'} = ${fmtK(keptOutTok)}${worth(keptOutTok) ? ` · ${worth(keptOutTok)}` : ''}`,
-      ...(kw.pings ? [`kept warm ${kw.pings}× · ${fmtK(kw.savedTok)} re-cache avoided − ${fmtK(kw.costTok)} spent pinging = ${warmNet < 0 ? '−' : ''}${fmtK(Math.abs(warmNet))}${worth(Math.abs(warmNet)) ? ` · ${worth(Math.abs(warmNet))}` : ''}`] : []),
-      `${saved.rewrites} quiet command${saved.rewrites === 1 ? '' : 's'} · ${saved.vetoes} cold compact${saved.vetoes === 1 ? '' : 's'} vetoed${vetoTok ? ` (${fmtK(vetoTok)} re-cache avoided${worth(vetoTok) ? `, ${worth(vetoTok)}` : ''})` : ''}`,
-    ],
-    cost: hasCost ? `$${usage.cost.usd.toFixed(2)} spent` : five ? `${pct100(five.percentUsed)}% of 5-hour window used` : '',
-    note: mode === 'api' ? (Number(saved.rate) ? `at $${Number(saved.rate).toFixed(2)}/M input (your rate)` : rate ? `at ≈$${rate.toFixed(2)}/M input, derived from this session's bill` : 'set $/M in /config for dollars')
-        : mode === 'subscription' ? (tokPerPct > 0 ? 'subscription: savings shown as window headroom' : 'subscription: window maths appears once the 5-hour window moves') : 'tokens only',
+  const monthName = month && /^saved:\d{4}-\d{2}$/.test(month.key) ? MONTHS[Number(month.key.slice(-2)) - 1] : ''
+  const receipt = [
+    ...sources.map((s) => ({ label: s.label, tok: fmtK(s.tok), amount: priced ? `≈ ${usd(s.tok)}` : '', role: 'inactive', amountRole: 'success' })),
+    { rule: true },
+    { label: 'Total saved', tok: fmtK(totalTok), amount: priced ? `≈ ${usd(totalTok)}` : '', role: 'text', amountRole: 'success' },
+    ...(priced ? [
+      { label: 'You paid', tok: '', amount: `$${spent.toFixed(2)}`, role: 'inactive', amountRole: 'text' },
+      { label: 'Without token-saver', tok: '', amount: `≈ $${(spent + (totalTok * rate) / 1e6).toFixed(2)}`, role: 'inactive', amountRole: 'inactive' },
+    ] : month && monthName && month.tok > totalTok ? [{ label: `${monthName}, across sessions`, tok: fmtK(month.tok), amount: '', role: 'inactive', amountRole: 'inactive' }] : []),
+  ]
+  const note = mode === 'api' ? (Number(saved.rate) ? `At $${Number(saved.rate).toFixed(2)}/M input (your rate)` : rate ? `At ≈$${rate.toFixed(2)}/M input, derived from this session's bill` : 'Set $/M in /config for dollars')
+    : mode === 'subscription' ? (tokPerPct > 0 ? 'Subscription: savings shown as window headroom' : 'Subscription: window maths appears once the 5-hour window moves') : 'Tokens only'
+  const savings = { mode, rate, priced, totalTok, share, sources, right, receipt, note, short: totalTok ? `${fmtK(totalTok)} saved` : '0 saved', spent, hasCost }
+
+  // Claude's working memory, by kind, as /context lists it
+  let rows
+  if (b && Array.isArray(b.categories) && b.categories.length) {
+    const all = b.categories.map((c, i) => ({ c, i, key: memKey(c), deferred: c.kind === 'deferred' || c.isDeferred === true }))
+    const usedRows = all.filter((x) => !x.deferred && x.c.kind !== 'free' && x.c.kind !== 'buffer' && (Number(x.c.tokens) || 0) > 0)
+      .sort((x, y) => MEM_RANK.indexOf(x.key) - MEM_RANK.indexOf(y.key) || x.i - y.i)
+    const tail = [...all.filter((x) => !x.deferred && x.c.kind === 'buffer'), ...all.filter((x) => !x.deferred && x.c.kind === 'free')]
+    const deferred = all.filter((x) => x.deferred && (Number(x.c.tokens) || 0) > 0)
+    rows = [...usedRows, ...tail, ...deferred].map((x) => ({
+      key: x.key, name: x.deferred && !/deferred/i.test(x.c.name) ? `${x.c.name} (deferred)` : String(x.c.name), tokens: Number(x.c.tokens) || 0,
+      deferred: x.deferred, color: x.deferred ? MEM.buffer : MEM[x.key] || MEM.other,
+    }))
+  } else {
+    rows = [{ key: 'messages', name: 'Used', tokens: used, deferred: false, color: MEM.messages }, ...(window ? [{ key: 'free', name: 'Free space', tokens: Math.max(0, window - used), deferred: false, color: MEM.free }] : [])]
   }
-  // where tokens go: the categories with an action, biggest first
-  const where = []
-  if (g && g.tools > 20_000) where.push({ label: 'MCP tools', tokens: g.tools, tip: '/mcp, disable servers you do not use' })
-  if (b && b.skills && Number(b.skills.tokens) > 3_000) where.push({ label: 'Skills', tokens: Number(b.skills.tokens), tip: '/loadout, park the ones you never call' })
-  if (g && g.messages > 0) where.push({ label: 'Messages', tokens: g.messages, tip: pct >= 50 ? '/handoff then /clear before the next topic' : 'one task per session; /clear on a topic change' })
-  if (g && g.files > 30_000) where.push({ label: 'Files', tokens: g.files, tip: 'memory files and skills load every turn; trim CLAUDE.md' })
-  where.sort((x, y) => y.tokens - x.tokens)
-  const tips = []
-  if (clock && clock.known && !clock.warm) tips.push('cache is cold: /clear beats /compact, which would re-cache everything')
-  if (clock && clock.known && clock.warm && hitPct(usageLast) < 70) tips.push(`cache hit ${hitPct(usageLast)}%: avoid editing CLAUDE.md, settings or /model mid-session`)
-  if (nextMark) tips.push(`next mark ${nextMark.pct}% (${nextMark.id}): ${nextMark.id === 'handoff' ? 'write a handoff and /clear' : nextMark.id === 'compact' ? '/compact only while the cache is warm' : 'note decisions as you go'}`)
-  const savedStrong = savings.total
-  const savedRest = savings.totalWorth ? ` · ${savings.totalWorth}` : ''
-  const hint = hintFor(pct, clock || { warm: false, leftMs: 0 })
+  for (const r of rows) r.pct = r.deferred ? '—' : `${((100 * r.tokens) / measure).toFixed(1)}%`
+  const live = rows.filter((r) => !r.deferred)
+  const parts = [...live.filter((r) => r.key !== 'free' && r.key !== 'buffer'), ...live.filter((r) => r.key === 'free'), ...live.filter((r) => r.key === 'buffer')]
+    .map((r) => ({ f: Math.max(0, r.tokens / measure), color: r.key === 'free' ? null : r.color }))
+
   return {
-    hasData: !!usage, pct, used, window, measure, state,
-    header: { usedText: window ? `${fmtK(used)} / ${fmtK(window)} (${pct}%)` : `${fmtK(used)} (${pct}%)`, compactText: compactPct === null ? '' : `Compact at ${compactPct}%` },
-    marks, legend, free, segments, nextMark, compactPct, cache, savedStrong, savedRest, savings, where: where.slice(0, 3), tips: tips.slice(0, 2), hint,
+    hasData: !!usage, pct, used, window, measure, crossed, accent: ACC[crossed], marksAll, nextMark, prevMark, compactPct, handoffPct, compactMarkPct,
+    title: { used: window ? `${fmtK(used)} / ${fmtK(window)} tok` : `${fmtK(used)} tok`, pct: window ? ` (${pct}%)` : '' },
+    cache, savings, five, memory: { rows, parts, title: window ? `${fmtK(used)} of ${fmtK(window)} tok` : `${fmtK(used)} tok` }, breakdown: b,
   }
+}
+
+/** Which of Clear / Compact / Later is recommended now, and which are unavailable (drawn dim, never hidden). */
+function paneActions(view) {
+  const fresh = !view.cache.known, cold = view.cache.known && !view.cache.warm
+  const prim = fresh ? 'later' : cold && view.pct >= view.handoffPct ? 'clear' : view.pct >= view.compactMarkPct ? 'compact' : view.pct >= view.handoffPct ? 'clear' : 'later'
+  const off = (k) => (fresh && k !== 'later') || (k === 'compact' && (cold || fresh))
+  return { prim: off(prim) ? 'later' : prim, off }
+}
+
+/** The next-mark card: runway from the last mark crossed to the next, and messages to go at the recent growth. */
+function nextCard(view, avg) {
+  const cold = view.cache.known && !view.cache.warm
+  const next = view.nextMark, prev = view.prevMark
+  const then = (m) => ({ note: 'note decisions', 'new-conversation': 'handoff + Clear', 'compact-if-warm': 'Compact while warm' }[m.hint] || m.id)
+  if (next && !(next.hint === 'compact-if-warm' && cold)) {
+    const lo = prev ? prev.pct : 0
+    const frac = clamp01((view.pct - lo) / Math.max(1, next.pct - lo))
+    const left = Math.max(0, Math.round((view.measure * next.pct) / 100 - view.used))
+    const msgs = avg > 0 ? Math.max(1, Math.ceil(left / avg)) : 0
+    const span = Math.max(1, (view.measure * (next.pct - lo)) / 100)
+    return { title: cap1(next.id), accent: msgs ? `In ≈${msgs} message${msgs === 1 ? '' : 's'}` : `At ${next.pct}%`, tone: ACC[crossedAt(next.pct)],
+      bar: { fill: frac, ext: avg > 0 ? Math.min(1, frac + avg / span) : 0, ink: view.accent }, strong: `Runway ${Math.round(frac * 100)}%`, rest: ` · ${fmtK(left)} to go`, foot: `Then ${then(next)}` }
+  }
+  if (!cold) {
+    return { title: 'Compact', accent: 'Now', tone: 'error', bar: { fill: 1, ink: 'error' }, strong: `Past ${view.compactMarkPct}%`, rest: view.cache.known ? ' · Cache warm' : '',
+      foot: view.cache.known ? `Cheap while warm: ${view.cache.leftMin}m left` : 'Cheap while the cache is warm' }
+  }
+  return { title: 'Clear', accent: 'Now', tone: 'error', bar: { fill: 1, ink: 'error' }, strong: `Past ${prev ? prev.pct : view.pct}%`, rest: ' · Cache cold', foot: `Compact would re-cache ${view.cache.amount}` }
+}
+
+/** The billing card: keep-warm on the API (or where billing is unknown), the five-hour window on a subscription. */
+function billCard(view, now, ttl, keepWarmMax, longTtl) {
+  const f = view.five
+  if (view.savings.mode === 'subscription' && f) {
+    const usage = pct100(f.percentUsed)
+    // The window's start is not exposed; resetsAt is, and the window is five hours long, so start = resetsAt − 5 h.
+    // Without resetsAt the time tick and the reset line are left out.
+    const r = f.resetsAt ? Date.parse(f.resetsAt) : NaN
+    const span = 5 * 3600 * 1000
+    const time = Number.isFinite(r) ? pct100((100 * (now - (r - span))) / span) : null
+    const ms = Number.isFinite(r) ? Math.max(0, r - now) : 0
+    return { title: 'Current session', accent: '', tone: 'success', bar: { fill: usage / 100, ext: time === null ? 0 : time / 100, tick: time === null ? null : time / 100, ink: 'success' },
+      strong: `Usage ${usage}%`, rest: time === null ? '' : ` · Time ${time}%`, foot: Number.isFinite(r) ? `Resets in ${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / MINUTE)}m` : 'Five-hour window' }
+  }
+  if (keepWarm.on && keepWarmMax > 0) {
+    const missed = !Number.isFinite(keepWarm.streak)
+    const usedPings = missed ? keepWarmMax : Math.min(keepWarm.streak, keepWarmMax)
+    const every = Math.max(1, Math.round((ttl - KEEP_WARM_LEAD) / MINUTE))
+    return { title: 'Keep-warm', accent: 'On', tone: WARM, bar: { fill: usedPings / keepWarmMax, ink: WARM }, strong: `Pings ${usedPings} of ${keepWarmMax}`, rest: ' · 0.1× each',
+      foot: missed ? 'Stopped: the cache had already gone' : `Warm ${(keepWarmMax - usedPings) * every}m more if away` }
+  }
+  const why = keepWarm.stopped ? cap1(keepWarm.stopped) : longTtl ? 'One-hour cache' : 'Turned off'
+  return { title: 'Keep-warm', accent: 'Off', tone: 'inactive', bar: { fill: 0 }, strong: why, rest: '',
+    foot: keepWarm.stopped === 'not API billing' ? 'A subscription caches for an hour already' : longTtl ? 'A lapse is rare with the one-hour cache' : 'Turn it on in /config' }
+}
+
+function cacheCard(view) {
+  const c = view.cache
+  return { title: 'Cache', accent: c.accent, tone: c.warm ? WARM : c.known ? COLD : 'inactive', bar: { fill: c.fill, ink: 'grad' }, strong: c.strong, rest: c.rest, foot: c.foot }
+}
+
+/** A long name cut to `n` cells: paths keep their tail, names their head. */
+function clip(s, n) {
+  s = String(s)
+  if (s.length <= n) return s
+  return /[\\/]/.test(s) ? '…' + s.slice(-(n - 1)) : s.slice(0, n - 1) + '…'
+}
+
+/**
+ * Draw the pane from its view model. No bold anywhere; colour carries the hierarchy: figures in 'text', labels in
+ * 'inactive', the percentage in the threshold colour, savings in 'success'. `o.t` is the animation clock (s).
+ */
+function drawContextPane(ui, view, o) {
+  const { Box, Text, Button, term } = ui
+  const kids = (a) => a.filter(Boolean)
+  const row = (props, children) => h(Box, { flexDirection: 'row', ...props }, ...kids(children))
+  const col = (props, children) => h(Box, { flexDirection: 'column', ...props }, ...kids(children))
+  const t = (s, color, extra) => h(Text, color ? { color, ...extra } : extra || null, s)
+  const grow = () => h(Box, { flexGrow: 1 })
+  const num = (s, color, w) => h(Box, { width: w, flexShrink: 0, justifyContent: 'flex-end' }, t(s, color))
+  const fit = (child) => h(Box, { flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, child)
+  const subtle = ui.hex('subtle')
+  const cells = Math.max(30, term ? o.W - 2 : o.W - 4)                 // the body, in character cells
+  const px = Math.max(240, Math.min(824, Math.round(cells * PX)))      // the desktop's bars, in px
+  const size = term ? cells : px
+  const rule = () => t('─'.repeat(term ? cells : 200), subtle, { wrap: 'truncate' })
+  const blank = () => t(' ')
+
+  // 1. Title: Context   96k / 200k tok (48%) … ⌄   (room is left before the chevron for a "?" later)
+  const title = row({ alignItems: 'center' }, [
+    t('Context', 'inactive'), t('   '), t(view.title.used, 'text'), view.title.pct ? t(view.title.pct, view.accent) : null,
+    grow(),
+    h(Button, { key: 'ctx-expand', label: ctxExpanded ? '⌃' : '⌄', plain: true, onPress: o.onExpand }),
+  ])
+
+  // 2. The context bar, full width, nothing on it
+  const bar = contextBar(ui, geoOf(term, size, 14, 4), view, o.t, o.live)
+
+  // 3. Bottom row: cache and saved on the left, the actions on the right
+  const acts = paneActions(view)
+  const btn = (k, label, onPress, extra) => h(Button, {
+    key: `ctx-${k}`, label, onPress, ...(acts.prim === k ? { variant: 'primary' } : {}), ...(acts.off(k) ? { dimColor: true } : {}), ...extra,
+  })
+  const buttons = row({ gap: 1, flexShrink: 0 }, [
+    btn('clear', 'Clear', o.onClear),
+    btn('compact', ctxBusy ? 'Compacting…' : 'Compact', o.onCompact),
+    btn('later', 'Later', o.onLater, { role: 'dismiss' }),
+  ])
+  const c = view.cache
+  const sentence = () => c.sentence.map(([s, r]) => t(s, r))
+  const bottom = row({ alignItems: 'center' }, [
+    ...cacheMini(ui, c), t(' '),
+    ...(term ? [t(c.short, 'inactive')] : sentence()),
+    t(' · ', 'inactive'), t(view.savings.short, 'inactive'),
+    grow(), t(' '), buttons,
+  ])
+  // the terminal keeps the bottom row short; the whole sentence sits on its own line under it when it fits
+  const sentLen = c.sentence.reduce((n, [s]) => n + s.length, 0)
+  const under = term && sentLen <= cells ? row({}, sentence()) : null
+  const msg = ctxMsg ? t(cap1(ctxMsg), 'inactive', { wrap: 'wrap' }) : null
+  if (!ctxExpanded) return col({}, [title, bar, bottom, under, msg])
+
+  // 4. Saved: the headline of the whole plugin
+  const sv = view.savings
+  const ok = ui.hex('success')
+  const shades = [ok, mixHex(ok, ui.hex('text'), 0.4), mixHex(ok, CACHE_TRACK, 0.5)]
+  const srcSum = sv.sources.reduce((n, s) => n + s.tok, 0) || 1
+  const parts = sv.sources.map((s, i) => ({ f: (sv.share * s.tok) / srcSum, color: shades[i] }))
+  const savedHead = row({}, [
+    t('Saved', 'text'), t(' '), t(`${fmtK(sv.totalTok)} tok`, 'success'), t(' this session · ', 'inactive'), t(`Cut ${Math.round(sv.share * 100)}% of input`, 'text'),
+    grow(), ...sv.right.map(([s, r]) => t(s, r)),
+  ])
+  const longKey = sv.sources.reduce((n, s) => n + 3 + s.label.length + fmtK(s.tok).length, 0) + 15
+  const label = (s) => (term && longKey > cells ? s.label.split(' ')[0] : s.label)
+  const keyRow = row({ alignItems: 'center' }, [
+    ...sv.sources.flatMap((s, i) => [t('■ ', shades[i]), t(`${label(s)} `, 'inactive'), t(fmtK(s.tok), 'text'), i < sv.sources.length - 1 ? t(term ? ' ' : '    ') : null]),
+    grow(), t(' '),
+    h(Button, { key: 'ctx-receipt', label: ctxReceipt ? 'Receipt ⌃' : 'Receipt ⌄', onPress: o.onReceipt }),
+  ])
+  const amtW = sv.priced ? Math.max(11, ...sv.receipt.map((r) => (r.amount || '').length + 1)) : 0
+  const receiptLine = (r) => {
+    if (r.rule) return rule()
+    if (term) {
+      const dots = Math.max(1, cells - r.label.length - 2 - 7 - amtW)
+      return row({}, [t(r.label, r.role), t(` ${'·'.repeat(dots)} `, subtle), t(r.tok.padStart(7), 'inactive'), amtW ? t(r.amount.padStart(amtW), r.amountRole) : null])
+    }
+    return row({}, [t(r.label, r.role), h(Box, { flexGrow: 1, flexShrink: 1, overflow: 'hidden', marginX: 1 }, t('·'.repeat(240), subtle, { wrap: 'truncate' })),
+      num(r.tok, 'inactive', 8), sv.priced ? num(r.amount, r.amountRole, amtW + 1) : null])
+  }
+  const receipt = ctxReceipt ? col({}, [rule(), ...sv.receipt.map(receiptLine), t(sv.note, 'inactive')]) : null
+  const saved = col({}, [savedHead, savedBar(ui, geoOf(term, size, 10, 3), parts, sv.share, o.t), keyRow, receipt])
+
+  // 5. Three cards: what is next, billing (keep-warm or the 5-hour window), the cache
+  const cardList = [nextCard(view, avgGrowth()), billCard(view, o.now, o.ttl, o.keepWarmMax, o.longTtl), cacheCard(view)]
+  const cardKeys = ['card-next', 'card-bill', 'card-cache']
+  const perRow = term && o.W < 90 ? 2 : 3
+  const gapN = term ? 4 : 3
+  const cw = Math.max(16, Math.floor((cells - gapN * (perRow - 1)) / perRow))
+  const card = (cd, i) => col({ width: cw, flexShrink: 0, overflow: 'hidden' }, [
+    row({}, [t(cd.title, 'text'), cd.accent ? t(' · ', 'inactive') : null, cd.accent ? t(cd.accent, cd.tone) : null]),
+    cardBar(ui, cardKeys[i], geoOf(term, term ? cw : Math.round(cw * PX), 10, 3), cd.bar, o.t, o.cardStyle),
+    row({}, [t(cd.strong, 'text'), cd.rest ? t(cd.rest, 'inactive') : null]),
+    t(cd.foot, 'inactive', { wrap: 'truncate' }),
+  ])
+  const cardRows = []
+  for (let i = 0; i < cardList.length; i += perRow) {
+    if (i) cardRows.push(blank())
+    cardRows.push(row({ gap: gapN }, cardList.slice(i, i + perRow).map((cd, j) => card(cd, i + j))))
+  }
+
+  // 6. Claude's working memory, like /context: a bar by kind, then a row per kind
+  const memory = col({}, [
+    rule(),
+    row({}, [t("Claude's working memory", 'text'), grow(), t(view.memory.title, 'text')]),
+    t('Re-read every time Claude replies or uses a tool', 'inactive'),
+    memoryBar(ui, geoOf(term, size, 14, 4), view.memory.parts, o.t),
+    ...view.memory.rows.map((r) => row({}, [t('■ ', r.color), fit(t(r.name, r.deferred ? 'inactive' : 'text', { wrap: 'truncate' })),
+      num(fmtK(r.tokens), 'inactive', 10), num(r.pct, r.deferred ? 'inactive' : 'text', 9)])),
+  ])
+
+  // 7. Drill-down groups: what is inside each kind, and the command that trims it
+  const nameW = term ? Math.max(14, Math.min(30, cells - 4 - 20 - 19)) : 40
+  const groups = (view.groups || []).flatMap((g) => {
+    const open = ctxGroups.has(g.id)
+    const head = row({ alignItems: 'center' }, [
+      h(Button, { key: `ctx-group:${g.id}`, label: open ? '⌄' : '›', plain: true, onPress: () => o.onGroup(g.id) }), t(' '),
+      fit(t(g.label, 'text')), num(fmtK(g.tokens), 'inactive', 10), num(String(g.count), 'inactive', 9),
+    ])
+    if (!open) return [head]
+    return [
+      head,
+      ...g.items.map((it) => row({ paddingLeft: 4 }, [
+        h(Box, { width: nameW, flexShrink: 0 }, t(clip(it.name, nameW - 1), 'text')),
+        fit(t(it.detail, it.warn ? 'warning' : 'inactive', { wrap: 'truncate' })),
+        num(fmtK(it.tokens), 'inactive', 10), num('', 'inactive', 9),
+      ])),
+      row({ paddingLeft: 4, alignItems: 'center' }, [
+        t('↳ ', 'inactive'), h(Button, { key: `ctx-run:${g.id}`, label: `/${g.cmd}`, onPress: () => o.onRun(g.cmd) }),
+        fit(t(`  ${g.what}`, 'inactive', { wrap: 'truncate' })), g.save ? t(`${g.save} each time`, 'success') : null,
+      ]),
+    ]
+  })
+
+  return col({}, [title, bar, blank(), saved, blank(), ...cardRows, blank(), memory, ...(groups.length ? [blank(), ...groups] : []), blank(), bottom, under, msg])
 }
 
 function toast($, text, timeoutMs = 6000) {
@@ -827,39 +1427,6 @@ function toast($, text, timeoutMs = 6000) {
 
 function invalidate($) {
   try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
-}
-
-/** The pane's figures: one usage call with the summary breakdown (never 'full': that sends token-count requests), cached 10 s. */
-/** The context window bar: one rounded track, a rect per category, the free space as the track. */
-function stackedBarSvg(segments, width, height = 8) {
-  const W = Math.max(60, Math.round(width)), H = height
-  let x = 0, rects = ''
-  for (const sg of segments) { const w = sg.frac * W; if (w >= 0.5) rects += `<rect x="${x.toFixed(1)}" width="${w.toFixed(1)}" height="${H}" fill="${sg.color}"/>`; x += w }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs><clipPath id="cstack"><rect width="${W}" height="${H}" rx="${H / 2}"/></clipPath></defs><rect width="${W}" height="${H}" rx="${H / 2}" fill="${SEG.free}"/><g clip-path="url(#cstack)">${rects}</g></svg>`
-}
-function stackedBarText(h, Text, segments, cells) {
-  const parts = []
-  let used = 0
-  for (const sg of segments) { const n = Math.round(sg.frac * cells); if (n > 0) { parts.push(h(Text, { color: sg.color }, '█'.repeat(n))); used += n } }
-  if (cells - used > 0) parts.push(h(Text, { color: '#3a3a40' }, '░'.repeat(cells - used)))
-  return parts
-}
-
-/** The dialog's cache bar: a rounded track, the fill a blue → grey → orange gradient. */
-function gradientBarSvg(fill, width, height = 10, id = 'g') {
-  const W = Math.max(40, Math.round(width)), H = height, f = Math.max(0, Math.min(1, fill)) * W
-  const [a, b, c] = CTX.cache
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs><linearGradient id="${id}" x1="0" x2="1"><stop offset="0" stop-color="${a}"/><stop offset="0.5" stop-color="${b}"/><stop offset="1" stop-color="${c}"/></linearGradient><clipPath id="c${id}"><rect width="${W}" height="${H}" rx="${H / 2}"/></clipPath></defs><rect width="${W}" height="${H}" rx="${H / 2}" fill="${CTX.track}"/><g clip-path="url(#c${id})"><rect width="${f.toFixed(1)}" height="${H}" fill="url(#${id})"/></g></svg>`
-}
-function gradientBarText(h, Text, fill, cells) {
-  const n = Math.round(Math.max(0, Math.min(1, fill)) * cells), parts = []
-  const [a, b, c] = CTX.cache
-  const third = Math.max(1, Math.round(n / 3))
-  if (n > 0) parts.push(h(Text, { color: a }, '█'.repeat(Math.min(n, third))))
-  if (n > third) parts.push(h(Text, { color: b }, '█'.repeat(Math.min(n - third, third))))
-  if (n > 2 * third) parts.push(h(Text, { color: c }, '█'.repeat(n - 2 * third)))
-  if (cells - n > 0) parts.push(h(Text, { color: CTX.track }, '░'.repeat(cells - n)))
-  return parts
 }
 
 /** Carry this session's savings into a per-month total in $.store, adding only what is new since the last roll. */
@@ -899,6 +1466,17 @@ async function clearSession($) {
     await $.command.run({ command: 'clear' })
   } catch (err) {
     toast($, `token-saver: could not run /clear (${err && err.message ? err.message : String(err)}) — type /clear`)
+  }
+}
+
+/** A drill-down group's command (/mcp, /memory, /agents, /loadout): close the pane, then run it as /clear does. */
+async function runFromPane($, command) {
+  ctxPaneOpen = false
+  try { await $.ui.close({ id: CONTEXT_PANE }) } catch { /* already closed */ }
+  try {
+    await $.command.run({ command })
+  } catch (err) {
+    toast($, `token-saver: could not run /${command} (${err && err.message ? err.message : String(err)}) — type /${command}`)
   }
 }
 
@@ -946,6 +1524,7 @@ export function register(on, options = {}) {
   const ttl = options.longCacheTtl ? TTL_LONG : TTL_SHORT
   // Keep-warm pings only make sense against the 5-minute TTL; with the 1-hour TTL a lapse is already rare
   const keepWarmMax = Math.max(0, Math.round(Number(options.keepWarmPings ?? 5)))
+  const cardBars = options.cardBars === 'ember' ? 'ember' : 'fire'
   keepWarm.on = options.keepWarm !== false && !options.longCacheTtl && keepWarmMax > 0
 
   on('session.start', async ($, e, next) => {
@@ -1016,7 +1595,7 @@ export function register(on, options = {}) {
     }
     progressRows.clear()
     progressTicker = $.clock.every(70, () => {
-      if (progressRows.size === 0) return
+      if (progressRows.size === 0 && !ctxPaneOpen) return
       const now = Date.now()
       let changed = false
       for (const [id, r] of progressRows) {
@@ -1200,8 +1779,15 @@ export function register(on, options = {}) {
   })
 
   // Keep-warm never pings while a turn runs: the turn itself keeps the cache warm, and a fork would race it
+  // Per-message growth for the pane's "In ≈N messages": context at turn.start against context at turn.complete
   on('turn.start', async ($, e, next) => {
     inTurn = true
+    try {
+      const c = await contextOf($)
+      turnStartTokens = Number.isFinite(c.tokens) ? c.tokens : null
+    } catch {
+      turnStartTokens = null
+    }
     return next(e)
   })
   on('turn.complete', async ($, e, next) => {
@@ -1209,6 +1795,17 @@ export function register(on, options = {}) {
       return await next(e)
     } finally {
       inTurn = false
+      if (turnStartTokens !== null) {
+        const before = turnStartTokens
+        turnStartTokens = null
+        try {
+          const d = (await contextOf($)).tokens - before
+          if (d > 0) {                                   // a compaction mid-turn shrinks it: not growth
+            growth.push(d)
+            if (growth.length > GROWTH_KEEP) growth.shift()
+          }
+        } catch { /* no usage API */ }
+      }
     }
   })
 
@@ -1373,94 +1970,42 @@ export function register(on, options = {}) {
     ])
   })
 
-  /**
-   * The Context pane. Top to bottom: header (title, fill, stacked bar, compaction mark), legend, four cards
-   * (session, weekly, model, cache), footer (cache line, Clear / Compact / Later). Svg bars where the surface
-   * has Svg, glyph runs on the terminal. Figures from loadContext(), cached 10 s.
-   */
   on('ui.close', ($, e, next) => {
     if (e && e.id === CONTEXT_PANE) ctxPaneOpen = false
     return next(e)
   })
 
+  /**
+   * The Context pane (M4). Closed: title, context bar, cache and saved, Clear / Compact / Later. Open: Saved with its
+   * receipt, three cards, Claude's working memory, drill-down groups. Svg cells on the desktop, Raster half-blocks on
+   * the terminal; every frame a function of the 70 ms tick. Figures from loadContext(), cached 10 s.
+   */
   on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => {
     try {
-    const el = $.ui.resolve(e)
-    const { Box, Text, Button } = el
-    const Svg = e.surface === 'terminal' ? undefined : el.Svg
-    const Raster = e.surface === 'terminal' ? el.Raster : undefined
-    const W = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
-    const now = await $.clock.now()
-    const data = await loadContext($, now, W)
-    const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
-    const PX = 6.5
-    const col = (props, children) => h(Box, { flexDirection: 'column', ...props }, ...children)
-    const row = (props, children) => h(Box, { flexDirection: 'row', ...props }, ...children)
-    const t = (str, props) => h(Text, props || null, str)
-    const dim = (str) => h(Text, { color: CTX.dim }, str)
-    const sec = (str) => h(Text, { color: CTX.secondary }, str)
-    const bar = (rowObj, cells, marks, alt) =>
-      Svg
-        ? h(Svg, { source: progressSvg(rowObj, cells * PX, marks), alt, height: BAR_H })
-        : row({}, progressTrackText(rowObj, cells, h, Text, Raster, marks))
-
-    // Collapsed: ◔ Context window … 818.6k / 1M (82%) ›   then the stacked bar
-    const headline = row({ alignItems: 'center', gap: 1 }, [
-      t('◔ ', { color: CTX.secondary }),
-      t('Context window', { bold: true, color: CTX.heading }),
-      h(Box, { flexGrow: 1 }),
-      ...(view.savings.totalTok ? [t(`saved ${view.savings.total}`, { color: CTX.warm }), dim(' · ')] : []),
-      sec(view.header.usedText),
-      h(Button, { key: 'ctx-expand', label: ctxExpanded ? '⌄' : '›', plain: true, hotkey: 'e', onPress: () => { ctxExpanded = !ctxExpanded; invalidate($) } }),
-    ])
-    const barCols = Math.max(12, W - 4)
-    const ctxRow = { id: 'context', label: 'Context', stage: `${view.pct}%`, step: 0, total: 0, state: view.state, live: true, plain: true, target: view.pct / 100, shown: view.pct / 100, note: '' }
-    const stacked = bar(ctxRow, barCols, view.marks, `Context ${view.pct}%`)
-    if (!ctxExpanded) return col({ gap: 0 }, [headline, stacked, ...(ctxMsg ? [dim(ctxMsg)] : [])])
-
-    // Expanded: the cells recolour by category, the cache bar under it, then the figures in two text columns
-    const splitRow = { ...ctxRow, id: 'context-split', segments: view.segments }
-    const cacheRow = { id: 'cache', label: 'Cache', stage: view.cache.pill || '', step: 0, total: 0, state: view.cache.warm ? 'running' : 'cold', plain: true, target: view.cache.fill, shown: view.cache.fill, note: '', settledAt: 0 }
-    const bars = col({ gap: 0 }, [
-      bar(splitRow, barCols, view.marks, `Context ${view.pct}% by category`),
-      row({}, [t('Cache', { bold: true, color: CTX.heading }), t(' · ', { color: CTX.dim }), t(view.cache.accent, { bold: true, color: view.cache.warm ? CTX.warm : CTX.dim }),
-        dim('   '), t(view.cache.strong, { bold: true, color: CTX.text }), sec(view.cache.rest), dim(` · ${view.cache.foot}`)]),
-      ...(view.cache.known ? [bar(cacheRow, barCols, [], `Cache ${view.cache.accent}`)] : []),
-    ])
-    const savedBlock = col({ gap: 0 }, [
-      row({}, [t('Saved this session  ', { bold: true, color: CTX.heading }), t(view.savedStrong, { bold: true, color: CTX.warm }), sec(view.savedRest),
-        ...(view.savings.perTurn ? [dim(` · ${view.savings.perTurn}`)] : []), ...(view.savings.month ? [dim(` · ${view.savings.month} this month`)] : []), ...(view.savings.cost ? [dim(` · ${view.savings.cost}`)] : [])]),
-      ...view.savings.lines.map((l) => t(l, { color: CTX.legend, wrap: 'wrap' })),
-      dim(view.savings.note),
-    ])
-    const whereBlock = view.where.length
-      ? col({ gap: 0 }, [
-          t(' '),
-          t('Where tokens go', { bold: true, color: CTX.heading }),
-          ...view.where.map((w) => row({}, [t(`${w.label} `, { color: CTX.legend }), t(`${fmtK(w.tokens)} `, { bold: true, color: CTX.text }), dim('every turn → '), t(w.tip, { color: CTX.legend, wrap: 'wrap' })])),
-          ...view.tips.map((tip) => row({}, [t('→ ', { color: CTX.warm }), t(tip, { color: CTX.legend, wrap: 'wrap' })])),
-        ])
-      : col({}, view.tips.map((tip) => row({}, [t('→ ', { color: CTX.warm }), t(tip, { color: CTX.legend, wrap: 'wrap' })])))
-    const footer = row({ alignItems: 'center', gap: 1 }, [
-      t('●', { color: view.cache.warm ? CTX.dot : CTX.dim }),
-      t(view.cache.footer, { color: CTX.text }),
-    ])
-    const buttons = row({ gap: 1 }, [
-      h(Button, { key: 'ctx-clear', label: 'Clear', hotkey: 'c', variant: 'primary', onPress: () => clearSession($) }),
-      h(Button, { key: 'ctx-compact', label: ctxBusy ? 'Compacting…' : 'Compact', hotkey: 'k', onPress: () => compactNow($, ttl, compactGuard) }),
-      h(Button, { key: 'ctx-later', label: 'Later', hotkey: 'l', role: 'dismiss', onPress: async () => { ctxPaneOpen = false; try { await $.ui.close({ id: CONTEXT_PANE }) } catch { /* closed */ } } }),
-    ])
-    return col({ gap: 0 }, [
-      headline,
-      bars,
-      t(' '),
-      savedBlock,
-      whereBlock,
-      t(' '),
-      footer,
-      buttons,
-      ...(ctxMsg ? [dim(ctxMsg)] : []),
-    ])
+      const el = $.ui.resolve(e)
+      const term = e.surface === 'terminal'
+      const pal = THEME_HEX[term ? 'terminal' : 'desktop']
+      const ui = {
+        Box: el.Box, Text: el.Text, Button: el.Button, Svg: term ? undefined : el.Svg, Raster: term ? el.Raster : undefined, term,
+        hex: (k) => (String(k).startsWith('#') ? k : pal[k] || pal.inactive),
+      }
+      const W = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
+      const now = await $.clock.now()
+      const data = await loadContext($, now, W)
+      if (homeCache === null) { try { homeCache = await homeDir($) } catch { homeCache = '' } }
+      const clock = cacheClock(now, ttl)
+      const view = contextView(data.usage, ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
+      view.groups = drillGroups(view.breakdown, homeCache)
+      return drawContextPane(ui, view, {
+        W, t: progressTick * TICK_S, now, ttl, keepWarmMax, longTtl: !!options.longCacheTtl, cardStyle: cardBars, live: clock.known,
+        onExpand: () => { ctxExpanded = !ctxExpanded; invalidate($) },
+        onReceipt: () => { ctxReceipt = !ctxReceipt; invalidate($) },
+        onGroup: (id) => { if (ctxGroups.has(id)) ctxGroups.delete(id); else ctxGroups.add(id); invalidate($) },
+        onRun: (cmd) => runFromPane($, cmd),
+        onClear: () => clearSession($),
+        onCompact: () => compactNow($, ttl, compactGuard),
+        onLater: async () => { ctxPaneOpen = false; try { await $.ui.close({ id: CONTEXT_PANE }) } catch { /* closed */ } },
+      })
     } catch (err) {
       const { Text } = $.ui.resolve(e)
       return h(Text, { color: '#e5484d' }, `token-saver: context pane failed: ${err && err.stack ? err.stack.split('\n').slice(0, 2).join(' ') : String(err)}`)

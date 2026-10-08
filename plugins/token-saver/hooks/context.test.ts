@@ -1,113 +1,246 @@
 import { test, expect, mock } from 'claude-code/testing'
 
 const NOW = Date.UTC(2026, 9, 7, 12, 0, 0)
+const MIN = 60_000
 const PANE = { title: 'Context', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} }
+const PANE80 = { ...PANE, bodyColumns: 78 }
+const OPTIONS = { suggestSkills: false, cacheBand: false }
+// Mounting the pane draws several animated bars; give the tests room on a loaded machine.
+const SLOW = 30_000
+
+const BREAKDOWN = {
+  categories: [
+    { name: 'System prompt', tokens: 8_000, color: 'promptBorder', isDeferred: false, kind: 'used' },
+    { name: 'System tools', tokens: 3_000, color: 'promptBorder', isDeferred: false, kind: 'used' },
+    { name: 'MCP tools', tokens: 63_000, color: 'permission', isDeferred: false, kind: 'used' },
+    { name: 'Memory files', tokens: 20_000, color: 'success', isDeferred: false, kind: 'used' },
+    { name: 'Skills', tokens: 88_000, color: 'success', isDeferred: false, kind: 'used' },
+    { name: 'Messages', tokens: 302_000, color: 'warning', isDeferred: false, kind: 'used' },
+    { name: 'Free space', tokens: 486_000, color: 'inactive', isDeferred: false, kind: 'free' },
+    { name: 'Autocompact buffer', tokens: 30_000, color: 'inactive', isDeferred: false, kind: 'buffer' },
+    { name: 'MCP tools (deferred)', tokens: 165_300, color: 'inactive', isDeferred: true, kind: 'deferred' },
+  ],
+  totalTokens: 484_000, maxTokens: 1_000_000, rawMaxTokens: 1_000_000, autocompactSource: 'auto', percentage: 48,
+  gridRows: [], model: 'Fable 5.1',
+  memoryFiles: [
+    { path: '/nonexistent-home/.claude/rules/token-budget.md', type: 'User', tokens: 844 },
+    { path: '/repo/.claude/rules/token-budget.md', type: 'Project', tokens: 844 },
+    { path: '/nonexistent-home/.claude/CLAUDE.md', type: 'User', tokens: 31 },
+  ],
+  mcpTools: [
+    { name: 'mcp__chrome__navigate', serverName: 'claude-in-chrome', tokens: 9_400, isLoaded: true },
+    { name: 'mcp__chrome__click', serverName: 'claude-in-chrome', tokens: 2_000, isLoaded: true },
+    { name: 'mcp__linear__create_issue', serverName: 'linear', tokens: 5_000, isLoaded: false },
+  ],
+  agents: [{ agentType: 'gemini-agent', source: 'plugin', tokens: 353 }],
+  skills: { totalSkills: 2, includedSkills: 2, tokens: 840, skillFrontmatter: [
+    { name: 'dataviz', source: 'built-in', tokens: 480 }, { name: 'docx', source: 'plugin', pluginName: 'anthropic-skills', tokens: 360 },
+  ] },
+  autoCompactThreshold: 970_000, isAutoCompactEnabled: true, apiUsage: null,
+}
 
 const USAGE = {
   startedAt: NOW - 2 * 3600 * 1000,
-  context: {
-    tokens: 484_000, window: 1_000_000, percent: 48,
-    breakdown: {
-      categories: [
-        { name: 'System prompt', tokens: 8_000, color: 'promptBorder', isDeferred: false, kind: 'used' },
-        { name: 'System tools', tokens: 3_000, color: 'promptBorder', isDeferred: false, kind: 'used' },
-        { name: 'MCP tools', tokens: 63_000, color: 'permission', isDeferred: false, kind: 'used' },
-        { name: 'Memory files', tokens: 20_000, color: 'success', isDeferred: false, kind: 'used' },
-        { name: 'Skills', tokens: 88_000, color: 'success', isDeferred: false, kind: 'used' },
-        { name: 'Messages', tokens: 302_000, color: 'warning', isDeferred: false, kind: 'used' },
-        { name: 'Free space', tokens: 486_000, color: 'inactive', isDeferred: false, kind: 'free' },
-        { name: 'Autocompact buffer', tokens: 30_000, color: 'inactive', isDeferred: false, kind: 'buffer' },
-      ],
-      totalTokens: 484_000, maxTokens: 1_000_000, rawMaxTokens: 1_000_000, autocompactSource: 'auto', percentage: 48,
-      gridRows: [], model: 'Fable 5.1', memoryFiles: [], mcpTools: [], agents: [],
-      autoCompactThreshold: 970_000, isAutoCompactEnabled: true, apiUsage: null,
-    },
-  },
+  context: { tokens: 484_000, window: 1_000_000, percent: 48, breakdown: BREAKDOWN },
   rateLimits: [],
   cost: { usd: 1.37 },
 }
 
-function wire(on: any, usageArgs: any[], closed: string[], compacts: any[], commands: any[]) {
-  on('session.usage' as any, (_$: any, e: any) => { usageArgs.push(e); return { value: USAGE } })
-  on('ui.close' as any, (_$: any, e: any) => { closed.push(e.id); return { value: undefined } })
-  on('ui.toast' as any, () => ({ value: undefined }))
-  on('ui.status' as any, () => ({ value: undefined }))
-  on('session.compact' as any, (_$: any, e: any) => { compacts.push(e); return { messages: [{ role: 'assistant', text: 'summary', toolUses: [] }], tokensBefore: 484_000, tokensAfter: 120_000 } })
-  on('command.run' as any, (_$: any, e: any) => { commands.push(e); return { text: 'cleared' } })
+const STEP = { input_tokens: 2_000, cache_read_input_tokens: 150_000, cache_creation_input_tokens: 1_000, output_tokens: 400 }
+
+function wire(on: any, usage: () => any, log: { usageArgs: any[], closed: string[], compacts: any[], commands: any[] }) {
+  on('session.usage' as any, (_$: any, e: any) => { log.usageArgs.push(e); return { value: usage() } })
+  on('ui.close' as any, (_$: any, e: any) => { log.closed.push(e.id); return { value: undefined } })
+  on('session.compact' as any, (_$: any, e: any) => { log.compacts.push(e); return { messages: [{ role: 'assistant', text: 'summary', toolUses: [] }], tokensBefore: 484_000, tokensAfter: 120_000 } })
+  on('command.run' as any, (_$: any, e: any) => { log.commands.push(e); return { text: 'ran' } })
+  on('turn.start' as any, (_$: any, e: any) => ({ turnId: e.turnId }))
+  on('turn.complete' as any, () => ({ text: 'ok' }))
+  on('turn.step' as any, async function* () {
+    return { turnId: 't', index: 0, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: STEP }
+  })
+  for (const ev of ['ui.toast', 'ui.status', 'ui.log']) on(ev as any, () => ({ value: undefined }))
 }
 
+function setup(on: any, usage: () => any) {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home' })
+  const log = { usageArgs: [] as any[], closed: [] as string[], compacts: [] as any[], commands: [] as any[] }
+  wire(on, usage, log)
+  return { clock, log }
+}
+
+/** One whole turn as the engine runs it: start, one main-thread step, complete. */
+async function turn($: any, between?: () => void) {
+  await $.turn.start({ text: 'hi', turnId: 't' })
+  const s = $.turn.step({ turnId: 't', index: 0, model: 'claude-sonnet-5-5', messageCount: 1 })
+  for await (const _ of s) { /* drain */ }
+  await s.result
+  if (between) between()
+  await $.turn.complete({ turnId: 't', reason: 'answer', answer: 'ok', text: 'ok' })
+}
+
+const mount = ($: any, surface: 'terminal' | 'desktop', props: any = PANE) =>
+  $.ui.mount({ plugin: 'token-saver', surface, component: 'Pane', requestId: 'context', props })
+
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`context pane: our bar, one-hue legend, cache + saved cards, Clear / Compact / Later on ${surface}`, async ($, on) => {
-    mock.clock(on, { now: NOW })
-    mock.store(on)
-    mock.env(on, { HOME: '/nonexistent-home' })
-    const usageArgs: any[] = [], closed: string[] = [], compacts: any[] = [], commands: any[] = []
-    wire(on, usageArgs, closed, compacts, commands)
-    const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface, component: 'Pane', requestId: 'context', props: PANE as any })
+  test(`context pane on ${surface}: title figures, fire bar, cache and saved, Clear / Compact / Later without hotkeys`, { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+    const { log } = setup(on, () => USAGE)
+    const ui: any = await mount($, surface)
 
-    expect(usageArgs.length).toBeGreaterThan(0)
-    expect(usageArgs[0].breakdown).toBe('summary')          // never 'full'
-    expect(await ui.find({ text: /^Context window$/ })).toBeDefined()
-    expect(await ui.find({ text: /484k \/ 1M \(48%\)/ })).toBeDefined()
-    expect(await ui.find({ key: 'ctx-clear' })).toBeUndefined()        // collapsed: headline + bar only
-    await ui.press({ key: 'ctx-expand' })
-    expect(await ui.find({ text: /^Cache$/ })).toBeDefined()
-    expect(await ui.find({ text: /^0 tok$/ })).toBeDefined()                       // nothing saved yet
-    expect(await ui.find({ text: /0 quiet commands · 0 cold compacts vetoed/ })).toBeDefined()
-    expect(await ui.find({ text: /set \$\/M in \/config for dollars/ })).toBeDefined()   // cost ledger present but no turns: no derived rate yet
-    expect(await ui.find({ text: /\$1\.37 spent/ })).toBeDefined()
-    expect(await ui.find({ text: /Where tokens go/ })).toBeDefined()
-    expect(await ui.find({ text: /^MCP tools $/ })).toBeDefined()
-    expect(await ui.find({ text: /^Messages $/ })).toBeDefined()
-    expect(await ui.find({ text: /next mark 60% \(handoff\)/ })).toBeDefined()
-    expect(await ui.find({ text: /no response yet/ })).toBeDefined()
-
-    if (surface === 'desktop') {
-      const svgs = await ui.findAll({ type: 'Svg' })
-      expect(svgs.length).toBe(1)                            // the split context bar; the cache bar waits for a first response
-      expect(String(svgs[0].props.source)).toContain('48%')       // the pill
+    expect(log.usageArgs.length).toBeGreaterThan(0)
+    expect(log.usageArgs[0].breakdown).toBe('summary')          // never 'full'
+    expect(await ui.find({ text: /Context window/ })).toBeUndefined()
+    expect(await ui.find({ text: /^Context$/ })).toBeDefined()
+    expect(await ui.find({ text: /^484k \/ 1M tok$/ })).toBeDefined()
+    expect(await ui.find({ text: /^ \(48%\)$/ })).toBeDefined()
+    expect((await ui.find({ key: 'ctx-expand' }))?.props.label).toBe('⌄')
+    expect(await ui.find({ text: /^0 saved$/ })).toBeDefined()
+    expect(await ui.find({ text: /No response yet: the cache clock starts after the first reply/ })).toBeDefined()
+    if (surface === 'terminal') {
+      expect(await ui.find({ text: /^Cache after 1st reply$/ })).toBeDefined()
+      expect(await ui.find({ type: 'Raster', key: 'ctx-bar' })).toBeDefined()
     } else {
-      expect(await ui.find({ type: 'Raster' })).toBeDefined()
+      const svgs = await ui.findAll({ type: 'Svg' })
+      expect(svgs.length).toBeGreaterThanOrEqual(2)          // the cache cells and the context bar
+      expect(svgs.some((s: any) => /Context 48%/.test(String(s.props.alt)))).toBe(true)
     }
+    expect(await ui.find({ text: /Claude's working memory/ })).toBeUndefined()   // closed: nothing between the bar and the bottom row
 
     const clear = await ui.find({ key: 'ctx-clear' }), compact = await ui.find({ key: 'ctx-compact' }), later = await ui.find({ key: 'ctx-later' })
-    expect(clear?.props.hotkey).toBe('c')
-    expect(compact?.props.hotkey).toBe('k')
-    expect(later?.props.hotkey).toBe('l')
+    for (const b of [clear, compact, later]) expect(b?.props.hotkey).toBeUndefined()
+    expect(later?.props.variant).toBe('primary')                 // before the first reply, Later is the only action
+    expect(compact?.props.variant).toBeUndefined()
+    expect(compact?.props.dimColor).toBe(true)
+    expect(later?.props.role).toBe('dismiss')
+
+    await ui.press({ key: 'ctx-expand' })
+    expect((await ui.find({ key: 'ctx-expand' }))?.props.label).toBe('⌃')
+    expect(await ui.find({ text: /^Claude's working memory$/ })).toBeDefined()
+    expect(await ui.find({ text: /^484k of 1M tok$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Re-read every time Claude replies or uses a tool$/ })).toBeDefined()
+    expect(await ui.find({ text: /^MCP tools \(deferred\)$/ })).toBeDefined()
+    expect(await ui.find({ text: /^—$/ })).toBeDefined()
+    expect(await ui.find({ text: /^30\.2%$/ })).toBeDefined()    // Messages 302k of 1M
+    expect(await ui.find({ text: /^Saved$/ })).toBeDefined()
+    expect(await ui.find({ text: /^0 tok$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Cut 0% of input$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Spent \$1\.37$/ })).toBeDefined()   // a cost ledger, but no turns yet: no derived rate
+    expect(await ui.find({ text: /^Handoff$/ })).toBeDefined()       // the next mark: 60% handoff
+    expect(await ui.find({ text: /^Runway 40%$/ })).toBeDefined()     // 48% is 40% of the way from 40 to 60
+    expect(await ui.find({ text: /^Then handoff \+ Clear$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Keep-warm$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Pings 0 of 5$/ })).toBeDefined()
+    expect(await ui.find({ text: /^The clock starts after the first reply$/ })).toBeDefined()
+    expect(await ui.find({ text: /turn/i })).toBeUndefined()          // never the word "turn"
+
+    expect(await ui.find({ text: /^Total saved$/ })).toBeUndefined()
+    await ui.press({ key: 'ctx-receipt' })
+    expect(await ui.find({ text: /^Total saved$/ })).toBeDefined()
+    expect(await ui.find({ text: /Set \$\/M in \/config for dollars/ })).toBeDefined()
+    await ui.press({ key: 'ctx-receipt' })
+    expect(await ui.find({ text: /^Total saved$/ })).toBeUndefined()
+
+    expect(await ui.find({ text: /Loaded twice/ })).toBeUndefined()
+    await ui.press({ key: 'ctx-group:memory' })
+    expect(await ui.find({ text: /^Project · Loaded twice$/ })).toBeDefined()
+    expect(await ui.find({ text: /^−844 each time$/ })).toBeDefined()
+    await ui.press({ key: 'ctx-group:mcp' })
+    expect(await ui.find({ text: /^claude-in-chrome$/ })).toBeDefined()
+    expect(await ui.find({ text: /^1 deferred server$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Up to −11.4k each time$/ })).toBeDefined()
+    await ui.press({ key: 'ctx-group:skills' })
+    expect(await ui.find({ text: /^anthropic-skills$/ })).toBeDefined()
+    await ui.press({ key: 'ctx-run:mcp' })
+    expect(log.commands.map((c) => c.command)).toContain('mcp')
+    expect(log.closed).toContain('context')
 
     await ui.press({ key: 'ctx-compact' })
-    expect(compacts.length).toBe(1)
+    expect(log.compacts.length).toBe(1)                          // no reply yet: nothing to veto
     await ui.press({ key: 'ctx-clear' })
-    expect(commands[0]?.command).toBe('clear')
-    expect(closed).toContain('context')
+    expect(log.commands.map((c) => c.command)).toContain('clear')
+    const closes = log.closed.length
     await ui.press({ key: 'ctx-later' })
-    expect(closed.filter((id) => id === 'context').length).toBeGreaterThanOrEqual(2)
+    expect(log.closed.length).toBe(closes + 1)
+  })
+
+  test(`context pane on ${surface}: warm and cold cache sentences, and the recommended action follows them`, { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+    const usage: any = { ...USAGE, context: { ...USAGE.context, tokens: 800_000, percent: 80, breakdown: { ...BREAKDOWN, totalTokens: 800_000, percentage: 80 } } }
+    const { clock, log } = setup(on, () => usage)
+    await turn($)
+
+    let ui: any = await mount($, surface)
+    expect(await ui.find({ text: /^Cache warm: next message reuses $/ })).toBeDefined()
+    expect(await ui.find({ text: /^800k$/ })).toBeDefined()
+    expect(await ui.find({ text: / · 5m left$/ })).toBeDefined()
+    expect((await ui.find({ key: 'ctx-compact' }))?.props.variant).toBe('primary')   // past compact, cache warm
+    expect((await ui.find({ key: 'ctx-clear' }))?.props.variant).toBeUndefined()
+    if (surface === 'terminal') expect(await ui.find({ text: /^Warm 5m$/ })).toBeDefined()
+    await ui.press({ key: 'ctx-expand' })
+    expect(await ui.find({ text: /^Compact$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Now$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Warm$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Warmth 100%$/ })).toBeDefined()
+
+    await clock.advance(10 * MIN)
+    await ui.unmount()
+    ui = await mount($, surface)
+    expect(await ui.find({ text: /^Cache cold: next message re-caches $/ })).toBeDefined()
+    const compact = await ui.find({ key: 'ctx-compact' })
+    expect(compact?.props.variant).toBeUndefined()                // cold: Compact would re-cache everything
+    expect(compact?.props.dimColor).toBe(true)
+    expect((await ui.find({ key: 'ctx-clear' }))?.props.variant).toBe('primary')
+    expect(await ui.find({ text: /^Clear$/, type: 'Text' })).toBeDefined()           // the next-mark card says Clear · Now
+    expect(await ui.find({ text: /^Compact would re-cache 800k$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Idle 10m, past 5m$/ })).toBeDefined()
+
+    await ui.press({ key: 'ctx-compact' })
+    expect(log.compacts.length).toBe(0)                           // the guard vetoes a cold compact
+    expect(await ui.find({ text: /^Compact vetoed: cache cold/ })).toBeDefined()
   })
 }
 
-test('context pane without a breakdown falls back to one Used entry and no tick', async ($, on) => {
-  mock.clock(on, { now: NOW })
-  mock.store(on)
-  mock.env(on, { HOME: '/nonexistent-home' })
-  on('session.usage' as any, () => ({ value: { startedAt: NOW, context: { tokens: 120_000, window: 200_000, percent: 60 }, rateLimits: [] } }))
-  on('ui.close' as any, () => ({ value: undefined }))
-  const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'desktop', component: 'Pane', requestId: 'context', props: PANE as any })
-  expect(await ui.find({ text: /120k \/ 200k \(60%\)/ })).toBeDefined()
+test('context pane counts context growth per message and says how many messages to the next mark', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const ctx = { tokens: 100_000, window: 200_000, percent: 50 }
+  const { clock } = setup(on, () => ({ context: { ...ctx }, rateLimits: [], cost: { usd: 0.5 } }))
+  let ui: any = await mount($, 'terminal', PANE80)
   await ui.press({ key: 'ctx-expand' })
-  expect(await ui.find({ text: /Compact at/ })).toBeUndefined()
-  expect(await ui.find({ text: /tokens only/ })).toBeDefined()                     // no cost ledger, no rate limits: unknown billing
-  expect(await ui.find({ text: /next mark 75% \(compact\)/ })).toBeDefined()
+  expect(await ui.find({ text: /^At 60%$/ })).toBeDefined()        // no growth measured yet: no message estimate
+  expect(await ui.find({ text: /^ · 20k to go$/ })).toBeDefined()
+
+  await turn($, () => { ctx.tokens = 106_000; ctx.percent = 53 })
+  await turn($, () => { ctx.tokens = 112_000; ctx.percent = 56 })
+  await clock.advance(11_000)                                    // past the pane's 10 s figures cache
+  await ui.unmount()
+  ui = await mount($, 'terminal', PANE80)
+  expect(await ui.find({ text: /^In ≈2 messages$/ })).toBeDefined()  // 8k to 60% at 6k a message
+  expect(await ui.find({ text: /^ · 8k to go$/ })).toBeDefined()
+  expect(await ui.find({ text: /^Runway 80%$/ })).toBeDefined()
 })
 
-test('context pane on a subscription prices savings as window headroom once the window moves', async ($, on) => {
-  mock.clock(on, { now: NOW })
-  mock.store(on)
-  mock.env(on, { HOME: '/nonexistent-home' })
-  on('session.usage' as any, () => ({ value: { startedAt: NOW, context: { tokens: 300_000, window: 1_000_000, percent: 30 }, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(NOW + 3600_000).toISOString() }] } }))
-  on('ui.close' as any, () => ({ value: undefined }))
-  const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'desktop', component: 'Pane', requestId: 'context', props: PANE as any })
+test('context pane without a breakdown falls back to one Used row and no groups', { options: { ...OPTIONS, cardBars: 'ember' }, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => ({ startedAt: NOW, context: { tokens: 120_000, window: 200_000, percent: 60 }, rateLimits: [] }))
+  const ui: any = await mount($, 'desktop')
+  expect(await ui.find({ text: /^120k \/ 200k tok$/ })).toBeDefined()
+  expect(await ui.find({ text: /^ \(60%\)$/ })).toBeDefined()
   await ui.press({ key: 'ctx-expand' })
-  expect(await ui.find({ text: /40% of 5-hour window used/ })).toBeDefined()
-  expect(await ui.find({ text: /subscription: window maths appears once the 5-hour window moves/ })).toBeDefined()
-  expect(await ui.find({ text: /\$/ })).toBeUndefined()                           // never a dollar on a subscription
+  expect(await ui.find({ text: /^Used$/ })).toBeDefined()
+  expect(await ui.find({ text: /^Free space$/ })).toBeDefined()
+  expect(await ui.find({ key: 'ctx-group:mcp' })).toBeUndefined()
+  expect(await ui.find({ text: /^Compact$/, type: 'Text' })).toBeDefined()        // the next mark is compact at 75%
+  await ui.press({ key: 'ctx-receipt' })
+  expect(await ui.find({ text: /^Tokens only$/ })).toBeDefined()                   // no cost ledger, no rate limits
+})
+
+test('context pane on a subscription: the five-hour window card, and never a dollar', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => ({ startedAt: NOW, context: { tokens: 300_000, window: 1_000_000, percent: 30 }, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(NOW + 3600_000).toISOString() }] }))
+  const ui: any = await mount($, 'desktop')
+  await ui.press({ key: 'ctx-expand' })
+  expect(await ui.find({ text: /^Current session$/ })).toBeDefined()
+  expect(await ui.find({ text: /^Usage 40%$/ })).toBeDefined()
+  expect(await ui.find({ text: /^ · Time 80%$/ })).toBeDefined()                    // reset in 1 h of a 5 h window
+  expect(await ui.find({ text: /^Resets in 1h 0m$/ })).toBeDefined()
+  await ui.press({ key: 'ctx-receipt' })
+  expect(await ui.find({ text: /Subscription: window maths appears once the 5-hour window moves/ })).toBeDefined()
+  expect(await ui.find({ text: /\$/ })).toBeUndefined()
 })

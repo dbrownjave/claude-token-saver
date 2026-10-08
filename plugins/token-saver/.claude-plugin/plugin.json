@@ -65,6 +65,13 @@
       "title": "Input price, $ per million tokens",
       "description": "Used only to put dollars on the Context pane's savings (cache reads at a tenth, trimmed tokens kept out of every turn, re-caches avoided). 0 shows tokens only. Check your model's current price before setting it.",
       "default": 0
+    },
+    "cardBars": {
+      "type": "string",
+      "title": "Card bars in the Context pane",
+      "description": "Fire: the cards' cell bars burn like the context bar. Ember: the same cells with a calm glow at each head and no wind, so only the context bar moves.",
+      "options": ["fire", "ember"],
+      "default": "fire"
     }
   }
 }
