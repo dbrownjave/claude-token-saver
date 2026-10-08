@@ -3,7 +3,8 @@
 ;(() => {
   const M = window.MID
   const ACC = ['info', 'warn', 'brand', 'bad']
-  const STATE = { desk:localStorage.m4Desk || 'dark', term:localStorage.m4Term || 'dark', billing:localStorage.m4Billing || 'api', cardBars:localStorage.m4Bars || 'fire', cacheInd:localStorage.m4Ind || 'ember', savedUI:localStorage.m4Saved || 'hero', savedAnim:localStorage.m4SavedAnim || 'sheen', distAnim:localStorage.m4DistAnim || 'pulse' }   // the shipped default; 'ember' is the setting
+  const MEM_DEFAULT = (v) => ['aurora', 'candy', 'ocean', 'jewel', 'claude', 'sunset'].includes(v) ? v : 'claude'
+  const STATE = { desk:localStorage.m4Desk || 'dark', term:localStorage.m4Term || 'dark', billing:localStorage.m4Billing || 'api', cardBars:localStorage.m4Bars || 'fire', cacheInd:localStorage.m4Ind || 'ember', memPal:MEM_DEFAULT(localStorage.m4MemPal), savedUI:localStorage.m4Saved || 'hero', savedAnim:localStorage.m4SavedAnim || 'sheen', distAnim:localStorage.m4DistAnim || 'pulse' }   // the shipped default; 'ember' is the setting
   const BAR_STYLES = [['smooth', 'Smooth'], ['cells', 'Cells'], ['ember', 'Cells + ember'], ['fire', 'Cells + fire']]
   const views = []
   const GAP = 10
@@ -96,18 +97,36 @@
   const D = M.data.d, SPL = D.split
   const BUFFER = Math.round(WIN * (100 - AUTO) / 100)
   const CATS = [
-    ['messages', 'Messages', SPL.messages, 'info'], ['mcp', 'MCP tools', SPL.mcp, 'brand'], ['skills', 'Skills', SPL.skills, 'ok'],
-    ['system', 'System prompt', SPL.system, 'warn'], ['tools', 'System tools', SPL.tools, 'grey'], ['memory', 'Memory files', 2_608, 'grey'],
+    ['messages', 'Messages', SPL.messages, 'cat:messages'], ['mcp', 'MCP tools', SPL.mcp, 'cat:mcp'], ['skills', 'Skills', SPL.skills, 'cat:skills'],
+    ['system', 'System prompt', SPL.system, 'cat:system'], ['tools', 'System tools', SPL.tools, 'cat:tools'], ['memory', 'Memory files', 2_608, 'cat:memory'],
     ['buffer', 'Autocompact buffer', BUFFER, 'dark'], ['free', 'Free space', Math.max(0, WIN - D.used - BUFFER), 'darker'],
     // deferred: tool schemas that load only when a tool is used; listed like /context, with no share of the window
     ['mcpDeferred', 'MCP tools (deferred)', 165_300, 'dark', true], ['sysDeferred', 'System tools (deferred)', 15_700, 'dark', true],
   ]
   const tok1 = (n) => n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${+(n / 1000).toFixed(1)}k` : String(n)
   const pct1 = (n) => `${(100 * n / WIN).toFixed(1)}%`
-  const swatch = (role, P) => role === 'grey' ? P.faint : role === 'dark' ? M.hex(M.mix(P.faint, P.bg, 0.45)) : role === 'darker' ? M.hex(M.mix(P.faint, P.bg, 0.72)) : P[role]
+  /* working-memory colours: a family of their own, so they never read as the pane's signals
+     (green = saved, orange = commands, amber/red = thresholds, the cache's blue-to-orange). Three options, all theme tones. */
+  const MEM_PALETTES = {
+    // brighter on the pane's dark surface; each starts from a theme tone and lifts its lightness and saturation
+    aurora: { name:'Aurora',     note:'Cool and bright: sky, violet, teal, pink. Nothing here means "saved" or "alert".',
+      messages:'#5eb3ff', mcp:'#a78bfa', skills:'#2dd4bf', system:'#f472b6', tools:'#94a3b8', memory:'#a5b4fc' },
+    candy:  { name:'Candy',      note:'Claude\u2019s rainbow pastels, turned up: sky, lilac, mint, sun, rose.',
+      messages:'#7cc4ff', mcp:'#c49bff', skills:'#6ee7b7', system:'#ffd166', tools:'#a1a1aa', memory:'#fda4af' },
+    ocean:  { name:'Ocean',      note:'One family of blues and cyans, from deep indigo to ice. The calmest of the five.',
+      messages:'#38bdf8', mcp:'#818cf8', skills:'#22d3ee', system:'#5eead4', tools:'#7dd3fc', memory:'#a5f3fc' },
+    jewel:  { name:'Jewel',      note:'The theme\u2019s accents made vivid: accent blue, accent-pro violet, planMode teal, subagent pink, chrome yellow.',
+      messages:'#6aa8ff', mcp:'#9d7dff', skills:'#3cc8b4', system:'#f07aa8', tools:'#8f9bb3', memory:'#f5c451' },
+    claude: { name:'Claude',     note:'One family around Claude\u2019s own orange (#d97757): bright clay, light terracotta, the deep brand-000, sand, and clay brown, with a warm grey.',
+      messages:'#e07a52', mcp:'#f2a07b', skills:'#c6613f', system:'#f6c9a8', tools:'#9e9a97', memory:'#b98b72' },
+    sunset: { name:'Sunset',     note:'Warm and bright: coral, amber, magenta, plum. Lively, but it borrows the threshold colours.',
+      messages:'#ff8a65', mcp:'#ffb74d', skills:'#f06292', system:'#ba68c8', tools:'#9e9a97', memory:'#ffcc80' },   // system tools: a warm grey
+  }
+  const memColor = (id, P, pal = STATE.memPal) => { const c = (MEM_PALETTES[pal] || MEM_PALETTES.claude)[id]; return P.dark ? c : M.hex(M.mix(c, '#000000', 0.22)) }
+  const swatch = (role, P, pal) => role.startsWith('cat:') ? memColor(role.slice(4), P, pal) : role === 'grey' ? P.faint : role === 'dark' ? M.hex(M.mix(P.faint, P.bg, 0.45)) : role === 'darker' ? M.hex(M.mix(P.faint, P.bg, 0.72)) : P[role]
   /* the split bar in the rows' order: used categories, then free space, the autocompact buffer at the right end */
-  const splitParts = (P) => [...CATS.filter(([k, , , , deferred]) => k !== 'buffer' && k !== 'free' && !deferred), CATS.find(([k]) => k === 'free'), CATS.find(([k]) => k === 'buffer')]
-    .map(([, , n, role]) => ({ f:n / WIN, color:role === 'darker' ? null : swatch(role, P) }))
+  const splitParts = (P, pal) => [...CATS.filter(([k, , , , deferred]) => k !== 'buffer' && k !== 'free' && !deferred), CATS.find(([k]) => k === 'free'), CATS.find(([k]) => k === 'buffer')]
+    .map(([, , n, role]) => ({ f:n / WIN, color:role === 'darker' ? null : swatch(role, P, pal) }))
   function groups(sc) {
     const s = D.save, c = D.cache
     return [
@@ -221,7 +240,7 @@
     if (ro.ro === 'gap') { row.style.minHeight = '10px'; return row }
     if (ro.ro === 'savedblock') return savedDesk(ro.ui, P, ro.key)
     if (ro.ro === 'sep') { row.style.cssText += `;min-height:0;height:1px;background:${P.line};margin:12px 0 10px`; return row }
-    if (ro.ro === 'disttitle') { row.append(txt('Claude\u2019s working memory', P.text), grow(), txt(`${tok1(D.used)} of ${tok1(WIN)} tok`, P.faint)); return row }
+    if (ro.ro === 'disttitle') { row.append(txt('Claude\u2019s working memory', P.text), grow(), txt(`${tok1(D.used)} of ${tok1(WIN)} tok`, P.text)); return row }
     if (ro.ro === 'distsub') { row.style.marginTop = '-2px'; row.append(txt('Re-read every time Claude replies or uses a tool', P.faint)); return row }
     if (ro.ro === 'cards') {
       row.style.gap = '24px'; row.style.alignItems = 'center'
@@ -332,7 +351,7 @@
     if (ro.ro === 'raw') return ro.r
     if (ro.ro === 'distsub') { const l = 'Re-read every time Claude replies or uses a tool'; return { html:c(l, P.faint), text:l, len:l.length } }
     if (ro.ro === 'sep') return { html:c('─'.repeat(W), P.line), text:'─'.repeat(W), len:W }
-    if (ro.ro === 'disttitle') { const r = `${tok1(D.used)} of ${tok1(WIN)} tok`, l = 'Claude\u2019s working memory'; return { html:c(l, P.text) + ' '.repeat(W - l.length - r.length) + c(r, P.faint), text:l + ' '.repeat(W - l.length - r.length) + r, len:W } }
+    if (ro.ro === 'disttitle') { const r = `${tok1(D.used)} of ${tok1(WIN)} tok`, l = 'Claude\u2019s working memory'; return { html:c(l, P.text) + ' '.repeat(W - l.length - r.length) + c(r, P.text), text:l + ' '.repeat(W - l.length - r.length) + r, len:W } }
     if (ro.ro === 'cards') {
       const CW = 36, cell = (cd) => {
         if (ro.part === 'head') { const t = cd.title + (cd.accent ? ` · ${cd.accent}` : ''); return { t, h:c(cd.title, P.text, true) + (cd.accent ? c(' · ', P.faint) + c(cd.accent, toneColor(cd.tone, P), true) : '') } }
@@ -738,6 +757,7 @@
     ctl.innerHTML = `
       <div class="grp">Desktop ${['dark', 'light'].map((k) => `<button data-desk="${k}" class="${STATE.desk === k ? 'on' : ''}">${k}</button>`).join(' ')}</div>
       <div class="grp">Terminal ${['dark', 'light', 'dark-daltonized', 'light-daltonized'].map((k) => `<button data-term="${k}" class="${STATE.term === k ? 'on' : ''}">${k}</button>`).join(' ')}</div>
+      <div class="grp">Memory colours ${Object.entries(MEM_PALETTES).map(([k, v]) => `<button data-mem="${k}" class="${STATE.memPal === k ? 'on' : ''}">${v.name}</button>`).join(' ')}</div>
       <div class="grp">Saved animation ${[['sheen', 'Sheen'], ['accrue', 'Accrue'], ['fire', 'Fire'], ['still', 'Still']].map(([k, l]) => `<button data-sanim="${k}" class="${STATE.savedAnim === k ? 'on' : ''}">${l}</button>`).join(' ')}</div>
       <div class="grp">Distribution animation ${[['pulse', 'Re-send pulse'], ['breathe', 'Breathe'], ['still', 'Still']].map(([k, l]) => `<button data-danim="${k}" class="${STATE.distAnim === k ? 'on' : ''}">${l}</button>`).join(' ')}</div>
       <div class="grp">Saved UI ${SAVED_UIS.map(([k, l]) => `<button data-saved="${k}" class="${STATE.savedUI === k ? 'on' : ''}">${l.replace(/^S\d · /, '')}</button>`).join(' ')}</div>
@@ -746,6 +766,7 @@
       <div class="grp">Billing ${[['api', 'API'], ['sub', 'Subscription']].map(([k, l]) => `<button data-bill="${k}" class="${STATE.billing === k ? 'on' : ''}">${l}</button>`).join(' ')}</div>`
     ctl.querySelectorAll('[data-desk]').forEach((b) => { b.onclick = () => { STATE.desk = localStorage.m4Desk = b.dataset.desk; build() } })
     ctl.querySelectorAll('[data-term]').forEach((b) => { b.onclick = () => { STATE.term = localStorage.m4Term = b.dataset.term; build() } })
+    ctl.querySelectorAll('[data-mem]').forEach((b) => { b.onclick = () => { STATE.memPal = localStorage.m4MemPal = b.dataset.mem; build() } })
     ctl.querySelectorAll('[data-sanim]').forEach((b) => { b.onclick = () => { STATE.savedAnim = localStorage.m4SavedAnim = b.dataset.sanim; build() } })
     ctl.querySelectorAll('[data-danim]').forEach((b) => { b.onclick = () => { STATE.distAnim = localStorage.m4DistAnim = b.dataset.danim; build() } })
     ctl.querySelectorAll('[data-saved]').forEach((b) => { b.onclick = () => { STATE.savedUI = localStorage.m4Saved = b.dataset.saved; build() } })
@@ -766,6 +787,25 @@
       pair.append(dc, tc); block.append(pair); main.append(block)
       views.push({ pane, P:PD }, { tf, P:PT })
     }
+
+    const mp = document.getElementById('mempals'); mp.innerHTML = ''
+    for (const [k, v] of Object.entries(MEM_PALETTES)) {
+      const lab = document.createElement('div'); lab.className = 'lab'; lab.innerHTML = `<b>${v.name}</b>${k === STATE.memPal ? 'in use' : ''}`
+      const pane = document.createElement('div'); pane.className = 'mpane'; pane.style.cssText = `background:${PD.bg};border-color:${PD.line};color:${PD.dim};padding:12px 18px 10px`
+      const bw = document.createElement('div'); bw.className = 'ml'
+      const b = document.createElement('span'); b.className = 'mbar'; b.innerHTML = '<canvas></canvas>'; b.__dist = true; b.__parts = (P) => splitParts(P, k)
+      bw.append(b); pane.append(bw)
+      const key = document.createElement('div'); key.className = 'ml'; key.style.cssText += ';gap:16px;margin-top:6px;flex-wrap:wrap'
+      for (const [id, l] of [['messages', 'Messages'], ['mcp', 'MCP tools'], ['skills', 'Skills'], ['system', 'System prompt'], ['tools', 'System tools'], ['memory', 'Memory files']]) {
+        const it = document.createElement('span'); it.style.cssText = 'display:inline-flex;align-items:center;gap:6px'
+        it.innerHTML = `<i style="width:10px;height:10px;border-radius:2px;background:${memColor(id, PD, k)};display:inline-block"></i><span style="color:${PD.faint}">${l}</span>`
+        key.append(it)
+      }
+      pane.append(key)
+      const why = document.createElement('div'); why.className = 'why'; why.innerHTML = `${v.note}<br><button data-usepal="${k}" style="margin-top:6px;font:inherit;color:var(--fg);background:#1f2028;border:1px solid #3a3d4b;border-radius:6px;padding:2px 9px;cursor:pointer">Use ${v.name}</button>`
+      mp.append(lab, pane, why); views.push({ pane, P:PD })
+    }
+    mp.querySelectorAll('[data-usepal]').forEach((b) => { b.onclick = () => { STATE.memPal = localStorage.m4MemPal = b.dataset.usepal; build() } })
 
     const sv = document.getElementById('savedui'); sv.innerHTML = ''
     const SAVED_WHY = {
