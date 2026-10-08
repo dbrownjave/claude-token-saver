@@ -1294,7 +1294,9 @@ function drawContextPane(ui, view, o) {
   const kids = (a) => a.filter(Boolean)
   const row = (props, children) => h(Box, { flexDirection: 'row', ...props }, ...kids(children))
   const col = (props, children) => h(Box, { flexDirection: 'column', ...props }, ...kids(children))
-  const t = (s, color, extra) => h(Text, color ? { color, ...extra } : extra || null, s)
+  // Desktop: theme names come out as one light grey there, so pass the app's own colour values; and plain spaces
+  // collapse between pieces, so use no-break spaces. The terminal keeps theme names (it resolves them per theme).
+  const t = (s, color, extra) => h(Text, color ? { color:term ? color : ui.hex(color), ...extra } : extra || null, term ? s : nbsp(s))
   const grow = () => h(Box, { flexGrow: 1 })
   const num = (s, color, w) => h(Box, { width: w, flexShrink: 0, justifyContent: 'flex-end' }, t(s, color))
   const fit = (child) => h(Box, { flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, child)
@@ -1687,8 +1689,10 @@ async function openContextPane($) {
       await rollMonth($)
       return true
     }
-  } catch {
-    /* no panes on this surface */
+    // not placed: say why, instead of a button that does nothing
+    try { $.ui.toast(`Context pane not shown: ${opened.reason || 'the window is too narrow'}. Try /tokens.`, { timeoutMs: 8000 }) } catch { /* no UI */ }
+  } catch (err) {
+    try { $.ui.toast(`Context pane could not open: ${err && err.message ? err.message : String(err)}`, { timeoutMs: 8000 }) } catch { /* no UI */ }
   }
   return false
 }
@@ -1705,6 +1709,22 @@ async function bandUsage($, now) {
 }
 
 /** The band's cache words: the pane's sentence, short. */
+/** Spaces at the ends of a text piece collapse on the desktop; no-break spaces keep the gaps. */
+function nbsp(s) {
+  return typeof s === 'string' ? s.replace(/^ +| +$/g, (m) => '\u00a0'.repeat(m.length)) : s
+}
+
+/** The band's second line, past a mark: what to do now, in the pane's words. */
+function bandHint(pct, clock) {
+  const hit = [...levels].filter((l) => Number(l.pct) <= pct).sort((a, b) => b.pct - a.pct)[0]
+  if (!hit) return ''
+  const warm = clock && clock.known && clock.warm
+  const left = warm ? ` (${mins(clock.leftMs)}m left)` : ''
+  if (hit.id === 'compact') return warm ? `Past your compact mark (${hit.pct}%): Compact now, while the cache is warm${left}` : `Past your compact mark (${hit.pct}%): Clear, since Compact would pay for everything again`
+  if (hit.id === 'handoff') return `Past your handoff mark (${hit.pct}%): write a handoff, then Clear`
+  return `Past your ${hit.id} mark (${hit.pct}%): note decisions as you go`
+}
+
 function bandSentence(c) {
   if (!c.known) return [['No response yet', 'inactive']]
   if (!c.warm) return [['Cache cold: next message re-caches ', 'inactive'], [c.amount, 'text']]
@@ -2299,7 +2319,7 @@ export function register(on, options = {}) {
         const view = contextView(await bandUsage($, now), ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
         view.compactPct = null                                   // no breakdown here: marks only
         const c = view.cache
-        const t = (str, color) => h(Text, color ? { color } : null, str)
+        const t = (str, color) => h(Text, color ? { color:term ? color : ui.hex(color) } : null, term ? str : nbsp(str))
         const pctText = view.window ? `${view.pct}%` : fmtK(view.used)
         const buttons = [
           h(Button, { key: 'band-open', label: '⌄', plain: true, onPress: () => openContextPane($) }), t(' '),
@@ -2326,8 +2346,8 @@ export function register(on, options = {}) {
         row.push(t(' · ', 'inactive'), t(view.savings.short, 'inactive'), h(Box, { flexGrow: 1 }), t(' '), ...buttons)
         children.push(h(Box, { flexDirection: 'row', alignItems: 'center' }, ...row.filter(Boolean)))
         if (compactHint) {
-          const hint = hintFor(view.pct, clock)
-          if (hint) children.push(h(Text, { color: 'inactive', wrap: 'truncate' }, cap1(hint)))
+          const hint = bandHint(view.pct, clock)
+          if (hint) children.push(h(Text, { color: term ? 'inactive' : ui.hex('inactive'), wrap: 'truncate' }, hint))
         }
       } catch {
         /* usage unavailable: progress rows still draw */

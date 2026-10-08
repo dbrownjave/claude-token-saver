@@ -28,19 +28,19 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await s.result
 
     const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface, component: 'AbovePrompt', props: BAND as any })
-    expect(await ui.find({ text: /^ ?60%$/ })).toBeDefined()
-    expect((await ui.find({ text: /^ ?60%$/ }))?.props.color).toBe('claude')         // past handoff: Claude orange
+    expect(await ui.find({ text: /^[ \u00a0]?60%$/ })).toBeDefined()
+    expect((await ui.find({ text: /^[ \u00a0]?60%$/ }))?.props.color).toBe(surface === 'terminal' ? 'claude' : '#d97757')   // desktop gets the app's own colour value         // past handoff: Claude orange
     if (surface === 'terminal') {
       expect(await ui.find({ text: /^Warm 5m$/ })).toBeDefined()
       expect(await ui.find({ text: /^Reuses 120k$/ })).toBeDefined()
       expect(await ui.find({ type: 'Raster', key: 'ctx-bar' })).toBeDefined()
     } else {
-      expect(await ui.find({ text: /^Cache warm: next message reuses $/ })).toBeDefined()
+      expect(await ui.find({ text: /^Cache warm: next message reuses[ \u00a0]$/ })).toBeDefined()
       expect(await ui.find({ text: /^120k$/ })).toBeDefined()
       expect((await ui.findAll({ type: 'Svg' })).length).toBeGreaterThanOrEqual(2)
     }
     expect(await ui.find({ text: /saved$/ })).toBeDefined()
-    expect(await ui.find({ text: /^Past your 60% \(handoff\)/ })).toBeDefined()     // the hint, on its own line
+    expect(await ui.find({ text: /^Past your handoff mark \(60%\)/ })).toBeDefined()     // the hint, on its own line
     expect(await ui.find({ text: /turn/i })).toBeUndefined()
     const open = await ui.find({ key: 'band-open' }), hide = await ui.find({ key: 'hide' })
     expect(open?.props.label).toBe('⌄')

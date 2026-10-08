@@ -93,7 +93,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ text: /Context window/ })).toBeUndefined()
     expect(await ui.find({ text: /^Context$/ })).toBeDefined()
     expect(await ui.find({ text: /^484k \/ 1M tok$/ })).toBeDefined()
-    expect(await ui.find({ text: /^ \(48%\)$/ })).toBeDefined()
+    expect(await ui.find({ text: /^[ \u00a0]\(48%\)$/ })).toBeDefined()
     expect((await ui.find({ key: 'ctx-expand' }))?.props.label).toBe('⌄')
     expect(await ui.find({ text: /^0 saved$/ })).toBeDefined()
     expect(await ui.find({ text: /No response yet: the cache clock starts after the first reply/ })).toBeDefined()
@@ -170,9 +170,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await turn($)
 
     let ui: any = await mount($, surface)
-    expect(await ui.find({ text: /^Cache warm: next message reuses $/ })).toBeDefined()
+    expect(await ui.find({ text: /^Cache warm: next message reuses[ \u00a0]$/ })).toBeDefined()
     expect(await ui.find({ text: /^800k$/ })).toBeDefined()
-    expect(await ui.find({ text: / · 5m left$/ })).toBeDefined()
+    expect(await ui.find({ text: /[ \u00a0]· 5m left$/ })).toBeDefined()
     expect((await ui.find({ key: 'ctx-compact' }))?.props.variant).toBe('primary')   // past compact, cache warm
     expect((await ui.find({ key: 'ctx-clear' }))?.props.variant).toBeUndefined()
     if (surface === 'terminal') expect(await ui.find({ text: /^Warm 5m$/ })).toBeDefined()
@@ -185,7 +185,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await clock.advance(10 * MIN)
     await ui.unmount()
     ui = await mount($, surface)
-    expect(await ui.find({ text: /^Cache cold: next message re-caches $/ })).toBeDefined()
+    expect(await ui.find({ text: /^Cache cold: next message re-caches[ \u00a0]$/ })).toBeDefined()
     const compact = await ui.find({ key: 'ctx-compact' })
     expect(compact?.props.variant).toBeUndefined()                // cold: Compact would re-cache everything
     expect(compact?.props.dimColor).toBe(true)
@@ -206,7 +206,7 @@ test('context pane counts context growth per message and says how many messages 
   let ui: any = await mount($, 'terminal', PANE80)
   await ui.press({ key: 'ctx-expand' })
   expect(await ui.find({ text: /^At 60%$/ })).toBeDefined()        // no growth measured yet: no message estimate
-  expect(await ui.find({ text: /^ · 20k to go$/ })).toBeDefined()
+  expect(await ui.find({ text: /^[ \u00a0]· 20k to go$/ })).toBeDefined()
 
   await turn($, () => { ctx.tokens = 106_000; ctx.percent = 53 })
   await turn($, () => { ctx.tokens = 112_000; ctx.percent = 56 })
@@ -214,7 +214,7 @@ test('context pane counts context growth per message and says how many messages 
   await ui.unmount()
   ui = await mount($, 'terminal', PANE80)
   expect(await ui.find({ text: /^In ≈2 messages$/ })).toBeDefined()  // 8k to 60% at 6k a message
-  expect(await ui.find({ text: /^ · 8k to go$/ })).toBeDefined()
+  expect(await ui.find({ text: /^[ \u00a0]· 8k to go$/ })).toBeDefined()
   expect(await ui.find({ text: /^Runway 80%$/ })).toBeDefined()
 })
 
@@ -222,7 +222,7 @@ test('context pane without a breakdown falls back to one Used row and no groups'
   setup(on, () => ({ startedAt: NOW, context: { tokens: 120_000, window: 200_000, percent: 60 }, rateLimits: [] }))
   const ui: any = await mount($, 'desktop')
   expect(await ui.find({ text: /^120k \/ 200k tok$/ })).toBeDefined()
-  expect(await ui.find({ text: /^ \(60%\)$/ })).toBeDefined()
+  expect(await ui.find({ text: /^[ \u00a0]\(60%\)$/ })).toBeDefined()
   await ui.press({ key: 'ctx-expand' })
   expect(await ui.find({ text: /^Used$/ })).toBeDefined()
   expect(await ui.find({ text: /^Free space$/ })).toBeDefined()
@@ -238,7 +238,7 @@ test('context pane on a subscription: the five-hour window card, and never a dol
   await ui.press({ key: 'ctx-expand' })
   expect(await ui.find({ text: /^Current session$/ })).toBeDefined()
   expect(await ui.find({ text: /^Usage 40%$/ })).toBeDefined()
-  expect(await ui.find({ text: /^ · Time 80%$/ })).toBeDefined()                    // reset in 1 h of a 5 h window
+  expect(await ui.find({ text: /^[ \u00a0]· Time 80%$/ })).toBeDefined()                    // reset in 1 h of a 5 h window
   expect(await ui.find({ text: /^Resets in 1h 0m$/ })).toBeDefined()
   await ui.press({ key: 'ctx-receipt' })
   expect(await ui.find({ text: /Subscription: window maths appears once the 5-hour window moves/ })).toBeDefined()
@@ -254,7 +254,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.press({ key: 'ctx-explain' })
     expect(await ui.find({ text: /^Explain this pane$/ })).toBeDefined()
     expect(await ui.find({ text: /^Live values, this session$/ })).toBeDefined()
-    const one = surface === 'terminal' ? /^¹ $/ : /^① $/, five = surface === 'terminal' ? /^⁵ $/ : /^⑤ $/
+    const one = surface === 'terminal' ? /^¹[ \u00a0]$/ : /^①[ \u00a0]$/, five = surface === 'terminal' ? /^⁵[ \u00a0]$/ : /^⑤[ \u00a0]$/
     expect(await ui.find({ text: one })).toBeDefined()
     expect(await ui.find({ text: five })).toBeDefined()
     expect(await ui.find({ text: /Warm, 5m left: your next message reuses 484k \(≈ \$0\.15 instead of \$1\.81\)\./ })).toBeDefined()
@@ -270,8 +270,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ text: /^Glossary$/, type: 'Text' })).toBeDefined()
     expect(await ui.find({ text: /^Explain this pane$/ })).toBeUndefined()
     const focused = await ui.find({ text: /^Prompt cache$/ })
-    expect(focused?.props.color).toBe('claude')
-    expect(await ui.find({ text: /^▸ $/ })).toBeDefined()
+    expect(focused?.props.color).toBe(surface === 'terminal' ? 'claude' : '#d97757')   // desktop gets the app's own colour value
+    expect(await ui.find({ text: /^▸[ \u00a0]$/ })).toBeDefined()
     expect(await ui.find({ text: /^Basics$/ })).toBeDefined()
     expect(await ui.find({ text: /undefined|NaN/ })).toBeUndefined()
     await ui.press({ key: 'ctx-glossary-back' })
