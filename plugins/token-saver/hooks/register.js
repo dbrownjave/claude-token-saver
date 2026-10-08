@@ -623,6 +623,8 @@ let ctxLoading = null
 let ctxBusy = false
 let ctxMsg = ''
 let ctxPaneOpen = false
+let ctxExpanded = false
+const SEG = { messages: '#4a7fe0', tools: '#d9792e', files: '#5aa05a', system: '#c9a227', buffer: '#6a6a70', free: '#2e2e33' }
 
 /** 484000 → "484k", 1000000 → "1M", 1500000 → "1.5M". */
 function fmtK(n) {
@@ -632,7 +634,7 @@ function fmtK(n) {
     const s = m >= 10 ? String(Math.round(m)) : m.toFixed(1).replace(/\.0$/, '')
     return s + 'M'
   }
-  if (n >= 1000) return Math.round(n / 1000) + 'k'
+  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k'
   return String(Math.round(n))
 }
 
@@ -671,6 +673,9 @@ function contextView(usage, ttl, usageLast, clock, stats) {
     ? [['System', g.system], ['Tools', g.tools], ['Files', g.files], ['Messages', g.messages]].filter(([, n]) => n > 0).map(([label, tokens]) => ({ label, tokens }))
     : [{ label: 'Used', tokens: used }]
   const free = g ? g.free : Math.max(0, measure - used)
+  const segments = (g
+    ? [['messages', g.messages], ['tools', g.tools], ['files', g.files], ['system', g.system], ['buffer', g.buffer]]
+    : [['messages', used]]).filter(([, n]) => n > 0).map(([id, tokens]) => ({ id, tokens, frac: Math.max(0, Math.min(1, tokens / measure)), color: SEG[id] }))
   const compactOn = !!(b && b.isAutoCompactEnabled && Number.isFinite(b.autoCompactThreshold) && b.autoCompactThreshold > 0)
   const compactPct = compactOn ? pct100((100 * b.autoCompactThreshold) / measure) : null
   const nextMark = levels.map((l) => ({ pct: Number(l.pct), id: l.id })).filter((l) => l.pct > pct).sort((x, y) => x.pct - y.pct)[0] || null
@@ -699,7 +704,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   return {
     hasData: !!usage, pct, used, window, measure, state,
     header: { usedText: window ? `${fmtK(used)} / ${fmtK(window)} (${pct}%)` : `${fmtK(used)} (${pct}%)`, compactText: compactPct === null ? '' : `Compact at ${compactPct}%` },
-    marks, legend, free, nextMark, compactPct, cache, savedStrong, savedRest, hint,
+    marks, legend, free, segments, nextMark, compactPct, cache, savedStrong, savedRest, hint,
   }
 }
 
@@ -712,6 +717,21 @@ function invalidate($) {
 }
 
 /** The pane's figures: one usage call with the summary breakdown (never 'full': that sends token-count requests), cached 10 s. */
+/** The context window bar: one rounded track, a rect per category, the free space as the track. */
+function stackedBarSvg(segments, width, height = 8) {
+  const W = Math.max(60, Math.round(width)), H = height
+  let x = 0, rects = ''
+  for (const sg of segments) { const w = sg.frac * W; if (w >= 0.5) rects += `<rect x="${x.toFixed(1)}" width="${w.toFixed(1)}" height="${H}" fill="${sg.color}"/>`; x += w }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs><clipPath id="cstack"><rect width="${W}" height="${H}" rx="${H / 2}"/></clipPath></defs><rect width="${W}" height="${H}" rx="${H / 2}" fill="${SEG.free}"/><g clip-path="url(#cstack)">${rects}</g></svg>`
+}
+function stackedBarText(h, Text, segments, cells) {
+  const parts = []
+  let used = 0
+  for (const sg of segments) { const n = Math.round(sg.frac * cells); if (n > 0) { parts.push(h(Text, { color: sg.color }, '█'.repeat(n))); used += n } }
+  if (cells - used > 0) parts.push(h(Text, { color: '#3a3a40' }, '░'.repeat(cells - used)))
+  return parts
+}
+
 /** The dialog's cache bar: a rounded track, the fill a blue → grey → orange gradient. */
 function gradientBarSvg(fill, width, height = 10, id = 'g') {
   const W = Math.max(40, Math.round(width)), H = height, f = Math.max(0, Math.min(1, fill)) * W
@@ -1218,23 +1238,26 @@ export function register(on, options = {}) {
         ? h(Svg, { source: progressSvg(rowObj, cells * PX, marks), alt, height: BAR_H })
         : row({}, progressTrackText(rowObj, cells, h, Text, Raster, marks))
 
-    // Header: Context · 484k / 1M (48%) · [our cells, compact tick, next mark] · Compact at 97%
-    const left = 'Context', mid = view.header.usedText, right = view.header.compactText
-    const barCols = Math.max(12, W - left.length - mid.length - (right ? right.length + 2 : 0) - 6)
-    const ctxRow = { id: 'context', label: 'Context', stage: `${view.pct}%`, step: 0, total: 0, state: view.state, live: true, plain: true, target: view.pct / 100, shown: view.pct / 100, note: '' }
-    const header = row({ alignItems: 'center', gap: 1 }, [
-      t(left, { bold: true, color: CTX.heading }),
-      sec(mid),
-      bar(ctxRow, barCols, view.marks, `Context ${view.pct}%`),
-      ...(right ? [dim(right)] : []),
+    // Collapsed: ◔ Context window … 818.6k / 1M (82%) ›   then the stacked bar
+    const headline = row({ alignItems: 'center', gap: 1 }, [
+      t('◔ ', { color: CTX.secondary }),
+      t('Context window', { bold: true, color: CTX.heading }),
+      h(Box, { flexGrow: 1 }),
+      sec(view.header.usedText),
+      h(Button, { key: 'ctx-expand', label: ctxExpanded ? '⌄' : '›', plain: true, hotkey: 'e', onPress: () => { ctxExpanded = !ctxExpanded; invalidate($) } }),
     ])
+    const barCols = Math.max(12, W - 4)
+    const stacked = Svg
+      ? h(Svg, { source: stackedBarSvg(view.segments, barCols * PX, 8), alt: `Context ${view.pct}%`, height: 8 })
+      : row({}, stackedBarText(h, Text, view.segments, barCols))
+    if (!ctxExpanded) return col({ gap: 0 }, [headline, stacked, ...(ctxMsg ? [dim(ctxMsg)] : [])])
+
     const legend = row({}, [
-      ...view.legend.flatMap((s, i) => [...(i ? [dim(' · ')] : []), t(`${s.label} `, { color: CTX.legend }), t(fmtK(s.tokens), { color: CTX.legend })]),
+      ...view.legend.flatMap((s, i) => [...(i ? [dim(' · ')] : []), t('● ', { color: SEG[s.label.toLowerCase()] || CTX.dim }), t(`${s.label} ${fmtK(s.tokens)}`, { color: CTX.legend })]),
       dim(`   Free ${fmtK(view.free)}`),
+      ...(view.header.compactText ? [dim(`   ${view.header.compactText}`)] : []),
       ...(view.hasData ? [] : [dim('   figures appear after the first response')]),
     ])
-
-    // Two cards: the cache clock, and what the pack saved this session
     const half = Math.max(24, Math.floor((W - 2) / 2))
     const cacheBar = Svg
       ? h(Svg, { source: gradientBarSvg(view.cache.fill, (half - 2) * PX, 10, 'cache'), alt: `Cache ${view.cache.accent}`, height: 10 })
@@ -1261,7 +1284,8 @@ export function register(on, options = {}) {
       h(Button, { key: 'ctx-later', label: 'Later', hotkey: 'l', role: 'dismiss', onPress: async () => { ctxPaneOpen = false; try { await $.ui.close({ id: CONTEXT_PANE }) } catch { /* closed */ } } }),
     ])
     return col({ gap: 0 }, [
-      header,
+      headline,
+      stacked,
       legend,
       t(' '),
       row({ gap: 2 }, [cacheCard, savedCard]),

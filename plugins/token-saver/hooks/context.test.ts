@@ -47,10 +47,12 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
     expect(usageArgs.length).toBeGreaterThan(0)
     expect(usageArgs[0].breakdown).toBe('summary')          // never 'full'
-    expect(await ui.find({ text: /^Context$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Context window$/ })).toBeDefined()
     expect(await ui.find({ text: /484k \/ 1M \(48%\)/ })).toBeDefined()
+    expect(await ui.find({ key: 'ctx-clear' })).toBeUndefined()        // collapsed: headline + bar only
+    await ui.press({ key: 'ctx-expand' })
     expect(await ui.find({ text: /Compact at 97%/ })).toBeDefined()
-    for (const label of ['System ', 'Tools ', 'Files ', 'Messages ']) expect(await ui.find({ text: new RegExp(`^${label}$`) })).toBeDefined()
+    for (const label of ['System 11k', 'Tools 63k', 'Files 108k', 'Messages 302k']) expect(await ui.find({ text: new RegExp(`^${label}$`) })).toBeDefined()
     expect(await ui.find({ text: /Free 486k/ })).toBeDefined()
     expect(await ui.find({ text: /^Cache$/ })).toBeDefined()
     expect(await ui.find({ text: /^Saved$/ })).toBeDefined()
@@ -61,12 +63,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
     if (surface === 'desktop') {
       const svgs = await ui.findAll({ type: 'Svg' })
-      expect(svgs.length).toBe(2)                            // the context bar and the cache bar
-      expect(String(svgs[0].props.source)).toContain('48%')  // the pill
-      expect(String(svgs[0].props.source)).toContain('#d4d3cf')   // the compact-at tick
+      expect(svgs.length).toBe(2)                            // the stacked bar and the cache bar
+      expect(String(svgs[0].props.source)).toContain('#4a7fe0')   // messages, blue
     } else {
-      expect(await ui.find({ type: 'Raster' })).toBeDefined()
-      expect(await ui.find({ text: / 48% / })).toBeDefined()
+      expect(await ui.find({ text: /█/ })).toBeDefined()
     }
 
     const clear = await ui.find({ key: 'ctx-clear' }), compact = await ui.find({ key: 'ctx-compact' }), later = await ui.find({ key: 'ctx-later' })
@@ -92,7 +92,8 @@ test('context pane without a breakdown falls back to one Used entry and no tick'
   on('ui.close' as any, () => ({ value: undefined }))
   const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'desktop', component: 'Pane', requestId: 'context', props: PANE as any })
   expect(await ui.find({ text: /120k \/ 200k \(60%\)/ })).toBeDefined()
-  expect(await ui.find({ text: /^Used $/ })).toBeDefined()
+  await ui.press({ key: 'ctx-expand' })
+  expect(await ui.find({ text: /^Used 120k$/ })).toBeDefined()
   expect(await ui.find({ text: /Compact at/ })).toBeUndefined()
   expect(await ui.find({ text: /next mark 75% · auto-compact off/ })).toBeDefined()
 })
