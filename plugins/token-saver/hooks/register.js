@@ -732,7 +732,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const headline = mode === 'api' && rate ? usd(totalSavedTok) : `${fmtK(totalSavedTok)} tok`
   const month = saved.month || null
   const savings = {
-    mode, rate, totalTok: totalSavedTok, total: headline, totalWorth: worth(totalSavedTok),
+    mode, rate, totalTok: totalSavedTok, total: headline, totalWorth: mode === 'api' && rate ? `${fmtK(totalSavedTok)} tok` : worth(totalSavedTok),
     month: month && month.tok > totalSavedTok ? (mode === 'api' && rate ? usd(month.tok) : `${fmtK(month.tok)} tok`) : '',
     perTurn: T.turns ? (mode === 'api' && rate ? `${usd(Math.round(totalSavedTok / T.turns))} per turn` : `${fmtK(Math.round(totalSavedTok / T.turns))} tok per turn`) : '',
     lines: [
