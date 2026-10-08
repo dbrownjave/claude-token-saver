@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>token-saver · Context pane · design canvas</title>
+<style>
+:root {
+  --bg:#0b0c10; --board:#121318; --pane:#1b1c23; --line:#2a2c36; --fg:#d4d7e1; --dim:#7b8092; --ink:#f1f2f7;
+  --calm:#7aa2f7; --amber:#e0af68; --orange:#ff9e64; --red:#f7768e;
+  --warm:#73e6ad; --cold:#858591; --track:#2a2a2e; --buffer:#3d4153; --note:#ff4f8b;
+}
+* { box-sizing:border-box }
+body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif }
+.canvas { padding:56px 64px 120px; width:max-content; min-width:100% }
+header.top { max-width:1180px; margin-bottom:48px }
+h1 { font-size:24px; color:var(--ink); margin:0 0 6px; letter-spacing:-.01em }
+h2 { font-size:15px; color:var(--ink); margin:0 0 4px; letter-spacing:.02em; text-transform:uppercase }
+h3 { font-size:12px; color:var(--dim); margin:0 0 10px; font-weight:600; letter-spacing:.06em; text-transform:uppercase }
+p.lede { color:var(--dim); margin:0; max-width:880px }
+.rationale { margin-top:20px; padding:16px 20px; border-left:2px solid var(--amber); background:#16171d; max-width:1180px; color:var(--fg) }
+.rationale b { color:var(--ink) }
+section.board { background:var(--board); border:1px solid var(--line); border-radius:14px; padding:28px 32px 32px; margin-bottom:36px }
+section.board > .sub { color:var(--dim); margin:0 0 24px }
+.pair { display:flex; gap:64px; align-items:flex-start }
+.col { display:flex; flex-direction:column; gap:12px }
+.frame-label { color:var(--dim); font-size:11px; letter-spacing:.05em; text-transform:uppercase }
+.frame-label b { color:var(--fg) }
+.notes { margin:14px 0 0; padding:0; list-style:none; max-width:860px; display:grid; gap:6px }
+.notes li { display:flex; gap:10px; color:var(--fg) }
+.notes li .n { flex:none }
+.n { display:inline-flex; width:18px; height:18px; border-radius:9px; background:var(--note); color:#fff; font:700 10px/18px -apple-system,sans-serif; justify-content:center }
+
+/* ---------- desktop pane: host UI font, one size, Box/Text/Button/Svg only ---------- */
+.dpane { position:relative; width:860px; background:var(--pane); border:1px solid var(--line); border-radius:10px; padding:12px 16px 14px; font-size:13px }
+.dpane .title { display:flex; align-items:center; gap:8px; color:var(--dim); margin-bottom:8px }
+.dpane .title .x { margin-left:auto }
+.dl { position:relative; display:flex; align-items:center; gap:0; min-height:21px; white-space:pre }
+.dl.blank { min-height:10px }
+.dl .sp { flex:1 }
+.dl .col { display:inline-block; width:8%; text-align:right; padding-right:12px; flex-direction:row }
+.dl .barbox { flex:1; height:16px; position:relative }
+.dl .barbox canvas { position:absolute; left:0; top:1px; display:block }
+.dl .barbox .tick { position:absolute; top:1px; width:1.5px; height:14px; background:#c9cede; opacity:.75 }
+.dl .barbox .tick.auto { opacity:.35; width:1px }
+.dl > .n { position:absolute; left:-46px; top:1px }
+.t-b { color:var(--ink); font-weight:650 }
+.t-d { color:var(--dim) }
+.t-n { color:var(--fg) }
+.t-warm { color:var(--warm); font-weight:600 }
+.t-cold { color:var(--cold); font-weight:600 }
+.t-key { color:var(--dim) }
+.t-arrow { color:var(--dim) }
+.dbtn { display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 10px; border-radius:6px; border:1px solid #3a3d4b; color:var(--fg); margin-right:8px }
+.dbtn kbd { font:600 11px ui-monospace,Menlo,monospace; color:var(--dim); border:1px solid #3a3d4b; border-radius:4px; padding:0 4px; line-height:15px }
+.dbtn.primary { background:var(--ink); color:#111; border-color:var(--ink); font-weight:600 }
+.dbtn.primary kbd { color:#555; border-color:#bbb }
+.dbtn.off { color:#545869; border-style:dashed }
+.dbtn.off kbd { color:#454857; border-color:#353846 }
+
+/* ---------- terminal: one monospace size, 80 columns ---------- */
+.tframe { position:relative; font:13px/1.35 "SF Mono",Menlo,Monaco,ui-monospace,monospace; background:#0d0e12; border:1px solid var(--line); border-radius:8px; padding:10px 12px }
+.tframe pre { margin:0; font:inherit; white-space:pre; position:relative }
+.tframe .ruler { color:#3b3e4c }
+.tframe .row { position:relative }
+.tframe .row > .n { position:absolute; left:-46px; top:0; font-family:-apple-system,sans-serif }
+.c-b { color:var(--ink); font-weight:700 }
+.c-d { color:var(--dim) }
+.c-n { color:var(--fg) }
+.c-warm { color:var(--warm); font-weight:700 }
+.c-cold { color:var(--cold); font-weight:700 }
+.c-key { color:var(--dim) }
+.c-arrow { color:var(--dim) }
+.c-btnp { background:var(--ink); color:#111; font-weight:700 }
+.c-btn { color:var(--fg) }
+.c-btnx { color:#4b4f5f }
+.c-border { color:#3f4352 }
+.overflow { outline:2px solid var(--red) }
+.warnbox { color:var(--red); font-family:-apple-system,sans-serif; margin-top:6px }
+
+/* ---------- section 0: the context bar up close ---------- */
+.fctl { display:flex; flex-wrap:wrap; gap:12px 22px; align-items:center; margin:0 0 22px }
+.fctl .grp { display:flex; align-items:center; gap:8px; color:var(--dim) }
+.fctl button { font:inherit; color:var(--fg); background:#1f2028; border:1px solid #3a3d4b; border-radius:6px; padding:3px 10px; cursor:pointer }
+.fctl button.on { background:var(--ink); color:#111; border-color:var(--ink); font-weight:600 }
+.fctl input[type=range] { width:180px; accent-color:#c9cede }
+.fctl output { color:var(--ink); font-variant-numeric:tabular-nums; min-width:44px; display:inline-block }
+.frow { display:grid; grid-template-columns:170px 860px 1fr; gap:10px 28px; align-items:center; margin:0 0 10px }
+.frow .lab { color:var(--dim); text-align:right }
+.frow .lab b { color:var(--fg); display:block }
+.frow .why { color:var(--dim); max-width:420px }
+.frow .why button { margin-top:6px; font:inherit; color:var(--fg); background:#1f2028; border:1px solid #3a3d4b; border-radius:6px; padding:2px 9px; cursor:pointer }
+.frow.picked .lab b { color:var(--warm) }
+.fbar { position:relative; height:16px; width:826px }
+.fbar canvas { position:absolute; left:0; top:1px; display:block }
+.fzoom { background:var(--pane); border:1px solid var(--line); border-radius:10px; padding:14px 16px; width:860px }
+.fzoom canvas { display:block }
+.fterm { font:13px/1.35 "SF Mono",Menlo,Monaco,ui-monospace,monospace; background:#0d0e12; border:1px solid var(--line); border-radius:8px; padding:10px 12px; width:max-content }
+.fterm pre { margin:0; font:inherit; white-space:pre }
+.fsub { color:var(--dim); font-size:11px; letter-spacing:.06em; text-transform:uppercase; margin:26px 0 10px }
+
+/* ---------- section M: mid-session iterations in Claude's theme ---------- */
+.mvar { margin:0 0 44px }
+.mhead { display:flex; gap:10px; align-items:baseline; margin-bottom:6px; color:var(--ink); font-size:14px }
+.mid { background:var(--ink); color:#111; border-radius:4px; padding:0 6px; font-weight:700; font-size:12px }
+.mwhy { margin:0 0 14px; padding-left:18px; color:var(--dim); max-width:1240px }
+.mpane { width:860px; border:1px solid; border-radius:10px; padding:12px 16px 14px; font-size:13px }
+.ml { display:flex; align-items:center; min-height:21px; white-space:pre }
+.mbar { flex:1; height:16px; position:relative } .mbar canvas { position:absolute; left:0; top:1px; display:block }
+.mbtn { display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 10px; border-radius:6px; border:1px solid }
+.mbtn kbd { font:600 11px ui-monospace,Menlo,monospace; border:1px solid; border-radius:4px; padding:0 4px; line-height:15px }
+.mterm { font:13px/1.35 "SF Mono",Menlo,Monaco,ui-monospace,monospace; border:1px solid; border-radius:8px; padding:10px 12px }
+.mterm pre { margin:0; font:inherit; white-space:pre }
+.mnote { color:var(--dim); max-width:1100px }
+.msw { display:inline-block; width:12px; height:12px; border-radius:3px; vertical-align:-2px; margin-right:6px }
+table.mroles { width:1300px }
+
+/* ---------- strips ---------- */
+.strip { display:grid; grid-template-columns:200px 860px 1fr; gap:10px 28px; align-items:center }
+.strip .lab { color:var(--dim); text-align:right }
+.strip .lab b { color:var(--fg); display:block }
+.strip .why { color:var(--dim); max-width:360px }
+.swatches { display:flex; gap:18px; flex-wrap:wrap; margin-top:4px }
+.sw { display:flex; align-items:center; gap:8px; color:var(--dim) }
+.sw i { width:28px; height:12px; border-radius:3px; display:inline-block }
+
+/* ---------- strings table ---------- */
+table.strings { border-collapse:collapse; width:1500px; font-size:12px }
+table.strings th { text-align:left; color:var(--dim); font-weight:600; padding:8px 12px; border-bottom:1px solid var(--line); text-transform:uppercase; letter-spacing:.05em; font-size:11px }
+table.strings td { padding:5px 12px; border-bottom:1px solid #1e2028; vertical-align:top }
+table.strings td.k { color:var(--dim); width:150px }
+table.strings td code { font:12px "SF Mono",Menlo,monospace; color:var(--fg); white-space:pre }
+table.strings tr.grp td { color:var(--ink); font-weight:650; padding-top:16px; border-bottom:1px solid var(--line) }
+</style>
+</head>
+<body>
+<div class="canvas" id="canvas">
+
+<header class="top">
+  <h1>token-saver · Context pane</h1>
+  <p class="lede">Design canvas for <code>/tokens</code>. Desktop frames are drawn at 860 px in the host UI font at one size. Terminal frames are 80 columns: a 1-column border, a 1-column pad and 76 content cells. Each frame is drawn from the same view model, so the strings table at the bottom matches what is drawn. Pink numbers mark annotations, read beside each pair.</p>
+  <div class="rationale">
+    <b>Rationale.</b> The first thing on screen is <b>one number: tokens saved this session</b>, with the estimate in your currency and the real spend beside it. That answers "is this paying for itself" before you read anything else. The context bar sits directly under it because the next question is "how close am I to my next mark". Its colour is the only alarm in the pane, and the tick, knob and "next" text all point to the same threshold. Expanding <b>never moves</b> those two lines: the ledger, cache, "where it goes" and actions are added below them, so your eye does not have to find the number again. The ledger is four lines, each with a bold right-aligned number and a dim label, so the column of numbers can be scanned in one look. The breakdown is cut to at most three rows, and only for categories that come with a command to run. System prompt, system tools and free space never get a row, because you cannot act on them, and they appear only as colour in the split bar. Cut entirely: the four limit cards (they live in <code>/context</code>), per-line dollars (dollars appear once in the headline and once on the month line), hit-rate history, and any legend. <b>What an engineer gains:</b> the answer and the next action are in the top two lines, both in collapsed and expanded, and in every billing mode.
+  </div>
+</header>
+
+<section class="board" id="b-focus">
+  <h2>0 · The context bar, up close</h2>
+  <p class="sub">No knob. The end of the fill burns white-hot and its flames stream left on the wind. Each option is one file in <code>design/fire/</code> following <code>design/fire/README.md</code>. Pick one here and every context bar on this canvas redraws with it. "Play turns" adds a reply's worth of tokens every 1.4 s so you can watch the head run right, change colour at each threshold, and reset on Clear.</p>
+  <div class="fctl" id="fctl"></div>
+  <div id="focus"></div>
+</section>
+
+<section class="board" id="b-mid">
+  <h2>M · Mid-session, iterations in Claude's theme</h2>
+  <p class="sub">The expanded pane mid-session (API billing, 48%, cache warm), drawn in Claude's own colours: the desktop app's tokens on the left, the CLI theme the engine resolves on the right. Switch themes to check each variant in light and colour-blind themes too. The context bar is F1, its heat taken from the theme's threshold colour. Tokens: <code>design/theme/claude-themes.json</code>.</p>
+  <div class="fctl" id="midctl"></div>
+  <div id="mid"></div>
+</section>
+
+<section class="board" id="b-lay">
+  <h2>L · Ten layouts for M4, closed</h2>
+  <p class="sub"><b style="color:var(--ink)">Picked: L5, refined, on its own page: <a href="m4.html" style="color:#9db7ff">design/m4.html</a>.</b></p>
+  <p class="sub">The context bar row is the same in every layout: F1, the percentage in the threshold colour. What moves is everything else: the three actions (Clear, Compact, Later on c, k, l), the two hints (cache dot, saved), and the chevron on e that replaces "More". esc appears once, in the title. Click any chevron to open that layout; the open view is M4's full pane. The theme buttons in section M apply here too.</p>
+  <div id="lay"></div>
+</section>
+
+<section class="board" id="b-collapsed">
+  <h2>1 · Collapsed: API billing, mid-session</h2>
+  <p class="sub">One row and a bar. This is what floats above the prompt. 23 turns, 96k of 200k (48%), past "watch", next mark is "handoff".</p>
+  <div class="pair" id="p-collapsed"></div>
+</section>
+
+<section class="board" id="b-expanded">
+  <h2>2 · Expanded: API billing, mid-session</h2>
+  <p class="sub">The first two lines are identical to collapsed. Everything new is added underneath them.</p>
+  <div class="pair" id="p-expanded"></div>
+</section>
+
+<section class="board" id="b-fresh">
+  <h2>3 · No response yet</h2>
+  <p class="sub">Before the first reply, cache state and session totals are unknown. The month total and the startup load are known, and the startup load is the most useful thing to act on at this point.</p>
+  <div class="pair" id="p-fresh-c"></div>
+  <div style="height:36px"></div>
+  <div class="pair" id="p-fresh-e"></div>
+</section>
+
+<section class="board" id="b-billing">
+  <h2>4 · Headline and month line by billing mode</h2>
+  <p class="sub">Only these two lines change between billing modes. The layout is the same in all of them. No dollar is ever shown on a subscription.</p>
+  <div class="strip" id="s-billing"></div>
+</section>
+
+<section class="board" id="b-thresh">
+  <h2>5 · Threshold ramp, collapsed bar + the action line it drives</h2>
+  <p class="sub">There is one accent family. The bar's colour follows the last threshold you crossed, and the primary button follows the same rule.</p>
+  <div class="strip" id="s-thresh"></div>
+  <div style="height:20px"></div>
+  <h3>Palette</h3>
+  <div class="swatches" id="swatches"></div>
+</section>
+
+<section class="board" id="b-strings">
+  <h2>6 · Exact strings</h2>
+  <p class="sub">These are generated from the same model that draws the frames above. <code>‹bar›</code> marks where a bar is drawn. Terminal widths are shown as character counts.</p>
+  <table class="strings" id="strings"></table>
+</section>
+
+</div>
+
+<script>window.FIRE_OPTIONS = []</script>
+<script src="fire/F0.js"></script>
+<script src="fire/F1.js"></script>
+<script src="fire/F2.js"></script>
+<script src="fire/F3.js"></script>
+<script src="fire/F4.js"></script>
+<script src="core.js"></script>
+<script src="boards.js"></script>
+<script src="mid-session.js"></script>
+</body>
+</html>

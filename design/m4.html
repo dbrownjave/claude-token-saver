@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>token-saver · Context pane · M4 (L5 refined)</title>
+<style>
+:root { --bg:#0b0c10; --board:#121318; --line:#2a2c36; --fg:#d4d7e1; --dim:#7b8092; --ink:#f1f2f7; --red:#f7768e; --note:#ff4f8b }
+* { box-sizing:border-box }
+body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif }
+.page { padding:48px 56px 120px; width:max-content; min-width:100% }
+h1 { font-size:22px; color:var(--ink); margin:0 0 6px }
+h2 { font-size:13px; color:var(--ink); margin:0 0 4px; letter-spacing:.04em; text-transform:uppercase }
+a { color:#9db7ff }
+.lede { color:var(--dim); max-width:980px; margin:0 0 18px }
+section.board { background:var(--board); border:1px solid var(--line); border-radius:14px; padding:24px 28px 28px; margin-bottom:30px }
+section.board > .sub { color:var(--dim); margin:0 0 18px; max-width:1200px }
+.fctl { display:flex; flex-wrap:wrap; gap:10px 22px; align-items:center; margin:0 0 26px }
+.fctl .grp { display:flex; align-items:center; gap:8px; color:var(--dim) }
+.fctl button { font:inherit; color:var(--fg); background:#1f2028; border:1px solid #3a3d4b; border-radius:6px; padding:3px 10px; cursor:pointer }
+.fctl button.on { background:var(--ink); color:#111; border-color:var(--ink); font-weight:600 }
+.pair { display:flex; gap:56px; align-items:flex-start }
+.col { display:flex; flex-direction:column; gap:10px }
+.frame-label { color:var(--dim); font-size:11px; letter-spacing:.05em; text-transform:uppercase }
+.frame-label b { color:var(--fg) }
+.mpane { width:860px; border:1px solid; border-radius:10px; padding:12px 16px 14px; font-size:13px }
+.ml { display:flex; align-items:center; min-height:21px; white-space:pre }
+.mbar { flex:1; height:16px; position:relative } .mbar canvas { position:absolute; left:0; top:1px; display:block }
+.mbtn { display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 10px; border-radius:6px; border:1px solid }
+.mbtn kbd { font:600 11px ui-monospace,Menlo,monospace; border:1px solid; border-radius:4px; padding:0 4px; line-height:15px }
+.mterm { font:13px/1.35 "SF Mono",Menlo,Monaco,ui-monospace,monospace; border:1px solid; border-radius:8px; padding:10px 12px }
+.mterm pre { margin:0; font:inherit; white-space:pre }
+.overflow { outline:2px solid var(--red) }
+/* M4 uses no bold anywhere: hierarchy is colour alone (text, dim, faint, threshold), so nothing in the pane sets a weight */
+.mpane, .mpane *, .mterm, .mterm * { font-weight:400 !important }
+.warnbox { color:var(--red) }
+.notes { margin:0; padding-left:18px; color:var(--fg); max-width:1200px; display:grid; gap:4px }
+.notes b { color:var(--ink) }
+.strip { display:grid; grid-template-columns:190px 860px 1fr; gap:12px 26px; align-items:center }
+.strip .lab { color:var(--dim); text-align:right } .strip .lab b { color:var(--fg); display:block }
+.strip .why { color:var(--dim); max-width:380px }
+.igrid { display:grid; grid-template-columns:repeat(3, 1fr) 1.25fr; gap:10px }
+.igrid.igh span { color:var(--dim); font-size:11px; letter-spacing:.05em; text-transform:uppercase }
+.icell { border:1px solid; border-radius:8px; padding:8px 12px; white-space:pre; overflow:hidden }
+table.strings { border-collapse:collapse; font-size:12px }
+table.strings th { text-align:left; color:var(--dim); font-weight:600; padding:7px 12px; border-bottom:1px solid var(--line); text-transform:uppercase; letter-spacing:.05em; font-size:11px }
+table.strings td { padding:4px 12px; border-bottom:1px solid #1e2028; vertical-align:top }
+table.strings td.k { color:var(--dim) }
+table.strings code { font:12px "SF Mono",Menlo,monospace; color:var(--fg); white-space:pre }
+table.strings tr.grp td { color:var(--ink); font-weight:650; padding-top:14px }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Context pane · M4, picked layout (L5 refined)</h1>
+  <p class="lede">The layout picked from the ten on the <a href="context-pane-canvas.html#b-lay">canvas, section L</a>, drawn in Claude's own theme.
+  <b>Title:</b> "Context" with the context figures, the percentage in the threshold colour, and the chevron (e) and esc on the right.
+  <b>Body:</b> the F1 bar at full width, with no percentage on it.
+  <b>Bottom:</b> cache and saved on the left, Clear, Compact and Later on the right.</p>
+  <div class="fctl" id="ctl"></div>
+
+  <section class="board">
+    <h2>Closed and open</h2>
+    <p class="sub">Click the chevron in either frame. The open view adds M4's full body under the bar. The title, the bar and the bottom row stay where they are.</p>
+    <div id="main"></div>
+  </section>
+
+  <section class="board">
+    <h2>Saved: its own UI</h2>
+    <p class="sub">Saved is the plugin's headline, so it leaves the card row and gets its own block, directly under the main bar in the open pane. The other three cards become a row of three. Five variations with their terminal versions. "Saved UI" in the controls puts one into the open pane above.</p>
+    <div id="savedui"></div>
+  </section>
+
+  <section class="board">
+    <h2>The closed pane's cache indicator</h2>
+    <p class="sub">The small mark before "warm 47m". Six variations, each shown warm, nearly expired and cold, plus its terminal glyphs. "Cache indicator" in the controls applies one to the panes above.</p>
+    <div class="strip" id="indicators" style="grid-template-columns:190px 980px 1fr"></div>
+  </section>
+
+  <section class="board">
+    <h2>Card bars: their own look, or the main bar's?</h2>
+    <p class="sub">The same four cards with four bar styles. The main bar stays F1 in every case. "Card bars" in the controls applies a style to the panes above.</p>
+    <div class="strip" id="barstyles"></div>
+  </section>
+
+  <section class="board">
+    <h2>The closed pane in each state</h2>
+    <p class="sub">The same three rows across the session. The title's percentage and the bar take the threshold colour, the cache hint changes with warmth, and the highlighted action follows what to do next.</p>
+    <div class="strip" id="states"></div>
+  </section>
+
+  <section class="board">
+    <h2>What changed from L5, and the rules it keeps</h2>
+    <ul class="notes" id="notes"></ul>
+  </section>
+
+  <section class="board">
+    <h2>Exact strings</h2>
+    <p class="sub">Terminal strings at 80 columns, the title riding in the top border. <code>‹bar›</code> is the F1 raster; <code>⟷</code> is the flexible gap.</p>
+    <table class="strings" id="strings"></table>
+  </section>
+</div>
+
+<script>window.FIRE_OPTIONS = []</script>
+<script src="fire/F1.js"></script>
+<script src="core.js?v=28"></script>
+<script src="mid-session.js?v=28"></script>
+<script src="m4.js?v=28"></script>
+</body>
+</html>
