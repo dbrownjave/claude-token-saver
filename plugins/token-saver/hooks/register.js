@@ -1260,6 +1260,7 @@ export function register(on, options = {}) {
   })
 
   on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => {
+    try {
     const el = $.ui.resolve(e)
     const { Box, Text, Button } = el
     const Svg = e.surface === 'terminal' ? undefined : el.Svg
@@ -1293,24 +1294,24 @@ export function register(on, options = {}) {
     const stacked = bar(ctxRow, barCols, view.marks, `Context ${view.pct}%`)
     if (!ctxExpanded) return col({ gap: 0 }, [headline, stacked, ...(ctxMsg ? [dim(ctxMsg)] : [])])
 
-    // Expanded: the cells recolour by category, the cache bar sits under it, the figures to the right
-    const leftCols = Math.max(24, Math.floor(W * 0.58))
+    // Expanded: the cells recolour by category, the cache bar under it, then the figures in two text columns
     const splitRow = { ...ctxRow, id: 'context-split', segments: view.segments }
     const cacheRow = { id: 'cache', label: 'Cache', stage: view.cache.pill || '', step: 0, total: 0, state: view.cache.warm ? 'running' : 'cold', plain: true, target: view.cache.fill, shown: view.cache.fill, note: '', settledAt: 0 }
-    const bars = col({ width: leftCols, gap: 0 }, [
-      bar(splitRow, leftCols - 1, view.marks, `Context ${view.pct}% by category`),
-      row({}, [t('Cache', { bold: true, color: CTX.heading }), t(' · ', { color: CTX.dim }), t(view.cache.accent, { bold: true, color: view.cache.warm ? CTX.warm : CTX.dim })]),
-      ...(view.cache.known ? [bar(cacheRow, leftCols - 1, [], `Cache ${view.cache.accent}`)] : [dim(view.cache.strong)]),
+    const bars = col({ gap: 0 }, [
+      bar(splitRow, barCols, view.marks, `Context ${view.pct}% by category`),
+      row({}, [t('Cache', { bold: true, color: CTX.heading }), t(' · ', { color: CTX.dim }), t(view.cache.accent, { bold: true, color: view.cache.warm ? CTX.warm : CTX.dim }),
+        dim('   '), t(view.cache.strong, { bold: true, color: CTX.text }), sec(view.cache.rest), dim(` · ${view.cache.foot}`)]),
+      ...(view.cache.known ? [bar(cacheRow, barCols, [], `Cache ${view.cache.accent}`)] : []),
+    ])
+    const leftW = Math.max(20, Math.floor(W * 0.38))
+    const legendCol = col({ width: leftW, gap: 0 }, [
+      ...view.segments.map((sg) => row({}, [t('● ', { color: sg.color }), t(`${sg.id[0].toUpperCase()}${sg.id.slice(1)} `, { color: CTX.legend }), t(fmtK(sg.tokens), { color: CTX.text })])),
+      dim(`Free ${fmtK(view.free)}`),
+      ...(view.header.compactText ? [dim(view.header.compactText)] : []),
     ])
     const stats = col({ flexGrow: 1, gap: 0 }, [
-      ...view.segments.map((sg) => row({}, [t('● ', { color: sg.color }), t(`${sg.id[0].toUpperCase()}${sg.id.slice(1)} `, { color: CTX.legend }), t(fmtK(sg.tokens), { color: CTX.text })])),
-      dim(`Free ${fmtK(view.free)}${view.header.compactText ? ` · ${view.header.compactText.toLowerCase()}` : ''}`),
-      t(' '),
-      row({}, [t(view.cache.strong, { bold: true, color: CTX.text }), sec(view.cache.rest)]),
-      dim(view.cache.foot),
-      t(' '),
       row({}, [t(view.savedStrong, { bold: true, color: CTX.text }), sec(view.savedRest), ...(view.savings.cost ? [dim(` · ${view.savings.cost}`)] : [])]),
-      ...view.savings.lines.map((l) => dim(l)),
+      ...view.savings.lines.map((l) => t(l, { color: CTX.dim, wrap: 'wrap' })),
       ...(view.tips.length ? [t(' '), t('Tips', { bold: true, color: CTX.heading }), ...view.tips.map((tip) => row({}, [t('→ ', { color: CTX.warm }), t(tip, { color: CTX.legend, wrap: 'wrap' })]))] : []),
     ])
     const footer = row({ alignItems: 'center', gap: 1 }, [
@@ -1324,13 +1325,18 @@ export function register(on, options = {}) {
     ])
     return col({ gap: 0 }, [
       headline,
+      bars,
       t(' '),
-      row({ gap: 2 }, [bars, stats]),
+      row({ gap: 2 }, [legendCol, stats]),
       t(' '),
       footer,
       buttons,
       ...(ctxMsg ? [dim(ctxMsg)] : []),
     ])
+    } catch (err) {
+      const { Text } = $.ui.resolve(e)
+      return h(Text, { color: '#e5484d' }, `token-saver: context pane failed: ${err && err.stack ? err.stack.split('\n').slice(0, 2).join(' ') : String(err)}`)
+    }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

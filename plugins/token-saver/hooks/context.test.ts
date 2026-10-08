@@ -51,7 +51,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ text: /484k \/ 1M \(48%\)/ })).toBeDefined()
     expect(await ui.find({ key: 'ctx-clear' })).toBeUndefined()        // collapsed: headline + bar only
     await ui.press({ key: 'ctx-expand' })
-    expect(await ui.find({ text: /compact at 97%/ })).toBeDefined()
+    expect(await ui.find({ text: /compact at 97%/i })).toBeDefined()
     for (const label of ['System ', 'Tools ', 'Files ', 'Messages ']) expect(await ui.find({ text: new RegExp(`^${label}$`) })).toBeDefined()
     expect(await ui.find({ text: /^302k$/ })).toBeDefined()
     expect(await ui.find({ text: /Free 486k/ })).toBeDefined()
