@@ -30,19 +30,38 @@
   const accOf = (u) => ACC[crossed(pctOfUsed(u))]
   const gap = (n = 2) => ({ t:' '.repeat(n) })
   function chev(sc) { return { btn:sc.open ? '▴' : '▾', key:'e', kind:'chev', quiet:true, noKey:true, label:sc.open ? 'Less' : 'More', act:() => { sc.open = !sc.open; build() } } }
+  /* ---------- Explain this pane: "?" in the title marks each part with a number and lists what it is, its live value, and what to do */
+  const EXPLAIN = new Set(['main'])                           // on for the closed frame so the prototype shows itself
+  const explaining = (sc) => EXPLAIN.has(sc.id)
+  const SUP = '⁰¹²³⁴⁵⁶⁷⁸⁹'
+  // a marker: on desktop a placeholder the frame turns into a round badge; in the terminal an orange superscript digit
+  const badge = (n, T) => T === 'term' ? { t:SUP[n] + ' ', role:'brand' } : { t:'\u2063' + n, role:'brand' }
+  const helpBtn = (sc) => ({ btn:'?', key:'?', kind:'key', label:explaining(sc) ? 'Hide the explanation' : 'Explain this pane', act:() => { explaining(sc) ? EXPLAIN.delete(sc.id) : EXPLAIN.add(sc.id); build() } })
   function title(T, sc) {
     const pct = pctOfUsed(sc.used)
-    return [{ t:'Context', role:'faint' }, gap(3), { t:`${fmtK(sc.used)} / ${fmtK(WIN)} tok`, role:'dim' }, { t:` (${pct}%)`, role:accOf(sc.used), b:true },
-      { sp:1 }, chev(sc), ...(T === 'term' ? [] : [gap(), { t:'esc', role:'faint' }])]
+    const ex = explaining(sc)
+    return [{ t:'Context', role:'faint' }, gap(3), ...(ex ? [badge(1, T)] : []), { t:`${fmtK(sc.used)} / ${fmtK(WIN)} tok`, role:'dim' }, { t:` (${pct}%)`, role:accOf(sc.used), b:true },
+      { sp:1 }, helpBtn(sc), gap(T === 'term' ? 1 : 2), chev(sc), ...(T === 'term' ? [] : [gap(), { t:'esc', role:'faint' }])]
   }
   /* the closed pane's cache indicator, in six variations: a small stand-in for the Cache card it opens into */
   const INDICATORS = [['dot', 'Dot'], ['square', 'Square'], ['gradsquare', 'Square, cache gradient'], ['cells', 'Mini cells'], ['ember', 'Mini cells + ember'], ['gauge', 'Gauge']]
+  /* what the cache means for the next message, as the shipped pane says it ("Cache warm: next message reuses 484k from cache") */
+  function cacheSentence(sc) {
+    const c = sc.cache, n = tok1(sc.used || D.used)
+    if (!c.known) return [['No response yet: ', 'faint'], ['the cache clock starts after the first reply', 'faint']]
+    if (!c.warm) return [['Cache cold: ', 'faint'], ['next message re-caches ', 'faint'], [n, 'text']]
+    if (c.left <= 5) return [['Cache cooling: ', 'faint'], [`${c.left}m left to reuse `, 'faint'], [n, 'text'], [' from cache', 'faint']]
+    return [['Cache warm: ', 'faint'], ['next message reuses ', 'faint'], [n, 'text'], [' from cache', 'faint']]
+  }
   function indicator(sc, T, style) {
-    const c = sc.cache, fill = c.known && c.warm ? c.left / (c.ttl || 60) : 0, P = T === 'term' ? null : null
-    const label = !c.known ? 'Cache after 1st reply' : c.warm ? `Warm ${c.left}m` : 'Cold'
-    if (style === 'dot') return [{ t:!c.known || !c.warm ? '○ ' : '● ', role:!c.known || !c.warm ? 'faint' : c.left <= 5 ? 'warn' : 'ok' }, { t:label, role:'faint' }]
+    const c = sc.cache, fill = c.known && c.warm ? c.left / (c.ttl || 60) : 0
+    // desktop: the full sentence (and the minutes when warm); the terminal keeps it short here and puts the sentence in the frame's bottom border
+    const desk = T !== 'term' && sc.used !== undefined
+    const label = desk ? null : !c.known ? 'Cache after 1st reply' : c.warm ? `Warm ${c.left}m` : 'Cold'
+    const tail = desk ? [...cacheSentence(sc).map(([t, role], i) => ({ t:(i ? '' : ' ') + t, role })), ...(c.known && c.warm && c.left > 5 ? [{ t:` · ${c.left}m left`, role:'faint' }] : [])] : [{ t:' ' + label, role:'faint' }]
+    if (style === 'dot') return [{ t:!c.known || !c.warm ? '○' : '●', role:!c.known || !c.warm ? 'faint' : c.left <= 5 ? 'warn' : 'ok' }, ...tail]
     // every other style is drawn by the frame: desktop swaps the marker for an element, the terminal for coloured glyphs
-    return [{ ind:{ style, fill, known:c.known, warm:c.known && c.warm }, t:T === 'term' ? indGlyphs(style, fill, c.known && c.warm).t : '\u2060' }, { t:' ' + label, role:'faint' }]
+    return [{ ind:{ style, fill, known:c.known, warm:c.known && c.warm }, t:T === 'term' ? indGlyphs(style, fill, c.known && c.warm).t : '\u2060' }, ...tail]
   }
   const IND_CELLS = 5
   function indGlyphs(style, fill, warm) {
@@ -83,7 +102,8 @@
     return box
   }
   function hints(sc, T = 'desk', style = STATE.cacheInd) {
-    return [...indicator(sc, T, style), { t:' · ', role:'faint' }, { t:sc.fresh ? '0 saved' : `${fmtK(savedTok)} saved`, role:'faint' }]
+    const ex = explaining(sc)
+    return [...(ex ? [badge(3, T)] : []), ...indicator(sc, T, style), { t:' · ', role:'faint' }, ...(ex ? [badge(4, T)] : []), { t:sc.fresh ? '0 saved' : `${fmtK(savedTok)} saved`, role:'faint' }]
   }
   function actions(sc) {
     const pct = pctOfUsed(sc.used), cold = sc.cache.known && !sc.cache.warm
@@ -160,7 +180,10 @@
     const own = STATE.savedUI !== 'card', all = cards(sc), cs = own ? all.filter((x) => x.title !== 'Saved') : all, parts = ['head', 'bar', 'line', 'foot']
     const grid = T === 'term' ? [cs.slice(0, 2), cs.slice(2)] : [cs]          // 80 columns fit two cards; 860 px fits a row
     const head = !own ? [] : T === 'term' ? [...savedTerm(STATE.savedUI, PALETTE_T(), sc.id).map((r) => ({ ro:'raw', r })), { ro:'gap' }] : [{ ro:'savedblock', ui:STATE.savedUI, key:sc.id }, { ro:'gap' }]
-    const out = [...head, ...grid.flatMap((row, i) => [...(i ? [{ ro:'gap' }] : []), ...parts.map((part) => ({ ro:'cards', pair:row, part }))]), { ro:'sep' }, { ro:'disttitle' }, { ro:'distsub' }, { ro:'bar' }, ...CATS.map(([id, label, n, role, deferred]) => ({ ro:'cat', id, label, n, role, deferred })), { ro:'gap' }]
+    const ex = explaining(sc), mark = (n, label) => ex ? [{ ro:'mark', n, label }] : []
+    if (ex && head.length) head.unshift(...mark(6, 'Saved this session'))
+    const out = [...head, ...mark(7, 'Cards: what is next, keep-warm, cache'), ...grid.flatMap((row, i) => [...(i ? [{ ro:'gap' }] : []), ...parts.map((part) => ({ ro:'cards', pair:row, part }))]), { ro:'sep' }, ...mark(8, 'Claude\u2019s working memory'), { ro:'disttitle' }, { ro:'distsub' }, { ro:'bar' }, ...CATS.map(([id, label, n, role, deferred]) => ({ ro:'cat', id, label, n, role, deferred })), { ro:'gap' }]
+    out.push(...mark(9, 'What is inside each kind, with a button to trim it'))
     for (const g of DRILL) {
       const key = sc.id + ':' + g.id, open = OPEN_GROUPS.has(key)
       out.push({ ro:'group', g:{ label:g.label, value:tok1(g.tok), meta:String(g.count), rows:g.items }, open, key, drill:true })
@@ -178,9 +201,11 @@
     return out
   }
   function lines(T, sc) {
-    const body = [[{ bar:'ctx' }], [...hints(sc, T), { sp:1 }, ...actions(sc)]]
-    if (!sc.open) return body
-    return [body[0], ...readout(sc, T).map((ro) => ({ readout:ro })), [{ blank:1 }], body[1]]
+    const ex = explaining(sc)
+    const body = [[...(ex ? [badge(2, T)] : []), { bar:'ctx' }], [...hints(sc, T), { sp:1 }, ...(ex ? [badge(5, T)] : []), ...actions(sc)]]
+    const tail = ex ? explainRows(sc, T) : []
+    if (!sc.open) return [...body, ...tail]
+    return [body[0], ...readout(sc, T).map((ro) => ({ readout:ro })), [{ blank:1 }], body[1], ...tail]
   }
 
   /* ---------- the cache card: the shipped Context pane's own wording and gradient (register.js CTX.cache) ----------
@@ -230,6 +255,58 @@
   const warmColor = (P) => P.dark ? WARM : M.hex(M.mix(WARM, '#000000', 0.25))
   const gradAt = (f) => { const [a, b, c] = CACHE_GRAD; return f < 0.5 ? M.hex(M.mix(a, b, f / 0.5)) : M.hex(M.mix(b, c, (f - 0.5) / 0.5)) }
 
+  function explainEntries(sc) {
+    const pct = pctOfUsed(sc.used), next = MARKS.find((m) => m.p > pct), c = sc.cache, n = sc.used
+    const warmCost = money(usd(n * 0.1, D)), coldCost = money(usd(n * 1.25, D)), api = isApi()
+    const colour = ['blue (calm)', 'amber (past watch)', 'orange (past handoff)', 'red (past compact)'][crossed(pct)]
+    const left = next ? Math.max(0, WIN * next.p / 100 - n) : 0, msgs = next ? Math.max(1, Math.ceil(left / GROWTH)) : 0
+    const cacheLive = !c.known ? 'No reply yet, so nothing is cached.'
+      : c.warm ? `Warm, ${c.left}m left: your next message reuses ${tok1(n)}${api ? ` (≈ ${warmCost} instead of ${coldCost})` : ' at a tenth of the usage'}.`
+      : `Cold: your next message re-processes ${tok1(n)}${api ? ` (≈ ${coldCost})` : ''}.`
+    const share = Math.round(100 * heroShare())
+    const entries = [
+      [1, 'Context', 'How full Claude\u2019s working memory is: everything it has to read again before it can answer.',
+        `${tok1(n)} of ${tok1(WIN)} tokens (${pct}%).${next ? ` Next mark: ${next.id} at ${next.p}%, about ${msgs} message${msgs === 1 ? '' : 's'} away.` : ''}`,
+        next && next.id === 'handoff' ? 'Before it fills, write a handoff, then Clear.' : 'Keep one task per conversation; Clear when the topic changes.'],
+      [2, 'The bar', 'The same number, drawn. Its colour follows your marks, and the ticks show where they are.',
+        `Now ${colour}. Marks at ${MARKS.map((m) => m.p + '%').join(', ')}; auto-compact at ${AUTO}%.`, ''],
+      [3, 'Cache', 'Anthropic keeps a copy of this conversation for a while. Reusing it costs a tenth; letting it lapse means paying again in full.',
+        cacheLive, c.known && c.warm ? 'Reply before it cools, and avoid switching model or editing CLAUDE.md mid-session.' : 'Clear beats Compact while cold: compacting would pay for everything again.'],
+      [4, 'Saved', 'Tokens the plugin kept off your bill this session.',
+        sc.fresh ? 'Nothing yet: it counts from the first reply.' : `${tok1(savedTok)} tokens${api ? ` ≈ ${usdOf(savedTok)}` : ''}, ${share}% of what you would have sent.`, 'Open the pane (⌄) to see where it came from.'],
+      [5, 'Clear · Compact · Later', 'Clear starts fresh. Compact shrinks the conversation into a summary, cheap only while the cache is warm. Later closes this.',
+        `Recommended now: ${{ c:'Clear', k:'Compact', l:'Later' }[actions(sc).find((b) => b.prim) ? actions(sc).find((b) => b.prim).key : 'l']}.`, ''],
+    ]
+    if (sc.open) entries.push(
+      [6, 'Saved this session', 'Where the saving came from: cache reads, trimmed tool output, and cold compactions that were blocked.',
+        `Cache reads ${tok1(D.save.cacheSaved)} · Trimmed ${tok1(D.save.keptOut)} · Re-cache ${tok1(D.save.vetoTok)}.`, 'Press Receipt for the money, line by line.'],
+      [7, 'The cards', 'What is coming (your next mark), what keeps the cache alive while you are away, and how long it stays warm.',
+        `Runway ${next ? Math.round(100 * (pct - ([...MARKS].reverse().find((m) => m.p <= pct) || { p:0 }).p) / (next.p - ([...MARKS].reverse().find((m) => m.p <= pct) || { p:0 }).p)) : 100}% · ${api ? `Pings ${KEEPWARM.pings} of ${KEEPWARM.cap}` : `Usage ${WINDOW5H.usage}% of the 5-hour window`} · ${c.known && c.warm ? `${c.left}m left` : 'Cold'}.`, ''],
+      [8, 'Claude\u2019s working memory', 'Everything Claude re-reads each time it replies or uses a tool, by kind.',
+        `Biggest: MCP tools ${tok1(SPL.mcp)} (${pct1(SPL.mcp)}), then messages ${tok1(SPL.messages)}.`, 'Smaller memory means cheaper replies and more room before compaction.'],
+      [9, 'Groups', 'What is inside each kind, with a button that trims it.',
+        'Turning off unused MCP servers could save up to 38k each time.', 'Open a group, then press its button.'],
+    )
+    return entries
+  }
+  function explainRows(sc, T) {
+    const rows = [{ readout:{ ro:'sep' } }, { readout:{ ro:'exhead' } }]
+    for (const e of explainEntries(sc)) rows.push(...(T === 'term' ? explainTerm(e).map((r) => ({ readout:{ ro:'raw', r } })) : [{ readout:{ ro:'explain', e } }]))
+    return rows
+  }
+  /* terminal: an entry wraps to 76 cells — "¹ Context  what it is…", then the live value, then "→ what to do" */
+  function explainTerm([n, name, what, live, todo]) {
+    const P = PALETTE_T(), W = M.TW, c = (s, col) => `<span style="color:${col}">${esc(s)}</span>`
+    const wrap = (text, width) => { const out = []; let line = ''; for (const w of text.split(' ')) { if ((line + ' ' + w).trim().length > width) { out.push(line.trim()); line = w } else line += ' ' + w } if (line.trim()) out.push(line.trim()); return out }
+    const out = []
+    const head = `${SUP[n]} ${name}  `, first = wrap(what, W - head.length)
+    out.push({ text:head + first[0], html:c(SUP[n] + ' ', P.brand) + c(name, P.text) + '  ' + c(first[0], P.faint), len:head.length + first[0].length })
+    for (const l of [...first.slice(1).join(' ') ? wrap(first.slice(1).join(' '), W - 3) : []]) out.push({ text:'   ' + l, html:'   ' + c(l, P.faint), len:3 + l.length })
+    for (const l of wrap(live, W - 3)) out.push({ text:'   ' + l, html:'   ' + c(l, P.text), len:3 + l.length })
+    if (todo) wrap('→ ' + todo, W - 3).forEach((l) => out.push({ text:'   ' + l, html:'   ' + c(l, P.faint), len:3 + l.length }))
+    return out
+  }
+
   /* desktop: two right-aligned number columns, tokens dim and percent bright, like the /context dialog */
   const COL_V = 84, COL_P = 64
   function roDesk(ro, P, sc) {
@@ -239,6 +316,19 @@
     const grow = () => { const x = document.createElement('span'); x.style.flex = '1'; return x }
     if (ro.ro === 'gap') { row.style.minHeight = '10px'; return row }
     if (ro.ro === 'savedblock') return savedDesk(ro.ui, P, ro.key)
+    if (ro.ro === 'mark') { row.style.marginTop = '4px'; row.append(badgeEl(ro.n, P), txt(' ' + ro.label, P.brand)); return row }
+    if (ro.ro === 'exhead') { row.append(txt('Explain this pane', P.text), grow(), txt('Live values, this session', P.faint)); return row }
+    if (ro.ro === 'explain') {
+      const [n, name, what, live, todo] = ro.e
+      const box = document.createElement('div'); box.style.cssText = 'display:flex;gap:10px;align-items:flex-start;padding:6px 0'
+      const b = badgeEl(n, P); b.style.marginTop = '2px'
+      const body = document.createElement('div'); body.style.cssText = 'flex:1;min-width:0;line-height:1.5'
+      const l1 = document.createElement('div'); l1.append(txt(name, P.text), txt('  ' + what, P.faint))
+      const l2 = document.createElement('div'); l2.append(txt(live, P.text))
+      body.append(l1, l2)
+      if (todo) { const l3 = document.createElement('div'); l3.append(txt('→ ' + todo, P.faint)); body.append(l3) }
+      box.append(b, body); return box
+    }
     if (ro.ro === 'sep') { row.style.cssText += `;min-height:0;height:1px;background:${P.line};margin:12px 0 10px`; return row }
     if (ro.ro === 'disttitle') { row.append(txt('Claude\u2019s working memory', P.text), grow(), txt(`${tok1(D.used)} of ${tok1(WIN)} tok`, P.text)); return row }
     if (ro.ro === 'distsub') { row.style.marginTop = '-2px'; row.append(txt('Re-read every time Claude replies or uses a tool', P.faint)); return row }
@@ -349,6 +439,8 @@
     const W = M.TW
     if (ro.ro === 'gap') return { html:'', text:'', len:0 }
     if (ro.ro === 'raw') return ro.r
+    if (ro.ro === 'mark') { const t = `${SUP[ro.n]} ${ro.label}`; return { html:c(t, P.brand), text:t, len:t.length } }
+    if (ro.ro === 'exhead') { const l = 'Explain this pane', r = 'Live values, this session'; return { html:c(l, P.text) + ' '.repeat(W - l.length - r.length) + c(r, P.faint), text:l, len:W } }
     if (ro.ro === 'distsub') { const l = 'Re-read every time Claude replies or uses a tool'; return { html:c(l, P.faint), text:l, len:l.length } }
     if (ro.ro === 'sep') return { html:c('─'.repeat(W), P.line), text:'─'.repeat(W), len:W }
     if (ro.ro === 'disttitle') { const r = `${tok1(D.used)} of ${tok1(WIN)} tok`, l = 'Claude\u2019s working memory'; return { html:c(l, P.text) + ' '.repeat(W - l.length - r.length) + c(r, P.text), text:l + ' '.repeat(W - l.length - r.length) + r, len:W } }
@@ -434,6 +526,13 @@
     clearTimeout(t.__h); t.__h = setTimeout(() => { t.style.opacity = '0' }, 2200)
   }
 
+  /* a numbered badge: a small orange disc with the number in it */
+  function badgeEl(n, P) {
+    const b = document.createElement('span')
+    b.style.cssText = `display:inline-flex;align-items:center;justify-content:center;flex:none;width:16px;height:16px;border-radius:8px;background:${P.brand};color:${P.bg};font:600 10px/16px -apple-system,Inter,sans-serif;margin-right:6px`
+    b.textContent = n; return b
+  }
+  const badgeify = (r, P) => { for (const x of [...r.querySelectorAll('span')]) { const m = /^\u2063(\d)$/.exec(x.textContent); if (m) x.replaceWith(badgeEl(+m[1], P)) } return r }
   /* a row that may carry the cache indicator: drawn by M.deskRow, then the marker span becomes the element */
   function indRow(L, P) {
     const r = M.deskRow(L, P), g = L.find && L.find((x) => x.ind)
@@ -601,16 +700,16 @@
     const pane = document.createElement('div'); pane.className = 'mpane'
     // one rhythm: the same 10 px above the bar (from the title) and below it (to the next row), inside 14 × 18 px padding
     pane.style.cssText = `background:${P.bg};border-color:${P.line};color:${P.dim};padding:14px 18px 16px`
-    const tr = M.deskRow(title('desk', sc), P); tr.style.marginBottom = `${GAP}px`; pane.append(tr)
+    const tr = badgeify(M.deskRow(title('desk', sc), P), P); tr.style.marginBottom = `${GAP}px`; pane.append(tr)
     // +2 under the bar: the 22 px buttons sit 2 px taller than the title text, so the visible gaps match
-    lines('desk', sc).forEach((L, i) => { const r = L.readout ? roDesk(L.readout, P, sc) : indRow(L, P); if (i === 0) r.style.marginBottom = `${GAP + 2}px`; pane.append(r) })
+    lines('desk', sc).forEach((L, i) => { const r = L.readout ? roDesk(L.readout, P, sc) : badgeify(indRow(L, P), P); if (i === 0) r.style.marginBottom = `${GAP + 2}px`; pane.append(r) })
     pane.__sc = sc
     return pane
   }
   function term(sc, P) {
     const tf = document.createElement('div'); tf.className = 'mterm'; tf.style.cssText = `background:${P.bg};border-color:${P.line}`
     /* the title rides in the top border, the chevron at its right end: ╭─ Context   96k / 200k tok (48%) ──── e ▾ ─╮ */
-    const segs = title('term', sc).filter((g) => !g.sp), at = segs.findIndex((g) => g.kind === 'chev')
+    const segs = title('term', sc).filter((g) => !g.sp), at = segs.findIndex((g) => (g.kind === 'key' && g.key === '?') || g.kind === 'chev')   // ? and the chevron ride at the right end
     const head = segs.slice(0, at), tail = segs.slice(at)
     const len = (a) => a.reduce((n, g) => n + M.segText(g).length, 0)
     const fill = 80 - 3 - len(head) - 2 - len(tail) - 3
@@ -626,7 +725,10 @@
       bars.push(...r.bars)
       html += `<div${r.len > M.TW ? ' class="overflow"' : ''}><span style="color:${P.line}">│ </span>${r.html}<span style="color:${P.line}"> │</span></div>`
     }
-    html += `<div style="color:${P.line}">╰${'─'.repeat(78)}╯</div>`
+    const cs = cacheSentence(sc), csLen = cs.reduce((n, [t]) => n + t.length, 0)
+    html += csLen + 6 <= 80
+      ? `<div><span style="color:${P.line}">╰─ </span>${cs.map(([t, r]) => `<span style="color:${P[r]}">${esc(t)}</span>`).join('')}<span style="color:${P.line}"> ${'─'.repeat(80 - 3 - csLen - 2)}╯</span></div>`
+      : `<div style="color:${P.line}">╰${'─'.repeat(78)}╯</div>`
     tf.innerHTML = `<pre>${html}</pre>`
     tf.__over = over
     tf.__sc = sc; tf.__bars = bars.map((b) => ({ ...b, el:tf.querySelector('#' + b.id) }))
