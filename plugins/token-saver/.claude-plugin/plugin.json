@@ -1,7 +1,7 @@
 {
   "name": "token-saver",
-  "version": "0.3.23",
-  "description": "Token-saver mod: quiet bash, trim output, cache band, /tokens, cold-cache compaction veto, keep-warm pings",
+  "version": "0.3.24",
+  "description": "Token-saver mod: quiet bash, trim output, cache band, /tokens, cold-cache compaction veto, priced model-switch guard, keep-warm pings",
   "author": {
     "name": "token-saver"
   },
@@ -34,6 +34,12 @@
       "type": "boolean",
       "title": "Veto /compact on a cold cache",
       "description": "Manual /compact is refused when the prompt cache has gone cold, with the re-send cost named. Auto-compaction is never blocked. Override once with: /compact force",
+      "default": true
+    },
+    "modelGuard": {
+      "type": "boolean",
+      "title": "Price a model switch",
+      "description": "Switching model mid-session with a warm cache opens one dialog with the real cost (tokens re-cached, dollars or % of the 5-hour window) and three ways out: Switch, One message on the other model, Stay. Cold or small contexts get one toast and go through.",
       "default": true
     },
     "longCacheTtl": {

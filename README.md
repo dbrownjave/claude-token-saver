@@ -73,7 +73,7 @@ Or one session, no marketplace:
 claude --plugin-dir ./plugins/token-saver
 ```
 
-Toggles live on the plugin, not in a settings splice: `quietBash`, `trimOutput`, `cacheBand`, `compactHint`, `compactGuard`, `longCacheTtl`, `keepWarm`, `keepWarmPings`. They show up as rows in `/config`. Disable the whole thing with `/plugin disable token-saver@token-saver`.
+Toggles live on the plugin, not in a settings splice: `quietBash`, `trimOutput`, `cacheBand`, `compactHint`, `compactGuard`, `longCacheTtl`, `keepWarm`, `keepWarmPings`, `modelGuard`. They show up as rows in `/config`. Disable the whole thing with `/plugin disable token-saver@token-saver`.
 
 ### Progress bars (mod only)
 
@@ -102,6 +102,22 @@ A settings hook can only add a note before `/compact`. The mod sits on the compa
 - It stops on the first miss, and it never runs during a turn.
 - It is off on a subscription, which already caches the main thread for an hour; pings there would spend plan quota.
 - `/tokens` and the Context pane book what the pings cost and the re-writes they avoided, so the net can be negative if you stay away.
+
+### Model-switch guard (mod only)
+
+The app's own "Switch model?" dialog has no number in it. The mod sits on the switch (`PreModelSwitch`), which carries the context size, whether the cache is warm, and the engine's own list-price estimate of re-caching that context on the target model:
+
+| Switch | What happens |
+|---|---|
+| cache cold | Goes through. One toast: free, the next message re-reads everything either way. |
+| cache warm, under 20k tokens | Goes through. One toast: cheap, N tokens re-read once. |
+| cache warm, 20k tokens or more | One dialog with the cost (tokens at 1.25× the input price, in dollars at the target model's list price, or as % of the 5-hour window on a subscription) and three buttons: **Switch**, **One message**, **Stay**. |
+| One message | The switch is refused, but the next reply alone goes to the other model. The session stays put, so its warm cache survives every turn after it. The status line under the prompt says so until that turn ends. |
+| Stay | The switch is refused. The Receipt books the cold re-write you did not pay (142k tokens held → 177k at 1.25×), on the same basis as a vetoed compaction. |
+| Switch | Goes through. The Receipt lists the cold re-read as paid, never as a saving. |
+| subagents, SDK and Remote Control switches | Never questioned. |
+
+The Context pane's Cache card carries the same figure before you open the model menu ("Switch model ≈ $0.53", or "cheap", or "free"), priced at this session's own rate; the dialog uses the engine's estimate for the target model. `modelGuard: false` turns the whole guard off.
 
 ## Glossary
 
@@ -295,4 +311,5 @@ Open a **new** Claude Code session and run `/context`. That is the before/after 
 - `trim-output` depends on `updatedToolOutput`, which has been flaky on some 2.1.x builds. `quiet-bash` is the reliable layer.
 - Hooks fail open. If a script throws, the tool still runs.
 - This cannot shrink Anthropic’s bundled system prompt.
+- The model-switch guard answers the engine's `PreModelSwitch` event. If the app still shows its own "Switch model?" dialog first, tick "Don't ask again" there; the mod's priced dialog is the one with the buttons that matter.
 - Uninstall removes **our** hooks, rules, skill, and owned settings keys. Everything else in `settings.json` stays.

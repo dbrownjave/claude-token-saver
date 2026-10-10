@@ -16,6 +16,7 @@ const TAIL = 1500
 const MINUTE = 60 * 1000
 const TTL_SHORT = 5 * MINUTE
 const TTL_LONG = 60 * MINUTE
+const SWITCH_CHEAP = 20_000              // a model switch under this many context tokens gets a toast, not a dialog
 const BAND_TICK = 30 * 1000
 const KEEP_WARM_TICK = 15 * 1000
 const KEEP_WARM_LEAD = 75 * 1000          // the TTL runs from a request's start and a fork takes seconds: ping well before it lapses
@@ -53,7 +54,8 @@ let levels = DEFAULT_LEVELS
 let pythonQuietOn = false
 let bandHidden = false
 let bandSurface = 'terminal'      // where the band last drew: the desktop's native buttons drop a press that spans a redraw
-const totals = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0 }   // this session, from turn.step usage
+const totals = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0, switchHeld: 0, switchPaid: 0, oneShot: 0 }   // this session, from turn.step usage
+let oneShot = null              // { model } while the next main-thread turn goes to another model and the session stays put
 let limitBase = null            // { pct, tokens } when the five-hour window was first seen: tokens per % of window
 let monthSaved = { key: '', tok: 0, usd: 0, sessionTok: 0, sessionUsd: 0 }   // carried in $.store across sessions
 let announcedPct = 0            // highest threshold already toasted this session
@@ -179,6 +181,40 @@ function fmt(n) {
 
 function mins(ms) {
   return Math.max(1, Math.round(ms / MINUTE))
+}
+
+/** 'claude-opus-5-5' → 'Opus 5.5'; an alias or unknown id is shown as given. */
+function modelName(id) {
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d+))?/.exec(String(id || ''))
+  if (!m) return String(id || 'the other model')
+  return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ''}`
+}
+
+/** How this session pays: API dollars, or a subscription's 5-hour window (tokens per % of it, once the window has moved). */
+async function billing($) {
+  let u = null
+  try { u = await $.session.usage() } catch { /* no usage API */ }
+  const priced = !!(u && u.cost && Number.isFinite(u.cost.usd))
+  const five = (u && u.rateLimits || []).find((r) => r.kind === 'five_hour') || null
+  const inputAll = totals.input + totals.cacheRead + totals.cacheWrite
+  const tokPerPct = limitBase && five && five.percentUsed - limitBase.pct >= 1 ? (inputAll - limitBase.tokens) / (five.percentUsed - limitBase.pct) : 0
+  return { priced, tokPerPct }
+}
+
+/** One question, 2-4 labels: `$.ui.ask` where the engine has it, else the AskUserQuestion tool call it stands for. Rejects when dismissed. */
+async function askUser($, question, labels, header) {
+  try {
+    return await $.ui.ask(question, { options: labels, header })
+  } catch (err) {
+    if (!(err instanceof TypeError)) throw err                     // dismissed, or a -p run: the caller's business
+  }
+  // an engine without $.ui.ask: the AskUserQuestion tool call it stands for (the tool's arguments sit beside `tool`)
+  const r = await $.tool.call({ tool: 'AskUserQuestion', questions: [{ question, header, options: labels.map((l) => ({ label: l, description: l })), multiSelect: false }] })
+  if (!r || r.deny) throw new Error((r && r.deny) || 'dismissed')
+  const answers = r.result && r.result.answers
+  const v = answers && (answers[question] !== undefined ? answers[question] : Object.values(answers)[0])
+  if (typeof v !== 'string') throw new Error('dismissed')
+  return v
 }
 
 function sentOf(u) {
@@ -1251,7 +1287,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
 
   // what the pack saved, in the currency you pay in
   const saved = stats || {}
-  const T = saved.totals || { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0 }
+  const T = saved.totals || { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0, switchHeld: 0, switchPaid: 0, oneShot: 0 }
   const limits = (usage && usage.rateLimits) || []
   const five = limits.find((r) => r.kind === 'five_hour') || null
   const hasCost = !!(usage && usage.cost && Number.isFinite(usage.cost.usd))
@@ -1268,8 +1304,9 @@ function contextView(usage, ttl, usageLast, clock, stats) {
     { label: 'Trimmed output', tok: T.keptOut },                                   // ≈ chars ÷ 4, never re-sent
     { label: 'Compactions vetoed', tok: Math.round(T.vetoTokens * 1.25) },         // the 1.25× re-write a cold /compact would have paid
     { label: 'Keep-warm', tok: warmNet },                                          // re-writes avoided, less what the pings cost
+    { label: 'Model switches held', tok: Math.round((T.switchHeld || 0) * 1.25) }, // the cold re-write on the other model that a 'Stay' avoided
   ]
-  const totalTok = Math.max(0, sources[0].tok + sources[1].tok + warmNet)
+  const totalTok = Math.max(0, sources[0].tok + sources[1].tok + warmNet + sources[3].tok)
   const cacheInfo = { read: T.cacheRead, line: T.cacheRead > 0 ? `Prompt cache read ${fmtK(T.cacheRead)} tokens at a tenth of the price — Claude's own, not counted` : '' }
   const share = totalTok > 0 ? totalTok / (totalTok + billedUnits) : 0
   const priced = mode === 'api' && rate > 0
@@ -1285,6 +1322,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const receipt = [
     ...sources.map((s) => ({ label: s.label, tok: fmtK(s.tok), amount: priced ? `≈ ${usd(s.tok)}` : '', role: 'inactive', amountRole: s.tok < 0 ? 'warning' : 'success' })),
     ...(T.cacheRead > 0 ? [{ label: "Prompt cache, Claude's own (not counted)", tok: fmtK(T.cacheRead), amount: '', role: 'inactive', amountRole: 'inactive' }] : []),
+    ...(T.switchPaid > 0 ? [{ label: 'Model switches, cold re-read (not a saving)', tok: fmtK(Math.round(T.switchPaid * 1.25)), amount: priced ? `≈ ${usd(Math.round(T.switchPaid * 1.25))}` : '', role: 'inactive', amountRole: 'inactive' }] : []),
     { rule: true },
     { label: 'Total saved', tok: fmtK(totalTok), amount: priced ? `≈ ${usd(totalTok)}` : '', role: 'text', amountRole: 'success' },
     ...(priced ? [
@@ -1294,7 +1332,19 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   ]
   const note = mode === 'api' ? (Number(saved.rate) ? `At $${Number(saved.rate).toFixed(2)}/M input (your rate)` : rate ? `At ≈$${rate.toFixed(2)}/M input, derived from this session's bill` : 'Set $/M in /config for dollars')
     : mode === 'subscription' ? (tokPerPct > 0 ? 'Subscription: savings shown as window headroom' : 'Subscription: window maths appears once the 5-hour window moves') : 'Tokens only'
-  const savings = { mode, rate, priced, totalTok, share, sources, cacheInfo, right, receipt, note, short: totalTok ? `${fmtK(totalTok)} saved` : '0 saved', spent, hasCost }
+  const oneShotNote = T.oneShot > 0 ? ` · ${T.oneShot} one-off message${T.oneShot === 1 ? '' : 's'} on another model, each paid as one cold read` : ''
+  // What a model switch costs right now: the whole context re-cached on the other model at 1.25× the input price,
+  // priced at this session's own rate (the switch dialog itself has the engine's list-price estimate for the target)
+  const switchUnits = Math.round(used * 1.25)
+  const switchUsd = priced ? usd(switchUnits) : ''
+  const switchPct = !priced && tokPerPct > 0 ? `${Math.max(1, Math.round(switchUnits / tokPerPct))}% of the 5-hour window` : ''
+  const switchCost = !cache.known || !cache.warm
+    ? { verdict: 'free', short: 'Switch model: free', line: 'Switching model now is free: the cache is cold, so the next message re-reads everything either way.' }
+    : used < SWITCH_CHEAP
+      ? { verdict: 'cheap', short: 'Switch model: cheap', line: `Switching model now is cheap: ${fmtK(used)} tokens re-read once.` }
+      : { verdict: 'costly', short: `Switch model ≈ ${switchUsd || switchPct || `${fmtK(switchUnits)} tokens`}`,
+          line: `Switching model now re-caches ${fmtK(used)} tokens at 1.25× the input price${switchUsd ? `, ≈ ${switchUsd} at this session's rate` : switchPct ? `, ≈ ${switchPct}` : ''}.` }
+  const savings = { mode, rate, priced, totalTok, share, sources, cacheInfo, right, receipt, note: note + oneShotNote, short: totalTok ? `${fmtK(totalTok)} saved` : '0 saved', spent, hasCost }
 
   // Claude's working memory, by kind, as /context lists it
   let rows
@@ -1319,7 +1369,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   return {
     hasData: !!usage, pct, used, window, measure, crossed, accent: ACC[crossed], marksAll, nextMark, prevMark, compactPct, handoffPct, compactMarkPct,
     title: { used: window ? `${fmtK(used)} / ${fmtK(window)} (${pct}%)` : `${fmtK(used)} tokens` },
-    cache, savings, five, memory: { rows, parts, title: window ? `${fmtK(used)} of ${fmtK(window)} tokens` : `${fmtK(used)} tokens` }, breakdown: b,
+    cache, savings, switchCost, five, memory: { rows, parts, title: window ? `${fmtK(used)} of ${fmtK(window)} tokens` : `${fmtK(used)} tokens` }, breakdown: b,
   }
 }
 
@@ -1380,7 +1430,8 @@ function billCard(view, now, ttl, keepWarmMax, longTtl) {
 
 function cacheCard(view) {
   const c = view.cache
-  return { title: 'Cache', accent: c.accent, tone: c.warm ? WARM : c.known ? COLD : 'inactive', bar: { fill: c.fill, ink: 'grad' }, strong: c.strong, rest: c.rest, foot: c.foot }
+  return { title: 'Cache', accent: c.accent, tone: c.warm ? WARM : c.known ? COLD : 'inactive', bar: { fill: c.fill, ink: 'grad' }, strong: c.strong, rest: c.rest, foot: c.foot,
+    foot2: c.known && view.switchCost ? view.switchCost.short : undefined }
 }
 
 /** A long name cut to `n` cells: paths keep their tail, names their head. */
@@ -1476,7 +1527,7 @@ function drawContextPane(ui, view, o) {
   // 4. Saved: the headline of the whole plugin
   const sv = view.savings
   const ok = ui.hex('success')
-  const shades = [ok, mixHex(ok, ui.hex('text'), 0.4), mixHex(ok, CACHE_TRACK, 0.5)]
+  const shades = [ok, mixHex(ok, ui.hex('text'), 0.4), mixHex(ok, CACHE_TRACK, 0.5), mixHex(ok, CACHE_TRACK, 0.75)]
   const srcSum = sv.sources.reduce((n, s) => n + s.tok, 0) || 1
   const parts = sv.sources.map((s, i) => ({ f: (sv.share * s.tok) / srcSum, color: shades[i] }))
   const cut = `Cut ${Math.round(sv.share * 100)}% of input`
@@ -1529,6 +1580,7 @@ function drawContextPane(ui, view, o) {
     cardBar(ui, cardKeys[i], geoOf(term, term ? cw : Math.round(cw * PX), 10, 3), cd.bar, o.t, o.cardStyle),
     row({}, [line(cd.strong, 'text'), cd.rest ? line(cd.rest, 'inactive') : null]),
     t(cd.foot, 'inactive', { wrap: 'truncate' }),
+    cd.foot2 ? t(cd.foot2, 'inactive', { wrap: 'truncate' }) : null,
   ])
   const cardRows = []
   for (let i = 0; i < cardList.length; i += perRow) {
@@ -1693,6 +1745,7 @@ function liveNumbers(view, s) {
       : c.warm ? `Warm, ${c.leftMin}m left: your next message reuses ${amt}${priced ? ` (≈ ${warmCost} instead of ${coldCost})` : ''}.`
       : `Cold: your next message re-processes ${amt}${priced ? ` (≈ ${coldCost})` : ''}.`,
     cacheState: !c.known ? 'Not started: the clock begins after the first reply.' : !c.warm ? 'Cold.' : c.cooling ? `Cooling: ${c.leftMin}m left.` : `Warm: ${c.leftMin}m left.`,
+    switchLine: view.switchCost ? view.switchCost.line : '',
     cacheWarm: c.known && c.warm, ttl: ttlMin >= 60 ? 'One hour' : `${ttlMin} minutes`, coldCost, hit: lastUsage ? hitPct(lastUsage) : undefined,
     keepWarmOn: keepWarm.on && s.keepWarmMax > 0, keepWarmWhy: keepWarm.stopped || (s.longTtl ? 'the one-hour cache rarely lapses' : 'turned off in /config'),
     pings: usedPings, pingCap: s.keepWarmMax,
@@ -1733,7 +1786,7 @@ function explainEntries(view, L, open) {
     [2, 'The bar', 'The same number, drawn. Its colour follows your marks, and the ticks show where they are.',
       `Now ${colour}. Marks at ${view.marksAll.map((m) => m.pct + '%').join(', ')}${view.compactPct === null ? '' : `; auto-compact at ${view.compactPct}%`}.`, '', 'marks'],
     [3, 'Cache', 'Anthropic keeps a copy of this conversation for a while. Reusing it costs a tenth; letting it lapse means paying again in full.',
-      live3, c.known && c.warm ? 'Reply before it cools, and avoid switching model or editing CLAUDE.md mid-session.' : 'Clear beats Compact while cold: compacting would pay for everything again.', 'cache'],
+      `${live3}${L.switchLine ? ` ${L.switchLine}` : ''}`, c.known && c.warm ? 'Reply before it cools, and avoid editing CLAUDE.md mid-session.' : 'Clear beats Compact while cold: compacting would pay for everything again.', 'cache'],
     [4, 'Saved', 'Tokens the plugin kept off your bill this session.',
       !c.known && !sv.totalTok ? 'Nothing yet: it counts from the first reply.' : `${L.saved} tokens${L.savedUsd ? ` ≈ ${L.savedUsd}` : ''}, ${L.share}% of what you would have sent.`, 'Press Open on the band to see where it came from.', 'saved'],
     [5, 'Clear · Compact · Later', 'Clear starts fresh. Compact shrinks the conversation into a summary, cheap only while the cache is warm. Later closes this.',
@@ -1783,7 +1836,7 @@ function invalidate($) {
 async function rollMonth($) {
   try {
     const key = `saved:${new Date().toISOString().slice(0, 7)}`
-    const sessionTok = Math.max(0, totals.keptOut + Math.round(totals.vetoTokens * 1.25) + keepWarm.savedTok - keepWarm.costTok)
+    const sessionTok = Math.max(0, totals.keptOut + Math.round(totals.vetoTokens * 1.25) + Math.round(totals.switchHeld * 1.25) + keepWarm.savedTok - keepWarm.costTok)
     const delta = sessionTok - monthSaved.sessionTok
     if (monthSaved.key !== key) { const prev = await $.store.get(key); monthSaved = { key, tok: Number(prev && prev.tok) || 0, usd: 0, sessionTok: 0, sessionUsd: 0 } }
     monthSaved.tok += Math.max(0, delta)
@@ -2017,6 +2070,7 @@ export function register(on, options = {}) {
   const cacheBand = options.cacheBand !== false
   const compactHint = options.compactHint !== false
   const compactGuard = options.compactGuard !== false
+  const modelGuard = options.modelGuard !== false
   const inputPricePerM = Number(options.inputPricePerM) || 0
   const suggestSkills = options.suggestSkills !== false
   const ttl = options.longCacheTtl ? TTL_LONG : TTL_SHORT
@@ -2311,6 +2365,10 @@ export function register(on, options = {}) {
       return await next(e)
     } finally {
       inTurn = false
+      if (oneShot && !e.agentId) {
+        oneShot = null
+        try { $.ui.status(undefined) } catch { /* no UI */ }
+      }
       if (turnStartTokens !== null) {
         const before = turnStartTokens
         turnStartTokens = null
@@ -2326,7 +2384,7 @@ export function register(on, options = {}) {
   })
 
   on('turn.step', async function* ($, e, next) {
-    const result = yield* next(e)
+    const result = yield* next(oneShot && !e.agentId ? { ...e, model: oneShot.model } : e)   // 'One message' from the switch guard
     if (!e.agentId && result && result.usage) {
       const stepAt = await $.clock.now()
       // Kept warm through an idle stretch that would have lapsed, and this request hit: the re-write was avoided
@@ -2402,6 +2460,57 @@ export function register(on, options = {}) {
       }
     }
     return next({ ...e, instructions })
+  })
+
+  /**
+   * Model-switch guard. The engine's own "Switch model?" dialog has no number in it; this event has them all
+   * (context_tokens, prompt_cache_warm, and a list-price estimate of re-caching on the target model):
+   *  - cache cold, or under SWITCH_CHEAP tokens: allowed, one toast says why it is free or cheap
+   *  - warm and large: one dialog with the cost and three ways out — Switch, One message, Stay
+   *  - "One message": only the next main-thread turn goes to the other model; the session stays put, so
+   *    the warm cache survives for every turn after it
+   *  - subagents and headless switches (source 'sdk') are never questioned
+   */
+  on('classic.PreModelSwitch', async ($, e, next) => {
+    if (!modelGuard || e.agent_id || e.source === 'sdk' || !e.to_model || e.to_model === e.from_model) return next(e)
+    const used = Number(e.context_tokens) || 0
+    const from = modelName(e.from_model), to = modelName(e.to_model)
+    const toast = (text) => { try { $.ui.toast(text, { timeoutMs: 6000 }) } catch { /* no UI */ } }
+    if (!e.prompt_cache_warm) {
+      toast(`token-saver: switching to ${to} is free right now. The cache is cold, so the next message re-reads ${fmt(used)} tokens either way.`)
+      return next(e)
+    }
+    if (used < SWITCH_CHEAP) {
+      toast(`token-saver: switching to ${to} is cheap: ${fmt(used)} tokens re-read once.`)
+      return next(e)
+    }
+    const { priced, tokPerPct } = await billing($)
+    const usd = Number(e.estimated_cache_write_usd) || 0
+    const basis = e.pricing === 'catalog' ? `${to}'s list price` : e.pricing === 'configured' ? 'your configured price' : 'the default tier'
+    const pct = tokPerPct > 0 ? Math.max(1, Math.round((used * 1.25) / tokPerPct)) : 0
+    const cost = priced && usd > 0 ? `≈ $${usd.toFixed(2)} at ${basis}` : pct ? `≈ ${pct}% of your 5-hour window` : ''
+    const question =
+      `Switching to ${to} re-caches ${fmt(used)} tokens at 1.25× the input price${cost ? `, ${cost}` : ''}. ` +
+      `One message sends only the next reply to ${to} and keeps ${from}'s cache warm. ` +
+      `Or stay, finish this task here, then /clear and start on ${to}.`
+    let choice = 'Stay'
+    try { choice = await askUser($, question, ['Switch', 'One message', 'Stay'], 'Model') } catch { choice = 'Stay' }
+    const redraw = () => { try { $.ui.invalidate('ui.render') } catch { /* no UI */ } }
+    if (/^switch/i.test(choice)) {
+      totals.switchPaid += used
+      redraw()
+      return next(e)
+    }
+    if (/^one/i.test(choice)) {
+      oneShot = { model: e.to_model }
+      totals.oneShot += 1
+      try { $.ui.status(`Next message on ${to}, then back to ${from}`) } catch { /* no UI */ }
+      redraw()
+      return { permissionDecision: 'deny', permissionDecisionReason: `token-saver: the next message goes to ${to}; the session stays on ${from} so its cache stays warm` }
+    }
+    totals.switchHeld += used
+    redraw()
+    return { permissionDecision: 'deny', permissionDecisionReason: `token-saver: stayed on ${from}. Switching would re-cache ${fmt(used)} tokens${cost ? ` (${cost})` : ''}` }
   })
 
   on('ui.render', { component: 'Pane', requestId: SKILLS_PANE }, async ($, e) => {

@@ -408,7 +408,7 @@ test('/tokens list is the pane as a table: context with a bar, cache, saved, kee
   expect(lines[0]).toMatch(/^┌─+┬─+┬─+┐$/)
   expect(lines[1]).toMatch(/^│ Context +│ 484k of 1M \(48%\) +│ █{10}░{10} +│$/)
   expect(lines[2]).toMatch(/^│ Cache +│ Warm \d+m +│ next message reuses 484k from cache · \d+m left · hit \d+% +│$/)
-  expect(lines[3]).toMatch(/^│ Saved +│ 0 tokens +│ trimmed output 0 · compactions vetoed 0 · keep-warm 0 +│$/)
+  expect(lines[3]).toMatch(/^│ Saved +│ 0 tokens +│ trimmed output 0 · compactions vetoed 0 · keep-warm 0 · model switches held 0 +│$/)
   expect(lines[4]).toMatch(/^│ Keep-warm +│ (on|off[^│]*) +│/)
   expect(lines[5]).toMatch(/^│ Memory +│ messages 302k +│ skills 88k · MCP tools 63k · memory files 20k · system prompt 8k +│$/)
   expect(lines[6]).toMatch(/^│ Next +│ \S/)
