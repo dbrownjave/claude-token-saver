@@ -890,13 +890,16 @@ function geoOf(term, size, H, rows) {
  *
  * The desktop never redraws a bar to animate it (a redraw drops a press), so a desktop bar animates by itself, with
  * SMIL inside the Svg, and loops until the next drawing. Two ways:
- *   `o.anim` { t, n, dt, at(t) → { colorAt, glow } }: a flip-book of n frames dt apart (the fire); a cell whose colour
+ *   `o.anim` { n, dt, at(t) → { colorAt, glow } }: a flip-book of n frames dt apart (the fire); a cell whose colour
  *     changes gets an <animate> of its fill, a still cell is one <use>. Trimmed to fewer frames if the document would
  *     pass the Svg limit.
- *   `o.glint` { t, from, to, dur, sigma, peak, end }: cells drawn as runs of one colour under a mask of the cell shapes,
+ *   `o.glint` { from, to, dur, sigma, peak, end }: cells drawn as runs of one colour under a mask of the cell shapes,
  *     and a soft white band (a Gaussian, `sigma` px wide, `peak` opacity) sweeps from x `from` to `to` every `dur` s,
  *     over the cells left of `end` px. `colorAt` gives the still colours.
- * Both start at the phase `t` says, so a redrawing mid-loop does not jump.
+ * Neither depends on the clock: the frames run from t = 0 and the sweep starts at its left, so the document is the same
+ * string from one drawing to the next while the figures hold. That matters: a scroll of the pane is a redraw (its
+ * `scroll.offset` is a prop), and an Svg whose source has not changed is left running; a changed one is loaded afresh,
+ * which froze and jumped the bar on every scroll tick.
  */
 function cellBar(ui, key, geo, colorAt, o = {}) {
   const track = o.track || BAR_TRACK
@@ -940,7 +943,7 @@ function cellBar(ui, key, geo, colorAt, o = {}) {
     if (!g || !alphas.some((a) => a > 0)) return { defs: '', el: '' }
     const id = `gl${sid}`, c = toHex(g.rgb), a0 = alphas[0].toFixed(3)
     const still = !an || alphas.every((a) => a.toFixed(3) === a0)
-    const anim = still ? '' : `<animate attributeName="stop-opacity" values="${alphas.map((a) => a.toFixed(3)).join(';')}" dur="${(an.n * an.dt).toFixed(2)}s" calcMode="discrete" repeatCount="indefinite" begin="-${an.phase.toFixed(2)}s"/>`
+    const anim = still ? '' : `<animate attributeName="stop-opacity" values="${alphas.map((a) => a.toFixed(3)).join(';')}" dur="${(an.n * an.dt).toFixed(2)}s" calcMode="discrete" repeatCount="indefinite"/>`
     return {
       defs: `<radialGradient id="${id}"><stop offset="0" stop-color="${c}" stop-opacity="${a0}">${anim}</stop><stop offset="1" stop-color="${c}" stop-opacity="0"/></radialGradient>`,
       el: `<ellipse cx="${g.x.toFixed(1)}" cy="${g.y.toFixed(1)}" rx="${g.rx.toFixed(1)}" ry="${g.ry.toFixed(1)}" fill="url(#${id})" style="mix-blend-mode:screen"/>`,
@@ -975,23 +978,19 @@ function cellBar(ui, key, geo, colorAt, o = {}) {
         const d = (i / 12 - 0.5) * 2 * span / gl.sigma
         return `<stop offset="${(i / 12).toFixed(3)}" stop-color="#fff" stop-opacity="${(gl.peak * Math.exp(-d * d)).toFixed(3)}"/>`
       })
-      const phase = ((gl.t % gl.dur) + gl.dur) % gl.dur
       // the band is a rect carrying its gradient (user space moves with it), slid by a transform; a clip keeps it left of `end`
       defs += `<linearGradient id="g${sid}" gradientUnits="userSpaceOnUse" x1="${-span}" y1="0" x2="${span}" y2="0">${stops.join('')}</linearGradient>` +
         `<clipPath id="k${sid}"><rect x="0" y="0" width="${gl.end.toFixed(1)}" height="${H}"/></clipPath>`
       glint = `<g clip-path="url(#k${sid})"><rect x="${-span}" y="0" width="${2 * span}" height="${H}" fill="url(#g${sid})">` +
-        `<animateTransform attributeName="transform" type="translate" from="${gl.from.toFixed(1)} 0" to="${gl.to.toFixed(1)} 0" dur="${gl.dur}s" repeatCount="indefinite" begin="-${phase.toFixed(2)}s"/></rect></g>`
+        `<animateTransform attributeName="transform" type="translate" from="${gl.from.toFixed(1)} 0" to="${gl.to.toFixed(1)} 0" dur="${gl.dur}s" repeatCount="indefinite"/></rect></g>`
     }
     source = wrap(defs, `<g mask="url(#m${sid})">${body.join('')}${glint}</g>`)
   } else {
     const an = o.anim && o.anim.n > 1 ? { ...o.anim } : null
     const build = () => {
       let frames
-      if (an) {
-        const L = an.n * an.dt, base = Math.floor(an.t / L) * L
-        an.phase = an.t - base
-        frames = Array.from({ length: an.n }, (_, k) => an.at(base + k * an.dt))
-      } else frames = [{ colorAt, glow: o.glow }]
+      if (an) frames = Array.from({ length: an.n }, (_, k) => an.at(k * an.dt))
+      else frames = [{ colorAt, glow: o.glow }]
       const dur = an ? `${(an.n * an.dt).toFixed(2)}s` : ''
       const cells = []
       for (let cy = 0; cy < rows; cy++) {
@@ -1003,7 +1002,7 @@ function cellBar(ui, key, geo, colorAt, o = {}) {
           if (vals.every((x) => x === vals[0])) run.push(`<use href="#${cid}" x="${cellX(cx)}" fill="${vals[0]}"/>`)
           else {
             animated = true
-            run.push(`<use href="#${cid}" x="${cellX(cx)}" fill="${vals[0]}"><animate attributeName="fill" values="${vals.join(';')}" dur="${dur}" calcMode="discrete" repeatCount="indefinite" begin="-${an.phase.toFixed(2)}s"/></use>`)
+            run.push(`<use href="#${cid}" x="${cellX(cx)}" fill="${vals[0]}"><animate attributeName="fill" values="${vals.join(';')}" dur="${dur}" calcMode="discrete" repeatCount="indefinite"/></use>`)
           }
         }
         if (run.length) cells.push(`<g transform="translate(0 ${rowY(cy)})">${run.join('')}</g>`)
@@ -1037,7 +1036,7 @@ function contextBar(ui, geo, view, t, live, padY = 0) {
   const now = at(t)
   const ticks = view.marksAll.filter((m) => m.pct > view.pct && m.pct < 100).map((m) => ({ frac: m.pct / 100, color: MARK_TICK, w: 1.5 }))
   if (view.compactPct !== null) ticks.push({ frac: view.compactPct / 100, color: AUTO_TICK, w: 1 })
-  return cellBar(ui, 'ctx-bar', geo, now.colorAt, { track, ticks, padY, glow: now.glow, anim: geo.term ? null : { t, n: LOOP_N, dt: LOOP_DT, at }, alt: `Context ${view.pct}%` })
+  return cellBar(ui, 'ctx-bar', geo, now.colorAt, { track, ticks, padY, glow: now.glow, anim: geo.term ? null : { n: LOOP_N, dt: LOOP_DT, at }, alt: `Context ${view.pct}%` })
 }
 
 /** A card's bar: F1 live ('fire') or calm ('ember'); a dim run to where it is heading; a tick (the time in a window). */
@@ -1060,7 +1059,7 @@ function cardBar(ui, key, geo, bar, t, style) {
   }
   const now = at(t), colorAt = now.colorAt
   const ticks = bar.tick === null || bar.tick === undefined ? [] : [{ frac: bar.tick, color: ui.hex('text'), w: 2 }]
-  return cellBar(ui, key, geo, colorAt, { track: CACHE_TRACK, ticks, glow: now.glow, anim: geo.term || !lit ? null : { t, n: LOOP_N, dt: LOOP_DT, at }, radius: 3, padY: geo.term ? 0 : INNER_PAD, alt: key })
+  return cellBar(ui, key, geo, colorAt, { track: CACHE_TRACK, ticks, glow: now.glow, anim: geo.term || !lit ? null : { n: LOOP_N, dt: LOOP_DT, at }, radius: 3, padY: geo.term ? 0 : INNER_PAD, alt: key })
 }
 
 /** The Saved bar: three greens, one per source; a soft white glint sweeps across the fill every 3.2 s. */
@@ -1080,7 +1079,7 @@ function savedBar(ui, geo, parts, share, t) {
     const k = 0.55 * Math.exp(-dx * dx)
     return k > 0.01 ? mix3(b, WHITE, k) : b
   } : base
-  const glint = geo.term ? null : { t, from: -60, to: fillW + 60, dur: 3.2, sigma: 22, peak: 0.55, end: fillW }
+  const glint = geo.term ? null : { from: -60, to: fillW + 60, dur: 3.2, sigma: 22, peak: 0.55, end: fillW }
   return cellBar(ui, 'saved-bar', geo, colorAt, { track: CACHE_TRACK, radius: 3, padY: geo.term ? 0 : INNER_PAD, glint, alt: `Saved, ${Math.round(share * 100)}% of input` })
 }
 
@@ -1105,7 +1104,7 @@ function memoryBar(ui, geo, parts, t) {
     const k = 0.42 * Math.exp(-dx * dx)
     return k > 0.01 ? mix3(b, WHITE, k) : b
   } : base
-  const glint = geo.term ? null : { t, from: -60, to: usedEnd * geo.W + 100, dur: 2.8, sigma: 26, peak: 0.42, end: usedEnd * geo.W }
+  const glint = geo.term ? null : { from: -60, to: usedEnd * geo.W + 100, dur: 2.8, sigma: 26, peak: 0.42, end: usedEnd * geo.W }
   return cellBar(ui, 'mem-bar', geo, colorAt, { padY: geo.term ? 0 : INNER_PAD, glint, alt: "Claude's working memory by kind" })
 }
 

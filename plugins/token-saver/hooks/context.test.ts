@@ -353,3 +353,23 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ text: /^Keep-warm$/ })).toBeDefined()
   })
 }
+
+test('desktop: a redraw with the same figures gives the same Svg sources, so a scroll does not reload the bars', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const { clock } = setup(on, () => USAGE)
+  const srcs = async (offset: number) => {
+    const ui: any = await mount($, 'desktop', { ...PANE, scroll: { offset, bodyRows: 40 } })
+    if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })   // open stays open
+    const out = (await ui.findAll({ type: 'Svg' })).map((s: any) => [String(s.props.alt), String(s.props.source)])
+    await ui.unmount()
+    return out
+  }
+  const a = await srcs(0)
+  await clock.advance(700)                                     // ten ticks of the band's clock between the two drawings
+  const b = await srcs(3)
+  expect(b.length).toBe(a.length)
+  for (let i = 0; i < a.length; i++) {
+    expect(b[i][0]).toBe(a[i][0])
+    expect(b[i][1] === a[i][1]).toBe(true)                      // byte for byte: the animated ones included
+  }
+  expect(a.some(([, src]) => src.includes('<animate'))).toBe(true)
+})
