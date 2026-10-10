@@ -442,6 +442,8 @@ const DOT_TRACK = '#242428'
 const THUMB_TEXT = '#1d1d21'
 let progressTick = 0            // advanced by the band ticker, 70 ms apiece; every frame is a pure function of it
 const TICK_S = 0.07
+const LOOP_DT = 2 * TICK_S       // desktop: a bar's own loop holds a frame this long (the desktop drew every other tick)
+const LOOP_N = 21                // ... and this many frames: 2.94 s, one period of the calm pulse, so the loop closes
 
 /**
  * The Effort slider's own recipe (its fragment shader, ported): a grid of small rounded cells; bursts
@@ -885,6 +887,16 @@ function geoOf(term, size, H, rows) {
 /**
  * One bar. `colorAt(cx, cy)` → [r,g,b] in 0..1, or null for the bare track. `o.ticks`: [{ frac, color, w }] drawn on
  * top; `o.glow` (desktop): an f1Glow. Returns null where the surface has neither Svg nor Raster.
+ *
+ * The desktop never redraws a bar to animate it (a redraw drops a press), so a desktop bar animates by itself, with
+ * SMIL inside the Svg, and loops until the next drawing. Two ways:
+ *   `o.anim` { t, n, dt, at(t) → { colorAt, glow } }: a flip-book of n frames dt apart (the fire); a cell whose colour
+ *     changes gets an <animate> of its fill, a still cell is one <use>. Trimmed to fewer frames if the document would
+ *     pass the Svg limit.
+ *   `o.glint` { t, from, to, dur, sigma, peak, end }: cells drawn as runs of one colour under a mask of the cell shapes,
+ *     and a soft white band (a Gaussian, `sigma` px wide, `peak` opacity) sweeps from x `from` to `to` every `dur` s,
+ *     over the cells left of `end` px. `colorAt` gives the still colours.
+ * Both start at the phase `t` says, so a redrawing mid-loop does not jump.
  */
 function cellBar(ui, key, geo, colorAt, o = {}) {
   const track = o.track || BAR_TRACK
@@ -915,48 +927,117 @@ function cellBar(ui, key, geo, colorAt, o = {}) {
   }
   if (typeof ui.Svg !== 'function') return null
   const { W, H, pitch, rows, cols } = geo
-  // one cell shape, placed with <use>: a frame is redrawn every other tick, so keep the markup small
+  // one cell shape, placed with <use>; the markup stays small because a desktop drawing may hold a whole loop of frames
   const half = 0.375 * pitch, size = (half * 2).toFixed(2), rx = Math.min(0.9, half * 0.35).toFixed(2)
-  const cid = `c${key.replace(/[^a-z0-9]/gi, '')}`
-  const cells = []
-  for (let cy = 0; cy < rows; cy++) {
-    const run = []
-    for (let cx = 0; cx < cols; cx++) {
-      const c = colorAt(cx, cy)
-      if (c) run.push(`<use href="#${cid}" x="${((cx + 0.5) * pitch - half).toFixed(1)}" fill="${toHex(c)}"/>`)
-    }
-    if (run.length) cells.push(`<g transform="translate(0 ${((cy + 0.5) * pitch - half).toFixed(2)})">${run.join('')}</g>`)
-  }
+  const sid = key.replace(/[^a-z0-9]/gi, ''), cid = `c${sid}`
+  const rowY = (cy) => ((cy + 0.5) * pitch - half).toFixed(2)
+  const cellX = (cx) => ((cx + 0.5) * pitch - half).toFixed(1)
   const ticks = (o.ticks || []).map((m) => `<rect x="${(m.frac * W - (m.w || 1.5) / 2).toFixed(1)}" y="0" width="${m.w || 1.5}" height="${H}" fill="${m.color}"/>`)
-  let defs = `<rect id="${cid}" width="${size}" height="${size}" rx="${rx}"/>`, glow = ''
-  const g = o.glow
-  if (g && g.alpha > 0) {
-    const id = `gl${key.replace(/[^a-z0-9]/gi, '')}`, c = toHex(g.rgb)
-    defs += `<radialGradient id="${id}"><stop offset="0" stop-color="${c}" stop-opacity="${g.alpha.toFixed(3)}"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></radialGradient>`
-    glow = `<ellipse cx="${g.x.toFixed(1)}" cy="${g.y.toFixed(1)}" rx="${g.rx.toFixed(1)}" ry="${g.ry.toFixed(1)}" fill="url(#${id})" style="mix-blend-mode:screen"/>`
-  }
-  // padY: clear space above and below, in px (a desktop Box margin is a whole line; the design wants ~10 px)
   const pad = o.padY || 0, HH = H + 2 * pad
-  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${HH}" viewBox="0 ${-pad} ${W} ${HH}"><defs>${defs}</defs>` +
-    `<rect width="${W}" height="${H}" rx="${o.radius ?? Math.min(4, H / 2)}" fill="${track}"/>${cells.join('')}${glow}${ticks.join('')}</svg>`
-  return h(ui.Svg, { source, alt: o.alt || key, height: HH, width: W })
+  const wrap = (defs, body) => `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${HH}" viewBox="0 ${-pad} ${W} ${HH}"><defs>${defs}</defs>` +
+    `<rect width="${W}" height="${H}" rx="${o.radius ?? Math.min(4, H / 2)}" fill="${track}"/>${body}${ticks.join('')}</svg>`
+  const glowOf = (g, alphas, an) => {
+    if (!g || !alphas.some((a) => a > 0)) return { defs: '', el: '' }
+    const id = `gl${sid}`, c = toHex(g.rgb), a0 = alphas[0].toFixed(3)
+    const still = !an || alphas.every((a) => a.toFixed(3) === a0)
+    const anim = still ? '' : `<animate attributeName="stop-opacity" values="${alphas.map((a) => a.toFixed(3)).join(';')}" dur="${(an.n * an.dt).toFixed(2)}s" calcMode="discrete" repeatCount="indefinite" begin="-${an.phase.toFixed(2)}s"/>`
+    return {
+      defs: `<radialGradient id="${id}"><stop offset="0" stop-color="${c}" stop-opacity="${a0}">${anim}</stop><stop offset="1" stop-color="${c}" stop-opacity="0"/></radialGradient>`,
+      el: `<ellipse cx="${g.x.toFixed(1)}" cy="${g.y.toFixed(1)}" rx="${g.rx.toFixed(1)}" ry="${g.ry.toFixed(1)}" fill="url(#${id})" style="mix-blend-mode:screen"/>`,
+    }
+  }
+  let source, animated = false
+  if (o.glint) {
+    // runs of one colour as rects, cut to cell shapes by a mask; the glint is one more rect, its gradient on the move
+    const gl = o.glint
+    const mask = [], body = []
+    for (let cy = 0; cy < rows; cy++) {
+      const pos = [], runs = []
+      let run = null
+      for (let cx = 0; cx < cols; cx++) {
+        const c = colorAt(cx, cy)
+        if (!c) { run = null; continue }
+        pos.push(`<use href="#${cid}" x="${cellX(cx)}"/>`)
+        const hex = toHex(c)
+        if (run && run.hex === hex && run.to === cx - 1) run.to = cx
+        else runs.push((run = { hex, from: cx, to: cx }))
+      }
+      if (!pos.length) continue
+      mask.push(`<g transform="translate(0 ${rowY(cy)})">${pos.join('')}</g>`)
+      body.push(...runs.map((r) => `<rect x="${(r.from * pitch).toFixed(1)}" y="${(cy * pitch).toFixed(2)}" width="${((r.to - r.from + 1) * pitch).toFixed(1)}" height="${pitch.toFixed(2)}" fill="${r.hex}"/>`))
+    }
+    let defs = `<rect id="${cid}" width="${size}" height="${size}" rx="${rx}"/><mask id="m${sid}"><g fill="#fff">${mask.join('')}</g></mask>`
+    let glint = ''
+    if (gl.end > 0 && body.length) {
+      animated = true
+      const span = 3 * gl.sigma
+      const stops = Array.from({ length: 13 }, (_, i) => {
+        const d = (i / 12 - 0.5) * 2 * span / gl.sigma
+        return `<stop offset="${(i / 12).toFixed(3)}" stop-color="#fff" stop-opacity="${(gl.peak * Math.exp(-d * d)).toFixed(3)}"/>`
+      })
+      const phase = ((gl.t % gl.dur) + gl.dur) % gl.dur
+      // the band is a rect carrying its gradient (user space moves with it), slid by a transform; a clip keeps it left of `end`
+      defs += `<linearGradient id="g${sid}" gradientUnits="userSpaceOnUse" x1="${-span}" y1="0" x2="${span}" y2="0">${stops.join('')}</linearGradient>` +
+        `<clipPath id="k${sid}"><rect x="0" y="0" width="${gl.end.toFixed(1)}" height="${H}"/></clipPath>`
+      glint = `<g clip-path="url(#k${sid})"><rect x="${-span}" y="0" width="${2 * span}" height="${H}" fill="url(#g${sid})">` +
+        `<animateTransform attributeName="transform" type="translate" from="${gl.from.toFixed(1)} 0" to="${gl.to.toFixed(1)} 0" dur="${gl.dur}s" repeatCount="indefinite" begin="-${phase.toFixed(2)}s"/></rect></g>`
+    }
+    source = wrap(defs, `<g mask="url(#m${sid})">${body.join('')}${glint}</g>`)
+  } else {
+    const an = o.anim && o.anim.n > 1 ? { ...o.anim } : null
+    const build = () => {
+      let frames
+      if (an) {
+        const L = an.n * an.dt, base = Math.floor(an.t / L) * L
+        an.phase = an.t - base
+        frames = Array.from({ length: an.n }, (_, k) => an.at(base + k * an.dt))
+      } else frames = [{ colorAt, glow: o.glow }]
+      const dur = an ? `${(an.n * an.dt).toFixed(2)}s` : ''
+      const cells = []
+      for (let cy = 0; cy < rows; cy++) {
+        const run = []
+        for (let cx = 0; cx < cols; cx++) {
+          const hs = frames.map((f) => { const c = f.colorAt(cx, cy); return c ? toHex(c) : null })
+          if (!hs.some(Boolean)) continue
+          const vals = hs.map((x) => x || track)
+          if (vals.every((x) => x === vals[0])) run.push(`<use href="#${cid}" x="${cellX(cx)}" fill="${vals[0]}"/>`)
+          else {
+            animated = true
+            run.push(`<use href="#${cid}" x="${cellX(cx)}" fill="${vals[0]}"><animate attributeName="fill" values="${vals.join(';')}" dur="${dur}" calcMode="discrete" repeatCount="indefinite" begin="-${an.phase.toFixed(2)}s"/></use>`)
+          }
+        }
+        if (run.length) cells.push(`<g transform="translate(0 ${rowY(cy)})">${run.join('')}</g>`)
+      }
+      const g0 = frames[0].glow
+      const glow = glowOf(g0, frames.map((f) => (f.glow ? f.glow.alpha : 0)), an)
+      return wrap(`<rect id="${cid}" width="${size}" height="${size}" rx="${rx}"/>${glow.defs}`, `${cells.join('')}${glow.el}`)
+    }
+    source = build()
+    // the Svg limit is 131072 chars: a wide bar with a long loop drops to fewer, longer-held frames
+    while (an && source.length > 120000 && an.n > 3) { an.n = Math.ceil(an.n / 2); an.dt *= 2; animated = false; source = build() }
+  }
+  return h(ui.Svg, { source, alt: o.alt || key, height: HH, width: W, ...(animated ? { isInteractive: true } : {}) })
 }
 
 /** The context bar: F1 in the threshold colour, ticks at the marks still ahead, the auto-compact buffer drawn still. */
 function contextBar(ui, geo, view, t, live, padY = 0) {
   const track = geo.term ? BAR_TRACK : DESK_TRACK
   const info = fireBar(geo, view.pct / 100, live, 31, inkOf(ui.hex(view.accent)), track)
-  const st = f1Frame(info, t)
   const autoX = view.compactPct === null ? Infinity : (view.compactPct / 100) * geo.W
   const buf = rgb01(geo.term ? BUFFER_CELL : DESK_BUFFER)
-  const colorAt = (cx, cy) => {
-    const px = (cx + 0.5) * geo.pitch
-    if (px >= autoX && px > info.head + 3 * geo.pitch) return buf
-    return f1Shade(cx, cy, info, st)
+  const at = (tt) => {
+    const st = f1Frame(info, tt)
+    const colorAt = (cx, cy) => {
+      const px = (cx + 0.5) * geo.pitch
+      if (px >= autoX && px > info.head + 3 * geo.pitch) return buf
+      return f1Shade(cx, cy, info, st)
+    }
+    return { colorAt, glow: geo.term ? null : f1Glow(info, tt) }
   }
+  const now = at(t)
   const ticks = view.marksAll.filter((m) => m.pct > view.pct && m.pct < 100).map((m) => ({ frac: m.pct / 100, color: MARK_TICK, w: 1.5 }))
   if (view.compactPct !== null) ticks.push({ frac: view.compactPct / 100, color: AUTO_TICK, w: 1 })
-  return cellBar(ui, 'ctx-bar', geo, colorAt, { track, ticks, padY, glow: geo.term ? null : f1Glow(info, t), alt: `Context ${view.pct}%` })
+  return cellBar(ui, 'ctx-bar', geo, now.colorAt, { track, ticks, padY, glow: now.glow, anim: geo.term ? null : { t, n: LOOP_N, dt: LOOP_DT, at }, alt: `Context ${view.pct}%` })
 }
 
 /** A card's bar: F1 live ('fire') or calm ('ember'); a dim run to where it is heading; a tick (the time in a window). */
@@ -966,16 +1047,20 @@ function cardBar(ui, key, geo, bar, t, style) {
   const ink = grad ? { hot: mix3(rgb01(CACHE_GRAD[2]), WHITE, 0.45), c0: rgb01(CACHE_GRAD[2]), c1: rgb01(CACHE_GRAD[0]) } : inkOf(inkHex)
   const lit = bar.fill > 0
   const info = fireBar(geo, bar.fill, style === 'fire', seedOf(key), ink, CACHE_TRACK)
-  const st = lit ? f1Frame(info, t) : null
   const dim = bar.ext > bar.fill ? rgb01(mixHex(inkHex, CACHE_TRACK, 0.55)) : null
-  const colorAt = (cx, cy) => {
-    const c = lit ? f1Shade(cx, cy, info, st) : null
-    if (c) return c
-    const f = (cx + 0.5) / geo.cols
-    return dim && f > bar.fill + 1 / geo.cols && f <= bar.ext ? dim : null
+  const at = (tt) => {
+    const st = lit ? f1Frame(info, tt) : null
+    const colorAt = (cx, cy) => {
+      const c = lit ? f1Shade(cx, cy, info, st) : null
+      if (c) return c
+      const f = (cx + 0.5) / geo.cols
+      return dim && f > bar.fill + 1 / geo.cols && f <= bar.ext ? dim : null
+    }
+    return { colorAt, glow: geo.term || !lit ? null : f1Glow(info, tt) }
   }
+  const now = at(t), colorAt = now.colorAt
   const ticks = bar.tick === null || bar.tick === undefined ? [] : [{ frac: bar.tick, color: ui.hex('text'), w: 2 }]
-  return cellBar(ui, key, geo, colorAt, { track: CACHE_TRACK, ticks, glow: geo.term || !lit ? null : f1Glow(info, t), radius: 3, padY: geo.term ? 0 : INNER_PAD, alt: key })
+  return cellBar(ui, key, geo, colorAt, { track: CACHE_TRACK, ticks, glow: now.glow, anim: geo.term || !lit ? null : { t, n: LOOP_N, dt: LOOP_DT, at }, radius: 3, padY: geo.term ? 0 : INNER_PAD, alt: key })
 }
 
 /** The Saved bar: three greens, one per source; a soft white glint sweeps across the fill every 3.2 s. */
@@ -984,15 +1069,19 @@ function savedBar(ui, geo, parts, share, t) {
   let acc = 0
   const segs = parts.map((p) => ({ end: (acc += p.f) * geo.W, rgb: rgb01(p.color) }))
   const sweep = ((t % 3.2) / 3.2) * (fillW + 120) - 60
-  const colorAt = (cx, cy) => {
+  const base = (cx) => {
     const px = (cx + 0.5) * geo.pitch
-    if (px > fillW || !segs.length) return null
-    const base = (segs.find((s) => px <= s.end) || segs[segs.length - 1]).rgb
-    const dx = (px - sweep + cy * 3) / 22
-    const k = 0.55 * Math.exp(-dx * dx)
-    return k > 0.01 ? mix3(base, WHITE, k) : base
+    return px > fillW || !segs.length ? null : (segs.find((s) => px <= s.end) || segs[segs.length - 1]).rgb
   }
-  return cellBar(ui, 'saved-bar', geo, colorAt, { track: CACHE_TRACK, radius: 3, padY: geo.term ? 0 : INNER_PAD, alt: `Saved, ${Math.round(share * 100)}% of input` })
+  const colorAt = geo.term ? (cx, cy) => {
+    const b = base(cx)
+    if (!b) return null
+    const dx = ((cx + 0.5) * geo.pitch - sweep + cy * 3) / 22
+    const k = 0.55 * Math.exp(-dx * dx)
+    return k > 0.01 ? mix3(b, WHITE, k) : b
+  } : base
+  const glint = geo.term ? null : { t, from: -60, to: fillW + 60, dur: 3.2, sigma: 22, peak: 0.55, end: fillW }
+  return cellBar(ui, 'saved-bar', geo, colorAt, { track: CACHE_TRACK, radius: 3, padY: geo.term ? 0 : INNER_PAD, glint, alt: `Saved, ${Math.round(share * 100)}% of input` })
 }
 
 /** Working memory: a cell per slice of the window by kind; a light wave runs through the used part every 2.8 s. */
@@ -1005,16 +1094,19 @@ function memoryBar(ui, geo, parts, t) {
     return { end: acc, rgb: p.color ? rgb01(p.color) : null }
   })
   const wave = ((t % 2.8) / 2.8) * (usedEnd * geo.W + 160) - 60
-  const colorAt = (cx, cy) => {
-    const f = (cx + 0.5) / geo.cols
-    const s = segs.find((x) => f < x.end)
-    if (!s || !s.rgb) return null
-    if (f > usedEnd) return s.rgb
+  const base = (cx) => {
+    const s = segs.find((x) => (cx + 0.5) / geo.cols < x.end)
+    return s && s.rgb ? s.rgb : null
+  }
+  const colorAt = geo.term ? (cx, cy) => {
+    const b = base(cx)
+    if (!b || (cx + 0.5) / geo.cols > usedEnd) return b
     const dx = ((cx + 0.5) * geo.pitch - wave) / 26
     const k = 0.42 * Math.exp(-dx * dx)
-    return k > 0.01 ? mix3(s.rgb, WHITE, k) : s.rgb
-  }
-  return cellBar(ui, 'mem-bar', geo, colorAt, { padY: geo.term ? 0 : INNER_PAD, alt: "Claude's working memory by kind" })
+    return k > 0.01 ? mix3(b, WHITE, k) : b
+  } : base
+  const glint = geo.term ? null : { t, from: -60, to: usedEnd * geo.W + 100, dur: 2.8, sigma: 26, peak: 0.42, end: usedEnd * geo.W }
+  return cellBar(ui, 'mem-bar', geo, colorAt, { padY: geo.term ? 0 : INNER_PAD, glint, alt: "Claude's working memory by kind" })
 }
 
 /** Five tiny cells for the closed pane: lit count is the warmth along the cache gradient; cold is all frozen blue. */
@@ -1965,7 +2057,8 @@ export function register(on, options = {}) {
     progressTicker = $.clock.every(70, () => {
       const bandOn = cacheBand && !!lastUsage && !bandHidden      // the band's bar burns while it shows; hidden, it costs nothing
       // The desktop holds a Button's press for the drawing it came from: redrawn every 140 ms, most clicks land on a
-      // drawing already gone. So the band's bar stands still there and redraws only on news (and BAND_TICK).
+      // drawing already gone. So the band redraws there only on news (and BAND_TICK); its bars animate by themselves,
+      // a SMIL loop inside each Svg (cellBar).
       const bandAnimates = bandOn && bandSurface === 'terminal'
       const paneAnimates = ctxPaneOpen && bandSurface === 'terminal'   // the desktop draws the open pane in the band: same rule
       if (progressRows.size === 0 && !ctxPaneOpen && !bandOn) return
