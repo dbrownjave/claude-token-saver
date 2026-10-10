@@ -1,8 +1,22 @@
-# Claude Code token saver — individual install
+# Token Saver for Claude Code
 
-Each engineer installs this on their own machine and turns on only the modules they want.
+Fewer tokens per turn, and a Context pane that tells the truth.
 
-Nothing is forced. A bare install copies files and enables **zero** modules.
+A Claude Code **mod** (an in-process plugin of function hooks) that quiets noisy commands before they run, trims huge output before Claude reads it, refuses a `/compact` that would re-send a cold cache, keeps the prompt cache warm while you think, prices your skills per turn, and shows a receipt it can stand behind. MIT. Works in the terminal, the desktop app, and on a phone.
+
+```bash
+git clone https://github.com/dbrownjave/claude-token-saver && cd claude-token-saver && ./install.sh
+```
+
+Then open a new session and type `/tokens`.
+
+**True numbers.** The pane's *Saved* figure counts only what the plugin itself did: trimmed output, compactions it vetoed, and keep-warm pings net of their cost. Claude's own prompt-cache reads are shown beside it and never added in; a session with 150k cache reads and nothing trimmed says *Saved 0 tok*, and a test holds it to that. Estimates carry a ≈. Dollars appear only on API billing with a rate derived from your bill, never on a subscription.
+
+Docs: [docs/claude-mods.md](docs/claude-mods.md) is a full reference for writing Claude Code mods, written from the engine's own type definitions. The repo carries two skills so Claude knows how to edit this mod (`mod-authoring`) and ship it (`release`). Site: [site/index.html](site/index.html). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+Each engineer installs this on their own machine and turns on only the modules they want. Nothing is forced. A bare install copies files and enables **zero** modules.
 
 ## Install (once per machine)
 

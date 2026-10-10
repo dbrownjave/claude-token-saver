@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Saver for Claude Code — a Context pane that tells the truth</title>
+<meta name="description" content="An open-source Claude Code mod: quiet commands, trimmed output, a compact guard that refuses to re-send a cold cache, keep-warm pings, and a Context pane whose Saved figure counts only what the plugin did.">
+<meta property="og:title" content="Token Saver for Claude Code">
+<meta property="og:description" content="Fewer tokens per turn. A Context pane with true numbers. One command to install. MIT.">
+<meta property="og:type" content="website">
+<style>
+  :root {
+    --bg: #262624; --bg-2: #2e2d29; --line: #4a4945; --text: #faf9f5; --dim: #9c9a92; --faint: #6b6965;
+    --claude: #d97757; --ok: #65bb30; --warn: #fab219; --cold: #629cde; --warm: #ce9466; --track: #353533;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); color: var(--text); font: 16px/1.55 var(--font); -webkit-font-smoothing: antialiased; }
+  body { margin: 0; }
+  a { color: var(--text); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+  a:hover { text-decoration-color: var(--claude); }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 24px; overflow-x: clip; }
+  .hero > *, .grid > *, .two > *, .truth > * { min-width: 0; }
+  .brand { white-space: nowrap; }
+  header.top { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: .01em; }
+  .brand .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--claude); }
+  nav a { margin-left: 22px; color: var(--dim); text-decoration: none; font-size: 15px; }
+  nav a:hover { color: var(--text); }
+
+  .hero { padding: 56px 0 40px; display: grid; grid-template-columns: 1.05fr 1fr; gap: 48px; align-items: center; }
+  h1 { font-size: clamp(34px, 5vw, 52px); line-height: 1.08; margin: 0 0 18px; font-weight: 650; letter-spacing: -.02em; }
+  h1 em { font-style: normal; color: var(--claude); }
+  .lede { font-size: 18px; color: var(--dim); margin: 0 0 28px; max-width: 46ch; }
+  .install { display: flex; align-items: stretch; gap: 0; background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; max-width: 520px; }
+  .install code { flex: 1; font: 14px/1.4 var(--mono); padding: 13px 16px; white-space: nowrap; overflow-x: auto; color: var(--text); }
+  .install code .p { color: var(--faint); }
+  .install button { border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--dim); padding: 0 16px; font: 14px var(--font); cursor: pointer; }
+  .install button:hover { color: var(--text); background: #353430; }
+  .sub { color: var(--faint); font-size: 14px; margin-top: 12px; }
+  .sub a { color: var(--dim); }
+
+  /* The pane, as the desktop draws it */
+  .pane { min-width: 0; background: #2b2a27; border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; font-size: 14px; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+  .row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .row > * { white-space: nowrap; flex-shrink: 0; }
+  .row > .ell { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .grow { flex: 1; }
+  .k { color: var(--dim); }
+  .v { color: var(--text); }
+  .ok { color: var(--ok); }
+  .warn { color: var(--warn); }
+  .btn { border: 1px solid var(--line); border-radius: 7px; padding: 3px 10px; color: var(--dim); font-size: 13px; background: #353430; }
+  .btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .bar { height: 14px; border-radius: 7px; background: var(--track); overflow: hidden; margin: 10px 0 14px; position: relative; }
+  .bar > i { position: absolute; inset: 0; width: var(--w); background: repeating-linear-gradient(90deg, #f3efe7 0 4px, #c9c4b8 4px 5px, transparent 5px 7px); opacity: .95; border-radius: 7px; }
+  .bar .mark { position: absolute; top: 2px; bottom: 2px; width: 1px; background: #d4d3cf; opacity: .8; }
+  .cells { display: inline-flex; gap: 2px; }
+  .cells i { width: 5px; height: 5px; border-radius: 1px; background: var(--track); }
+  .cells i.on { background: var(--warm); }
+  .cells i.on.c1 { background: #629cde; } .cells i.on.c2 { background: #86a0b5; } .cells i.on.c3 { background: #a8a38c; } .cells i.on.c4 { background: #c0996b; }
+  .savebar { height: 10px; border-radius: 5px; background: var(--track); overflow: hidden; margin: 8px 0 10px; display: flex; }
+  .savebar i { display: block; height: 100%; }
+  .rule { height: 1px; background: var(--line); margin: 12px 0; }
+  .receipt .row { padding: 2px 0; }
+  .dots { flex: 1 1 8px; border-bottom: 1px dotted var(--line); margin: 0 8px; height: 0; align-self: center; transform: translateY(-4px); }
+  .num { font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+  .amt { font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
+  .note { color: var(--faint); font-size: 13px; margin-top: 8px; }
+
+  section { padding: 56px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 26px; margin: 0 0 8px; letter-spacing: -.01em; font-weight: 650; }
+  .h2sub { color: var(--dim); margin: 0 0 28px; max-width: 60ch; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .card { background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  .card h3 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+  .card p { margin: 0; color: var(--dim); font-size: 15px; }
+  .card code { font: 13px var(--mono); color: var(--text); background: #353430; padding: 1px 6px; border-radius: 5px; }
+
+  .truth { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
+  .truth ul { margin: 0; padding-left: 18px; color: var(--dim); }
+  .truth li { margin: 8px 0; }
+  .truth li b { color: var(--text); font-weight: 600; }
+  .callout { border-left: 3px solid var(--claude); padding: 6px 0 6px 16px; color: var(--text); margin: 22px 0; }
+
+  pre { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; font: 13.5px/1.5 var(--mono); overflow-x: auto; margin: 0; }
+  pre .c { color: var(--faint); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+
+  footer { padding: 36px 0 60px; border-top: 1px solid var(--line); color: var(--faint); font-size: 14px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  footer a { color: var(--dim); }
+
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: 1fr; gap: 32px; padding-top: 32px; }
+    .grid, .truth, .two { grid-template-columns: 1fr; }
+    nav a { margin-left: 12px; font-size: 14px; }
+    .brand .k { display: none; }
+    header.top { flex-wrap: wrap; gap: 8px; }
+    .pane { font-size: 13px; padding: 14px; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .bar > i { animation: shimmer 2.6s linear infinite; background-size: 28px 100%; }
+    @keyframes shimmer { to { background-position: 28px 0; } }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand"><span class="dot"></span> Token Saver <span class="k" style="font-weight:400">for Claude Code</span></div>
+    <nav>
+      <a href="#what">What it does</a>
+      <a href="#truth">True numbers</a>
+      <a href="#mods">Mods</a>
+      <a href="https://github.com/dbrownjave/claude-token-saver">GitHub</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <div>
+      <h1>Fewer tokens per turn.<br>A Context pane that <em>tells the truth</em>.</h1>
+      <p class="lede">A Claude Code mod that quiets noisy commands, trims huge output, refuses a <code style="font-family:var(--mono)">/compact</code> that would re-send a cold cache, keeps the cache warm while you think, and shows you a receipt it can stand behind.</p>
+      <div class="install">
+        <code><span class="p">$</span> git clone https://github.com/dbrownjave/claude-token-saver &amp;&amp; cd claude-token-saver &amp;&amp; ./install.sh</code>
+        <button type="button" data-copy="git clone https://github.com/dbrownjave/claude-token-saver && cd claude-token-saver && ./install.sh">Copy</button>
+      </div>
+      <p class="sub">Local Claude Code CLI or desktop app · Python 3 (stdlib only) · MIT · <a href="#install">what install changes</a></p>
+    </div>
+
+    <div class="pane" aria-label="The Context pane, open">
+      <div class="row"><span class="k">Context</span><span class="v">66.6k / 1M tok</span><span class="ok">(7%)</span><span class="grow"></span><span class="btn">⤢</span><span class="btn">?</span><span class="btn">Less</span></div>
+      <div class="bar"><i style="--w:7%"></i><span class="mark" style="left:40%"></span><span class="mark" style="left:60%"></span><span class="mark" style="left:75%"></span></div>
+
+      <div class="row"><span class="v">Saved</span><span class="ok">23.4k tok</span><span class="k">this session</span></div>
+      <div class="row"><span class="v">Cut 14% of input</span><span class="grow"></span><span class="ok">≈ $0.07</span><span class="k">· Spent $0.41</span></div>
+      <div class="savebar"><i style="width:9%;background:var(--ok)"></i><i style="width:4%;background:#8fb56a"></i><i style="width:1%;background:#6f8f55"></i></div>
+      <div class="receipt">
+        <div class="row"><span class="k">Trimmed output</span><span class="dots"></span><span class="num k">15.1k</span><span class="amt ok">≈ $0.05</span></div>
+        <div class="row"><span class="k">Compactions vetoed</span><span class="dots"></span><span class="num k">7.2k</span><span class="amt ok">≈ $0.02</span></div>
+        <div class="row"><span class="k">Keep-warm</span><span class="dots"></span><span class="num k">1.1k</span><span class="amt ok">≈ $0.00</span></div>
+        <div class="row"><span class="k ell">Prompt cache, Claude's own (not counted)</span><span class="dots"></span><span class="num k">200.1k</span><span class="amt"></span></div>
+        <div class="rule"></div>
+        <div class="row"><span class="v">Total saved</span><span class="dots"></span><span class="num v">23.4k</span><span class="amt ok">≈ $0.07</span></div>
+        <div class="row"><span class="k">You paid</span><span class="dots"></span><span class="num"></span><span class="amt v">$0.41</span></div>
+        <div class="row"><span class="k">Without token-saver</span><span class="dots"></span><span class="num"></span><span class="amt k">≈ $0.48</span></div>
+      </div>
+      <div class="rule"></div>
+      <div class="row"><span class="cells"><i class="on c1"></i><i class="on c2"></i><i class="on c3"></i><i class="on c4"></i><i></i></span><span class="k ell">Cache warm: next message reuses 66.6k from cache · 3m left</span></div>
+      <div class="row" style="margin-top:12px"><span class="grow"></span><span class="btn">Clear</span><span class="btn primary">Compact</span><span class="btn">Later</span></div>
+      <p class="note">Illustrative session. Dollars appear only on API billing with a known rate; never on a subscription.</p>
+    </div>
+  </div>
+
+  <section id="what">
+    <h2>What it does</h2>
+    <p class="h2sub">Six things, each one small, each one on every turn. Everything is a toggle in <code style="font-family:var(--mono)">/config</code>; nothing edits your settings behind your back.</p>
+    <div class="grid">
+      <div class="card"><h3>Quiet commands</h3><p><code>git status</code> becomes <code>git status -sb</code>, test runners get their quietest reporter, before they run. Your own rules in <code>quiet.json</code>.</p></div>
+      <div class="card"><h3>Trimmed output</h3><p>Huge successful stdout is cut to its head and tail before Claude reads it. Failures are never trimmed. The full log is kept on disk, with the grep to read it.</p></div>
+      <div class="card"><h3>Compact guard</h3><p>A <code>/compact</code> on a cold cache re-sends the whole conversation at write price. The mod refuses it, names the cost, and points at <code>/handoff</code> then <code>/clear</code>. Auto-compaction is never blocked.</p></div>
+      <div class="card"><h3>Keep-warm</h3><p>API billing, 5-minute TTL: just before the cache lapses, one tiny read (≈0.1× input price) restarts it, so your next message hits the cache instead of paying a 1.25× re-write. Capped, stops on a miss.</p></div>
+      <div class="card"><h3>Context pane</h3><p><code>/tokens</code>: where the window went, your marks, the cache clock, a receipt line by line, and buttons that run <code>/mcp</code>, <code>/memory</code>, <code>/loadout</code>. Terminal, desktop and phone.</p></div>
+      <div class="card"><h3>Skill loadout</h3><p>Every skill in <code>~/.claude/skills</code> costs its description on every turn. <code>/loadout</code> shows the price, parks what you have not used in 30 days, and links one back per repo.</p></div>
+    </div>
+  </section>
+
+  <section id="truth">
+    <h2>True numbers</h2>
+    <p class="h2sub">A token-saving tool that pads its own score is worthless. The Saved figure counts only what the plugin itself did.</p>
+    <div class="truth">
+      <div>
+        <ul>
+          <li><b>Trimmed output</b> — characters kept out of the conversation, ÷ 4. Those tokens would have been re-sent on every later turn.</li>
+          <li><b>Compactions vetoed</b> — the context a cold <code style="font-family:var(--mono)">/compact</code> would have re-written, at the 1.25× cache-write price.</li>
+          <li><b>Keep-warm</b> — re-writes avoided, <em>minus</em> what the pings cost. It can go negative if you do not come back.</li>
+          <li><b>Prompt cache</b> — shown beside the total, never added in. Claude reads its own cache with or without this plugin.</li>
+        </ul>
+        <div class="callout">Every figure says what it measures and what it assumes. Estimates carry a ≈. Dollars only on API billing with a rate the mod can derive from your bill.</div>
+      </div>
+      <div>
+        <pre><span class="c">// plugins/token-saver/hooks/register.js</span>
+const sources = [
+  { label: 'Trimmed output',     tok: T.keptOut },
+  { label: 'Compactions vetoed', tok: Math.round(T.vetoTokens * 1.25) },
+  { label: 'Keep-warm',          tok: kw.savedTok - kw.costTok },
+]
+<span class="c">// Claude's own prompt cache: reported, never summed</span>
+const cacheInfo = { read: T.cacheRead, line:
+  `Prompt cache read ${fmtK(T.cacheRead)} tok at a tenth of the price — Claude's own, not counted` }</pre>
+        <p class="note">Locked in by tests: a session with 150k cache reads and nothing trimmed shows <b>Saved 0 tok</b>.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="mods">
+    <h2>It is a mod, and the docs are open</h2>
+    <p class="h2sub">Claude Code mods are plugins made of function hooks: one <code style="font-family:var(--mono)">register(on, options)</code> module that can rewrite a tool call, sit on a compaction, and draw live UI in a pane. We wrote the reference we wished we had.</p>
+    <div class="two">
+      <div class="card"><h3>docs/claude-mods.md</h3><p>Every event, every <code>$</code> noun, every element and its props, the four surfaces and what each will not draw, the test harness, and a gotchas list earned the hard way. <a href="https://github.com/dbrownjave/claude-token-saver/blob/main/docs/claude-mods.md">Read it</a>.</p></div>
+      <div class="card"><h3>Repo skills</h3><p>Open the repo in Claude Code and it knows how to edit the mod (<code>mod-authoring</code>) and ship it (<code>release</code>). The rules that cost us a bug each are written down so you do not pay for them twice.</p></div>
+    </div>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <p class="h2sub">One command. No questions. Nothing of yours is edited or reordered; overlaps with hooks you already have are printed as one line each.</p>
+    <div class="two">
+      <pre>git clone https://github.com/dbrownjave/claude-token-saver
+cd claude-token-saver
+./install.sh            <span class="c"># or: ./install.sh --dry-run</span>
+<span class="c"># open a new session, then:</span>
+/tokens                 <span class="c"># the Context pane</span>
+/loadout                <span class="c"># your skills, priced</span></pre>
+      <pre><span class="c"># already in a session: pick it up without restarting</span>
+/reload-plugins
+<span class="c"># one session, no install</span>
+claude --plugin-dir ./plugins/token-saver
+<span class="c"># take it all out</span>
+./install.sh --uninstall</pre>
+    </div>
+    <p class="note" style="margin-top:16px">Requires Claude Code 2.1.287 or later for the mod; older builds get the same behaviour from the pack's Python hooks, and the installer says which you got. Claude Code on the web does not see <code style="font-family:var(--mono)">~/.claude</code>; this is for the local CLI and desktop app.</p>
+  </section>
+
+  <footer>
+    <span>MIT © 2026 Dorian Javá Brown</span>
+    <span><a href="https://github.com/dbrownjave/claude-token-saver">GitHub</a> · <a href="https://github.com/dbrownjave/claude-token-saver/issues">Issues</a> · <a href="https://github.com/dbrownjave/claude-token-saver/blob/main/docs/claude-mods.md">Mod docs</a></span>
+  </footer>
+</div>
+<script>
+  for (const b of document.querySelectorAll('[data-copy]')) b.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied'; setTimeout(() => (b.textContent = 'Copy'), 1500) } catch { b.textContent = 'Select it' }
+  })
+</script>
+</body>
+</html>
