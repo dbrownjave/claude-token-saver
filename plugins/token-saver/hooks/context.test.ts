@@ -126,13 +126,13 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(saved?.props.height).toBe(10 + 2 * 5)
       expect(mem?.props.height).toBe(14 + 2 * 5)
     }
-    expect(await ui.find({ text: /^484k of 1M tok$/ })).toBeDefined()
+    expect(await ui.find({ text: /^484k of 1M tokens$/ })).toBeDefined()
     expect(await ui.find({ text: /^Re-read every time Claude replies or uses a tool$/ })).toBeDefined()
     expect(await ui.find({ text: /^MCP tools \(deferred\)$/ })).toBeDefined()
     expect(await ui.find({ text: /^—$/ })).toBeDefined()
     expect(await ui.find({ text: /^30\.2%$/ })).toBeDefined()    // Messages 302k of 1M
     expect(await ui.find({ text: /^Saved$/ })).toBeDefined()
-    expect(await ui.find({ text: /^0 tok$/ })).toBeDefined()
+    expect(await ui.find({ text: /^0 tokens$/ })).toBeDefined()
     expect(await ui.find({ text: /^Cut 0% of input$/ })).toBeDefined()
     expect(await ui.find({ text: /^Spent \$1\.37$/ })).toBeDefined()   // a cost ledger, but no turns yet: no derived rate
     expect(await ui.find({ text: /^Handoff$/ })).toBeDefined()       // the next mark: 60% handoff
@@ -342,9 +342,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await turn($)                                                     // one step: 150k cache reads, nothing the plugin did
     const ui: any = await mount($, surface)
     if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
-    expect(await ui.find({ text: /^0 tok$/ })).toBeDefined()           // Saved: zero, the plugin did nothing yet
+    expect(await ui.find({ text: /^0 tokens$/ })).toBeDefined()           // Saved: zero, the plugin did nothing yet
     expect(await ui.find({ text: /^Cut 0% of input$/ })).toBeDefined()
-    expect(await ui.find({ text: /Prompt cache read 150k tok at a tenth of the price/ })).toBeDefined()
+    expect(await ui.find({ text: /Prompt cache read 150k tokens at a tenth of the price/ })).toBeDefined()
     expect(await ui.find({ text: /^Cache reads/ })).toBeUndefined()    // the old, false source is gone
     await ui.press({ key: 'ctx-receipt' })
     expect(await ui.find({ text: /^Prompt cache, Claude's own \(not counted\)$/ })).toBeDefined()
@@ -372,4 +372,49 @@ test('desktop: a redraw with the same figures gives the same Svg sources, so a s
     expect(b[i][1] === a[i][1]).toBe(true)                      // byte for byte: the animated ones included
   }
   expect(a.some(([, src]) => src.includes('<animate'))).toBe(true)
+})
+
+test('/clear says what it freed, typed or from the pane, and the band starts over', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home' })
+  let cleared = false
+  const toasts: string[] = []
+  const lines: string[] = []
+  // wire() minus the toast and log sinks: this test reads them. Before the clear the engine reports the full
+  // window; after it, only the next session's preamble.
+  on('session.usage' as any, () => ({ value: cleared ? { ...USAGE, context: { tokens: 12_000, window: 1_000_000, percent: 1 } } : USAGE }))
+  on('command.run' as any, (_$: any, e: any) => { if (e.command === 'clear') cleared = true; return { text: 'ran' } })
+  on('turn.start' as any, (_$: any, e: any) => ({ turnId: e.turnId }))
+  on('turn.complete' as any, () => ({ text: 'ok' }))
+  on('turn.step' as any, async function* () {
+    return { turnId: 't', index: 0, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: STEP }
+  })
+  on('ui.status' as any, () => ({ value: undefined }))
+  on('ui.toast' as any, (_$: any, e: any) => { toasts.push(JSON.stringify(e)); return { value: undefined } })
+  on('ui.log' as any, (_$: any, e: any) => { lines.push(JSON.stringify(e)); return { value: undefined } })
+  await turn($)
+  await ($ as any).command.run({ command: 'clear', args: '' })
+  expect(cleared).toBe(true)
+  expect(toasts.some((t) => /Cleared: ≈472\.0k tokens freed \(47% of 1\.0M\)/.test(t))).toBe(true)
+  expect(lines.some((t) => /≈472\.0k tokens freed/.test(t))).toBe(true)
+})
+
+test('/tokens list is the pane as a table: context with a bar, cache, saved, keep-warm, memory, next, then help', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => USAGE)
+  await turn($)
+  const text = String((await ($ as any).command.run({ command: 'tokens', args: 'list', presentation: { columns: 120 } })).text)
+  const lines = text.split('\n')
+  expect(lines[0]).toMatch(/^┌─+┬─+┬─+┐$/)
+  expect(lines[1]).toMatch(/^│ Context +│ 484k of 1M \(48%\) +│ █{10}░{10} +│$/)
+  expect(lines[2]).toMatch(/^│ Cache +│ Warm \d+m +│ next message reuses 484k from cache · \d+m left · hit \d+% +│$/)
+  expect(lines[3]).toMatch(/^│ Saved +│ 0 tokens +│ trimmed output 0 · compactions vetoed 0 · keep-warm 0 +│$/)
+  expect(lines[4]).toMatch(/^│ Keep-warm +│ (on|off[^│]*) +│/)
+  expect(lines[5]).toMatch(/^│ Memory +│ messages 302k +│ skills 88k · MCP tools 63k · memory files 20k · system prompt 8k +│$/)
+  expect(lines[6]).toMatch(/^│ Next +│ \S/)
+  expect(lines[7]).toMatch(/^└─+┴─+┴─+┘$/)
+  expect(lines[8]).toMatch(/^\/tokens opens the pane · \/tokens learn/)
+  const widths = new Set(lines.slice(0, 8).map((l) => [...l].length))
+  expect(widths.size).toBe(1)                                        // every row is as wide as the frame
+  expect(text).not.toMatch(/\btok\b/)
 })

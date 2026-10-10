@@ -1270,7 +1270,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
     { label: 'Keep-warm', tok: warmNet },                                          // re-writes avoided, less what the pings cost
   ]
   const totalTok = Math.max(0, sources[0].tok + sources[1].tok + warmNet)
-  const cacheInfo = { read: T.cacheRead, line: T.cacheRead > 0 ? `Prompt cache read ${fmtK(T.cacheRead)} tok at a tenth of the price — Claude's own, not counted` : '' }
+  const cacheInfo = { read: T.cacheRead, line: T.cacheRead > 0 ? `Prompt cache read ${fmtK(T.cacheRead)} tokens at a tenth of the price — Claude's own, not counted` : '' }
   const share = totalTok > 0 ? totalTok / (totalTok + billedUnits) : 0
   const priced = mode === 'api' && rate > 0
   const usd = (tok) => (priced ? `$${((tok * rate) / 1e6).toFixed(2)}` : '')
@@ -1318,8 +1318,8 @@ function contextView(usage, ttl, usageLast, clock, stats) {
 
   return {
     hasData: !!usage, pct, used, window, measure, crossed, accent: ACC[crossed], marksAll, nextMark, prevMark, compactPct, handoffPct, compactMarkPct,
-    title: { used: window ? `${fmtK(used)} / ${fmtK(window)} (${pct}%)` : `${fmtK(used)} tok` },
-    cache, savings, five, memory: { rows, parts, title: window ? `${fmtK(used)} of ${fmtK(window)} tok` : `${fmtK(used)} tok` }, breakdown: b,
+    title: { used: window ? `${fmtK(used)} / ${fmtK(window)} (${pct}%)` : `${fmtK(used)} tokens` },
+    cache, savings, five, memory: { rows, parts, title: window ? `${fmtK(used)} of ${fmtK(window)} tokens` : `${fmtK(used)} tokens` }, breakdown: b,
   }
 }
 
@@ -1483,11 +1483,11 @@ function drawContextPane(ui, view, o) {
   // narrow: "Saved … this session" over "Cut …% of input   ≈ $ · Spent $"
   const savedHead = narrow
     ? col({}, [
-        row({}, [one('Saved', 'text'), t(' '), one(`${fmtK(sv.totalTok)} tok`, 'success'), one(' this session', 'inactive')]),
+        row({}, [one('Saved', 'text'), t(' '), one(`${fmtK(sv.totalTok)} tokens`, 'success'), one(' this session', 'inactive')]),
         row({}, [one(cut, 'text'), grow(), t(' '), ...sv.right.map(([s, r]) => one(s, r))]),
       ])
     : row({}, [
-        line('Saved', 'text'), t(' '), line(`${fmtK(sv.totalTok)} tok`, 'success'), line(' this session · ', 'inactive'), line(cut, 'text'),
+        line('Saved', 'text'), t(' '), line(`${fmtK(sv.totalTok)} tokens`, 'success'), line(' this session · ', 'inactive'), line(cut, 'text'),
         grow(), ...sv.right.map(([s, r]) => line(s, r)),
       ])
   const longKey = sv.sources.reduce((n, s) => n + 3 + s.label.length + fmtK(s.tok).length, 0) + 15
@@ -1808,6 +1808,45 @@ async function loadContext($, now, columns) {
   return ctxLoading
 }
 
+/**
+ * /tokens list: the Context pane as a table, a row per card: the card, its headline figure, the detail.
+ * The figures are the pane's own (contextView, nextCard, billCard), so the two never disagree. Fits `columns`.
+ */
+function listText(view, o) {
+  const bar = (f, n = 20) => { const k = Math.round(clamp01(f) * n); return '█'.repeat(k) + '░'.repeat(n - k) }
+  const low = (s) => String(s || '').replace(/^ · /, '').replace(/^[A-Z](?=[a-z])/, (ch) => ch.toLowerCase())   // acronyms (MCP) keep their case
+  const dots = (...facts) => facts.filter(Boolean).join(' · ')
+  const c = view.cache, sv = view.savings
+  const rows = []
+  rows.push(['Context', view.window ? `${fmtK(view.used)} of ${fmtK(view.window)} (${view.pct}%)` : `${fmtK(view.used)} tokens`, bar(view.pct / 100)])
+  rows.push(['Cache', c.short, dots(c.sentence.map((p) => p[0]).join('').replace(/^[^:]*: /, ''), c.known ? low(c.rest) : '')])
+  rows.push(['Saved', `${fmtK(sv.totalTok)} tokens${sv.priced ? ` ≈ $${((sv.totalTok * sv.rate) / 1e6).toFixed(2)}` : ''}`, dots(...sv.sources.map((x) => `${low(x.label)} ${fmtK(x.tok)}`))])
+  rows.push(['Keep-warm', keepWarm.on ? 'on' : `off${keepWarm.stopped ? ` (${keepWarm.stopped})` : ''}`,
+    keepWarm.on ? `${keepWarm.pings} ping${keepWarm.pings === 1 ? '' : 's'} · avoided ${fmt(keepWarm.savedTok)} · spent ${fmt(keepWarm.costTok)} tokens` : ''])
+  if (sv.mode === 'subscription' && view.five) {
+    const b = billCard(view, o.now, o.ttl, o.keepWarmMax, o.longTtl)
+    rows.push(['5-hour window', dots(low(b.strong), low(b.rest)), low(b.foot)])
+  }
+  if (view.breakdown) {
+    const top = view.memory.rows.filter((r) => !r.deferred && r.key !== 'free' && r.key !== 'buffer' && r.tokens > 0).sort((x, y) => y.tokens - x.tokens).slice(0, 5)
+    if (top.length) rows.push(['Memory', `${low(top[0].name)} ${fmtK(top[0].tokens)}`, dots(...top.slice(1).map((r) => `${low(r.name)} ${fmtK(r.tokens)}`))])
+  }
+  const n = nextCard(view, avgGrowth())
+  rows.push(['Next', `${n.title} ${low(n.accent)}`, dots(low(n.strong), low(n.rest), low(n.foot))])
+
+  // column widths: the first two fit their widest cell, the detail takes what is left of the terminal and is clipped
+  const cols = Math.max(60, Number(o.columns) || 100)
+  const w0 = Math.max(...rows.map((r) => r[0].length)), w1 = Math.max(...rows.map((r) => r[1].length))
+  const w2 = Math.max(10, Math.min(Math.max(...rows.map((r) => r[2].length)), cols - w0 - w1 - 10))
+  const line = (l, m, r) => `${l}${'─'.repeat(w0 + 2)}${m}${'─'.repeat(w1 + 2)}${m}${'─'.repeat(w2 + 2)}${r}`
+  const cell = (t, w) => ` ${clip(t, w).padEnd(w)} `
+  const out = [line('┌', '┬', '┐')]
+  for (const r of rows) out.push(`│${cell(r[0], w0)}│${cell(r[1], w1)}│${cell(r[2], w2)}│`)
+  out.push(line('└', '┴', '┘'))
+  out.push(dots('/tokens opens the pane', '/tokens learn explains each row', '/tokens hide|show the band', 'marks: ~/.claude/token-saver/thresholds.json', o.compactGuard ? 'a vetoed /compact: /compact force' : ''))
+  return out.join('\n')
+}
+
 /** /clear from the pane: $.command.run is the documented route for a plugin; where it is missing, say so, never fake it. */
 async function clearSession($) {
   try { await $.ui.close({ id: CONTEXT_PANE }) } catch { /* already closed */ }
@@ -2116,6 +2155,30 @@ export function register(on, options = {}) {
     return next(e)
   })
 
+  // /clear, typed or from the pane's Clear: say what it freed. Before the clear the engine reports the window's
+  // fill; after it the window holds at most the next session's preamble. Freed is the difference (≈: the preamble
+  // is read again on the next turn, and a build that still reports the old fill after the clear counts as empty).
+  on('command.run', { command: 'clear' }, async ($, e, next) => {
+    let before = null
+    try { before = await contextOf($) } catch { before = null }
+    const r = await next(e)
+    let after = 0
+    try { after = (await contextOf($)).tokens || 0 } catch { after = 0 }
+    lastUsage = null                                   // the band and the pane start from the new window
+    announcedPct = 0
+    growth.length = 0
+    turnStartTokens = null
+    bandCtx = { at: 0, usage: null }
+    ctxCache = { at: 0, usage: null }
+    const freed = before && before.tokens > 0 ? before.tokens - (after < before.tokens ? after : 0) : 0
+    if (freed > 0) {
+      const of = before.window > 0 ? ` (${Math.round((100 * freed) / before.window)}% of ${fmt(before.window)})` : ''
+      const msg = `Cleared: ≈${fmt(freed)} tokens freed${of}`
+      try { $.ui.log(msg) } catch { /* no UI */ }
+      toast($, msg, 8000)
+    }
+    return r
+  })
   on('command.run', { command: 'tokens' }, async ($, e) => {
     const arg = (e.args || '').trim().toLowerCase()
     if (arg === 'learn' || arg.startsWith('learn ')) {
@@ -2139,25 +2202,11 @@ export function register(on, options = {}) {
       if (!(e.presentation && e.presentation.isFullscreen === true)) { ctxExpanded = true; invalidate($) }
       if (await openContextPane($)) return { text: 'Context pane opened. Esc closes it. /tokens list prints the same as text.' }
     }
-    const ctx = await contextOf($)
-    const clock = cacheClock(await $.clock.now(), ttl)
-    const u = lastUsage || {}
-    const cache = !clock.known
-      ? 'cache: no response yet'
-      : clock.warm
-        ? `cache warm, ~${mins(clock.leftMs)}m left (ttl ${options.longCacheTtl ? '1h' : '5m'})`
-        : `cache cold, idle ${mins(clock.idleMs)}m`
-    const window = ctx.window ? ` of ${fmt(ctx.window)} (${ctx.percent}%)` : ''
-    return {
-      text: [
-        `context       ${fmt(ctx.tokens)} tok${window}  ·  ${cache}`,
-        `last request  in ${fmt(u.input_tokens)}  out ${fmt(u.output_tokens)}  cache-read ${fmt(u.cache_read_input_tokens)} (${hitPct(u)}%)`,
-        `this session  rewrites ${rewrites}  trimmed ~${fmt(savedChars)} chars  compactions vetoed ${vetoes}`,
-        `keep-warm     ${keepWarm.on ? `on · ${keepWarm.pings} ping${keepWarm.pings === 1 ? '' : 's'} · avoided ${fmt(keepWarm.savedTok)} · spent ${fmt(keepWarm.costTok)} tok` : `off${keepWarm.stopped ? ` (${keepWarm.stopped})` : ''}`}`,
-        hintFor(ctx.percent, clock) || 'under your lowest threshold',
-        'limits: ~/.claude/token-saver/thresholds.json  ·  /tokens hide|show  ·  override a veto: /compact force',
-      ].join('\n'),
-    }
+    // /tokens list: the pane's cards as text, one line each, from the same view the pane draws.
+    const now = await $.clock.now()
+    const data = await loadContext($, now, 80)
+    const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
+    return { text: listText(view, { now, ttl, keepWarmMax, longTtl: !!options.longCacheTtl, compactGuard, columns: e.presentation && e.presentation.columns }) }
   })
 
   /**
@@ -2389,7 +2438,7 @@ export function register(on, options = {}) {
     const header = [
       row([
         bold('Loadout  '),
-        dim(`active ${active.length} ≈${d.per_turn_tokens} tok every turn · parked ${parked.length} ≈${d.parked_tokens} kept out  `),
+        dim(`active ${active.length} ≈${d.per_turn_tokens} tokens every turn · parked ${parked.length} ≈${d.parked_tokens} kept out  `),
       ]),
       row([
         h(Button, { key: 'refresh', label: skillsBusy ? 'working…' : 'Refresh', hotkey: 'r', onPress: () => refreshSkills($, cwd) }),
@@ -2405,7 +2454,7 @@ export function register(on, options = {}) {
       ? active.map((sk) => row([
           dim(unused.has(sk.name) ? '· ' : '  '),
           text(pad(sk.name, nameW)),
-          dim(`  ${String(sk.per_turn).padStart(4)} tok  `),
+          dim(`  ${String(sk.per_turn).padStart(4)} tokens  `),
           ...(narrow ? [] : [dim(pad(usage[sk.name] ? `${daysAgo(usage[sk.name].last)} ×${usage[sk.name].count}` : 'never', 14))]),
           h(Button, { key: `park:${sk.name}`, label: 'Park', onPress: () => actSkills($, 'park', [sk.name], cwd) }),
         ]))
@@ -2415,7 +2464,7 @@ export function register(on, options = {}) {
       ? parked.map((sk) => row([
           dim(usage[sk.name] ? '! ' : '  '),
           text(pad(sk.name, nameW)),
-          dim(`  ${String(sk.per_turn).padStart(4)} tok  `),
+          dim(`  ${String(sk.per_turn).padStart(4)} tokens  `),
           ...(narrow ? [] : [dim(pad(usage[sk.name] ? `used ${daysAgo(usage[sk.name].last)}` : '', 14))]),
           ...(linked.has(sk.name)
             ? [dim('linked here  '), h(Button, { key: `unlink:${sk.name}`, label: 'Unlink', onPress: () => actSkills($, 'unlink', [sk.name], cwd) })]

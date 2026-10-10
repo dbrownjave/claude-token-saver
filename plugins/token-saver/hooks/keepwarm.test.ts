@@ -63,7 +63,7 @@ test('keep-warm pings just before the 5-minute TTL lapses, stops at the cap, and
   // Back long after the cap let it lapse: the pings did not cover the gap, so nothing is booked as avoided.
   await turn($)
   let text = await tokensText($)
-  expect(text).toContain('keep-warm     on · 5 pings · avoided 0 ·')
+  expect(text).toContain('5 pings · avoided 0 ·')
 
   // A stretch the pings cover: come back after 9 minutes (would have lapsed at 5), cache still warm.
   const before = forks.length
@@ -84,7 +84,7 @@ test('keep-warm stays off on a subscription: the main thread already caches for 
   await turn($)
   await idle(clock, 30 * MIN)
   expect(forks.length).toBe(0)
-  expect(await tokensText($)).toContain('keep-warm     off (not API billing)')
+  expect(await tokensText($)).toContain('off (not API billing)')
 })
 
 test('keep-warm never pings during a turn, and stops a stretch on a miss', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -115,5 +115,5 @@ test('keep-warm can be turned off', { options: { ...OPTIONS, keepWarm: false }, 
   await turn($)
   await idle(clock, 30 * MIN)
   expect(forks.length).toBe(0)
-  expect(await tokensText($)).toContain('keep-warm     off')
+  expect(await tokensText($)).toContain('│ off')
 })

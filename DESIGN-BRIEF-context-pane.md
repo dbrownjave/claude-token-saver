@@ -21,7 +21,7 @@ Existing visual language you may reuse: a bar made of tiny rounded cells (3 px o
 
 1. Savings first. The breakdown appears only where it leads to an action ("MCP tools 63k every turn → /mcp, disable unused"). Never a plain legend for its own sake.
 2. Never show a dollar on a subscription. Never invent a price; label estimates as estimates and show the real spend beside them.
-3. Every number that can be zero at session start must still read sensibly ("0 tok saved", not a blank).
+3. Every number that can be zero at session start must still read sensibly ("0 tokens saved", not a blank).
 4. Three states must work: collapsed (one row + bar), expanded, and "no response yet" (before the first reply, when the cache and totals are unknown).
 5. Readable in the terminal at 80 columns and on the desktop at ~860 px. No wall of text: bold the number, dim the label, one idea per line.
 6. Colour: one accent family for the context bar that shifts with the crossed threshold (calm → amber → orange → red); the cache bar warm vs cold; category colours only on the expanded split bar. Dark background. No rainbow legends.

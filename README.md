@@ -10,7 +10,7 @@ git clone https://github.com/dbrownjave/claude-token-saver && cd claude-token-sa
 
 Then open a new session and type `/tokens`.
 
-**True numbers.** The pane's *Saved* figure counts only what the plugin itself did: trimmed output, compactions it vetoed, and keep-warm pings net of their cost. Claude's own prompt-cache reads are shown beside it and never added in; a session with 150k cache reads and nothing trimmed says *Saved 0 tok*, and a test holds it to that. Estimates carry a ≈. Dollars appear only on API billing with a rate derived from your bill, never on a subscription.
+**True numbers.** The pane's *Saved* figure counts only what the plugin itself did: trimmed output, compactions it vetoed, and keep-warm pings net of their cost. Claude's own prompt-cache reads are shown beside it and never added in; a session with 150k cache reads and nothing trimmed says *Saved 0 tokens*, and a test holds it to that. Estimates carry a ≈. Dollars appear only on API billing with a rate derived from your bill, never on a subscription.
 
 Docs: [docs/claude-mods.md](docs/claude-mods.md) is a full reference for writing Claude Code mods, written from the engine's own type definitions. The repo carries two skills so Claude knows how to edit this mod (`mod-authoring`) and ship it (`release`). Site: [site/index.html](site/index.html). Contributing: [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -155,7 +155,7 @@ Add your own rewrite:
 Every skill under `~/.claude/skills` costs tokens on **every turn**: its name and description sit in the system prompt's skill listing. The body only loads when you invoke it. Thirty skills is a few hundred tokens a turn, forever.
 
 ```bash
-./install.sh skills             # active skills, tok/turn, last use, · = unused 30+ days
+./install.sh skills             # active skills, tokens/turn, last use, · = unused 30+ days
 ./install.sh skills pick        # interactive: choose what to park
 ./install.sh skills park gsap-* # by name, glob, @group, or 'unused'
 ```

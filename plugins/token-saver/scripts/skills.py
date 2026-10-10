@@ -590,11 +590,11 @@ def suggest(project: Path, topic: str, as_json: bool, brief: bool) -> int:
         if strong:
             print("\nParked skills that fit this repo:")
             for sc, e, why in strong:
-                print(f"  {e['name']:<34} {e['per_turn']:>4} tok/turn   {', '.join(why[:3])}")
+                print(f"  {e['name']:<34} {e['per_turn']:>4} tokens/turn   {', '.join(why[:3])}")
         if maybe:
             print("\nMaybe (weak hints only, not in the command below):")
             for sc, e, why in maybe:
-                print(f"  {e['name']:<34} {e['per_turn']:>4} tok/turn   {', '.join(why[:3])}")
+                print(f"  {e['name']:<34} {e['per_turn']:>4} tokens/turn   {', '.join(why[:3])}")
         if strong:
             names = " ".join(compact_names([e["name"] for _, e, _ in strong], [e["name"] for e in parked]))
             print(f"\nEnable for this repo only:  skills.py link {names}")
@@ -647,7 +647,7 @@ def table(active: list[dict], usage: dict, unused: set[str], numbered: bool) -> 
         if grp.get(e["name"]):
             flags.append("@" + grp[e["name"]])
         lines.append(
-            f"{num}{mark} {e['name']:<{width}}  {e['per_turn']:>4} tok/turn  {e['on_invoke']:>5} on use  "
+            f"{num}{mark} {e['name']:<{width}}  {e['per_turn']:>4} tokens/turn  {e['on_invoke']:>5} on use  "
             f"{fmt_last(usage.get(e['name'])):<16} {' '.join(flags)}".rstrip()
         )
     return rows, lines
@@ -680,12 +680,12 @@ def status(project: Path, unused_days: int, with_usage: bool, as_json: bool, res
                           "project_links": links, "per_turn_tokens": per_turn, "parked_tokens": saved,
                           "scan_note": SCAN_NOTE}, indent=1))
         return 0
-    print(f"Active skills: {len(active)}  ≈{per_turn} tok on every turn (name + description in the listing)")
+    print(f"Active skills: {len(active)}  ≈{per_turn} tokens on every turn (name + description in the listing)")
     for line in table(active, usage, unused, numbered=False)[1]:
         print(line)
     if with_usage:
         print(f"  · = no Skill call in local transcripts for {unused_days}+ days ({len(unused)} skills, "
-              f"≈{sum(e['per_turn'] for e in active if e['name'] in unused)} tok/turn)   sym = symlinked skill")
+              f"≈{sum(e['per_turn'] for e in active if e['name'] in unused)} tokens/turn)   sym = symlinked skill")
         if SCAN_NOTE:
             print(f"  {SCAN_NOTE}")
     grp = groups([e["name"] for e in parked])
@@ -693,7 +693,7 @@ def status(project: Path, unused_days: int, with_usage: bool, as_json: bool, res
         by: dict[str, list[str]] = {}
         for e in parked:
             by.setdefault(grp.get(e["name"], "other"), []).append(e["name"])
-        print(f"\nParked: {len(parked)}  ≈{saved} tok/turn kept out of the prompt")
+        print(f"\nParked: {len(parked)}  ≈{saved} tokens/turn kept out of the prompt")
         for g, ns in sorted(by.items()):
             shown = [f"{n} ({fmt_last(usage[n])})" if usage.get(n) else n for n in ns]
             print(f"  {g:<12} {', '.join(shown)}")
@@ -714,7 +714,7 @@ def pick(project: Path, unused_days: int, with_usage: bool, rescan: bool = False
         return 0
     usage = usage_scan(rescan=rescan) if with_usage else {}
     unused = unused_names(active, usage, unused_days) if with_usage else []
-    print(f"Active skills: {len(active)}  ≈{sum(e['per_turn'] for e in active)} tok on every turn\n")
+    print(f"Active skills: {len(active)}  ≈{sum(e['per_turn'] for e in active)} tokens on every turn\n")
     rows, lines = table(active, usage, set(unused), numbered=True)
     for line in lines:
         print(line)
@@ -748,7 +748,7 @@ def pick(project: Path, unused_days: int, with_usage: bool, rescan: bool = False
         print("Nothing changed.")
         return 1
     saving = sum(e["per_turn"] for e in active if e["name"] in names)
-    print(f"\nPark {len(names)} skill(s), ≈{saving} tok/turn: {', '.join(names)}")
+    print(f"\nPark {len(names)} skill(s), ≈{saving} tokens/turn: {', '.join(names)}")
     try:
         ok = input("Proceed? [y/N] ").strip().lower()
     except (EOFError, KeyboardInterrupt):

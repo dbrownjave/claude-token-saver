@@ -99,12 +99,12 @@ def warn(report: dict) -> list[str]:
 def render(report: dict) -> str:
     lines = [
         f"Token audit  {report['root']}",
-        f"  CLAUDE.md     ~{report['claude_md_tokens']:>5} tok  ({report['claude_md_bytes']} bytes)",
-        f"  rules         ~{report['rules_tokens']:>5} tok  ({report['rules_files']} files)",
-        f"  skills        ~{approx_tokens(report['skills_bytes']):>5} tok  ({report['skills_files']} files, loaded on demand)",
-        f"  settings.json ~{approx_tokens(report['settings_bytes']):>5} tok",
-        f"  mcp.json      ~{approx_tokens(report['mcp_bytes']):>5} tok  ({report['mcp_servers']} servers)",
-        f"  startup est   ~{report['startup_tokens_est']:>5} tok  (CLAUDE.md + rules + settings + mcp)",
+        f"  CLAUDE.md     ~{report['claude_md_tokens']:>5} tokens  ({report['claude_md_bytes']} bytes)",
+        f"  rules         ~{report['rules_tokens']:>5} tokens  ({report['rules_files']} files)",
+        f"  skills        ~{approx_tokens(report['skills_bytes']):>5} tokens  ({report['skills_files']} files, loaded on demand)",
+        f"  settings.json ~{approx_tokens(report['settings_bytes']):>5} tokens",
+        f"  mcp.json      ~{approx_tokens(report['mcp_bytes']):>5} tokens  ({report['mcp_servers']} servers)",
+        f"  startup est   ~{report['startup_tokens_est']:>5} tokens  (CLAUDE.md + rules + settings + mcp)",
         "",
         "Not counted here: system prompt, bundled tools, MCP schemas once connected, conversation history.",
         "In a session run /context for the live breakdown.",
