@@ -356,7 +356,7 @@
     if (ro.ro === 'exhead' || ro.ro === 'ghead') {
       const gl = ro.ro === 'ghead', fillB = P.dark ? P.raised : M.hex(M.mix(P.bg, P.text, 0.07))
       const b = document.createElement('span'); b.className = 'mbtn'; b.textContent = gl ? 'Back to Explain' : 'Glossary'
-      b.style.cssText += `;height:20px;padding:0 9px;border-radius:6px;border-color:transparent;background:${fillB};color:${P.dim};cursor:pointer;margin-left:12px`
+      b.style.cssText += `;height:19px;padding:0 8px;border-radius:4px;border-color:transparent;background:${P.appBtn ? M.APP_BTN(P) : fillB};color:${P.appBtn ? P.text : P.dim};cursor:pointer;margin-left:12px`
       b.onclick = (e) => { e.stopPropagation(); gl ? closeGloss(ro.sc) : openGloss(ro.sc) }
       row.append(txt(gl ? 'Glossary' : 'Explain this pane', P.text), grow(), txt('Live values, this session', P.faint), b); return row
     }
@@ -461,7 +461,7 @@
       const l = document.createElement('span'); l.style.cssText = 'min-width:240px;flex:none;display:inline-flex;align-items:center'
       const fill = P.dark ? P.raised : M.hex(M.mix(P.bg, P.text, 0.07))
       const btn = document.createElement('span'); btn.className = 'mbtn'; btn.textContent = cmd; btn.title = `Run ${cmd}`
-      btn.style.cssText += `;height:20px;padding:0 8px;border-radius:6px;border-color:transparent;background:${fill};color:${P.brand};cursor:pointer`
+      btn.style.cssText += `;height:19px;padding:0 8px;border-radius:4px;border-color:transparent;background:${P.appBtn ? M.APP_BTN(P) : fill};color:${P.brand};cursor:pointer`
       btn.onclick = (e) => { e.stopPropagation(); ran(cmd) }
       l.append(txt('↳ ', P.faint), btn)
       row.append(l, txt(what, P.faint), grow(), num(`${save} each time`, P.ok, COL_V * 1.4 + COL_P))
@@ -667,8 +667,9 @@
       // bottom right of the bar: the receipt toggle, in the desktop's own button look
       const open = RECEIPTS.has(paneKey), fillB = P.dark ? P.raised : M.hex(M.mix(P.bg, P.text, 0.07))
       const btn = document.createElement('span'); btn.className = 'mbtn'; btn.title = open ? 'Hide the receipt' : 'Show the receipt'
-      btn.style.cssText += `;height:20px;padding:0 6px 0 9px;gap:4px;border-radius:6px;border-color:transparent;background:${fillB};color:${P.dim};cursor:pointer;margin-left:auto`
-      btn.innerHTML = `Receipt<svg width="12" height="12" viewBox="0 0 12 12" style="transform:rotate(${open ? 180 : 0}deg)"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+      btn.style.cssText += `;height:19px;padding:0 8px;gap:4px;border-radius:4px;border-color:transparent;background:${P.appBtn ? M.APP_BTN(P) : fillB};color:${P.appBtn ? P.text : P.dim};cursor:pointer;margin-left:auto`
+      if (P.appBtn) btn.textContent = open ? 'Hide receipt' : 'Receipt'           // words, as the plugin draws it
+      else btn.innerHTML = `Receipt<svg width="12" height="12" viewBox="0 0 12 12" style="transform:rotate(${open ? 180 : 0}deg)"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
       btn.onclick = (e) => { e.stopPropagation(); open ? RECEIPTS.delete(paneKey) : RECEIPTS.add(paneKey); build() }
       key.append(btn); box.append(key)
       if (open) { const r = receiptDesk(P); r.style.cssText = `margin-top:8px;padding-top:6px;border-top:1px solid ${P.line}`; box.append(r) }
@@ -761,7 +762,7 @@
   function desk(sc, P) {
     const pane = document.createElement('div'); pane.className = 'mpane'
     // one rhythm: the same 10 px above the bar (from the title) and below it (to the next row), inside 14 × 18 px padding
-    pane.style.cssText = `background:${P.bg};border-color:${P.line};color:${P.dim};padding:14px 18px 16px`
+    pane.style.cssText = `background:${P.bg};border-color:${P.appBtn ? 'transparent' : P.line};color:${P.dim};padding:14px 18px 16px`   // the band has no outline
     const tr = badgeify(M.deskRow(title('desk', sc), P), P); tr.style.marginBottom = `${GAP}px`; pane.append(tr)
     // +2 under the bar: the 22 px buttons sit 2 px taller than the title text, so the visible gaps match
     lines('desk', sc).forEach((L, i) => { const r = L.readout ? roDesk(L.readout, P, sc) : badgeify(indRow(L, P), P); if (i === 0) r.style.marginBottom = `${GAP + 2}px`; pane.append(r) })
@@ -916,7 +917,7 @@
   /* ---------- the page ---------- */
   const plain = (segs) => segs.readout ? roTerm(segs.readout, M.palette('cli', 'dark')).text.replace(/\s+$/, '') : segs.map((g) => g.sp ? '  ⟷  ' : g.bar ? '‹bar›' : g.blank ? '' : M.segText(g)).join('').trim()
   function build() {
-    const PD = M.palette('desktop', STATE.desk), PT = M.palette('cli', STATE.term)
+    const PD = { ...M.palette('desktop', STATE.desk), appBtn:true }, PT = M.palette('cli', STATE.term)   // appBtn: the app's own button look
     const ctl = document.getElementById('ctl')
     ctl.innerHTML = `
       <div class="grp">Desktop ${['dark', 'light'].map((k) => `<button data-desk="${k}" class="${STATE.desk === k ? 'on' : ''}">${k}</button>`).join(' ')}</div>

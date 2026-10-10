@@ -258,6 +258,7 @@
           b.style.cssText += `;color:${P.text};border-color:${P.line};margin:0;border-radius:${g.first ? '6px 0 0 6px' : g.last ? '0 6px 6px 0' : '0'};${g.first ? '' : 'border-left:none'};${g.hot ? `background:${P.text};color:${P.bg};font-weight:600` : ''}`
           b.innerHTML = `<kbd style="color:${g.hot ? P.bg : P.faint};border-color:${g.hot ? P.bg : P.line}">${g.key}</kbd>${g.btn}`
         }
+        if (P.appBtn) appBtn(b, g, P)
         row.append(b); continue
       }
       if (g.handle) {
@@ -271,6 +272,7 @@
         b.style.cssText = prim ? `background:${P.text};color:${P.bg};border-color:${P.text};font-weight:600` : g.kind === 'off' ? `color:${P.faint};border-style:dashed;border-color:${P.line}` : `color:${P.text};border-color:${P.line}`
         if (g.act) { b.style.cursor = 'pointer'; b.onclick = g.act }
         b.innerHTML = `<kbd style="color:${prim ? P.bg : P.faint};border-color:${prim ? P.bg : P.line}">${g.key}</kbd>${g.btn}`
+        if (P.appBtn) appBtn(b, g, P)
         row.append(b); continue
       }
       const x = document.createElement('span'); x.textContent = g.t
@@ -280,6 +282,17 @@
       row.append(x)
     }
     return row
+  }
+  /* The desktop app's own buttons, as the band's Open and × and the banners' "Get more usage" draw: a flat fill
+     (the border colour at 13 %), no border, 4 px corners, 19 px tall, no keycaps. Opt-in per palette (P.appBtn). */
+  const APP_BTN = (P, strong) => (P.dark ? `rgba(222,220,209,${strong ? 0.24 : 0.13})` : `rgba(31,30,29,${strong ? 0.16 : 0.08})`)
+  function appBtn(b, g, P) {
+    b.style.height = '19px'; b.style.borderRadius = '4px'; b.style.borderColor = 'transparent'; b.style.margin = '0'; b.style.fontWeight = '400'
+    b.style.font = ''; b.style.background = g.off ? 'transparent' : APP_BTN(P, g.prim || g.kind === 'primary'); b.style.color = g.off ? P.faint : P.text
+    b.querySelectorAll('kbd').forEach((k) => k.remove())
+    if (g.kind === 'chev') { b.textContent = g.label; b.style.width = ''; b.style.padding = '0 8px' }      // words, not arrows: a plugin Button draws text only
+    else if (g.kind === 'key') { b.style.width = '19px'; b.style.padding = '0' }                                 // ?, square like the band's ×
+    else b.style.padding = '0 8px'
   }
   function termCtl(g, P) {
     const t = segText(g)
@@ -462,7 +475,7 @@
   /* Other pages (m4.html) reuse the renderers: palette, rows, controls, bars, M4's open body, the scenario's numbers */
   const ready = []
   window.MID = {
-    palette, deskRow, termRow, termCtl, segText, colorOf, m4Lines, openBody, barInfoThemed, paintFlat, flatParts, rasterHTML, mix, hex,
+    palette, deskRow, termRow, APP_BTN, termCtl, segText, colorOf, m4Lines, openBody, barInfoThemed, paintFlat, flatParts, rasterHTML, mix, hex,
     TW, data:{ d, p, nm, away, acc, total:total(d) }, onReady:(f) => { if (TH) f(TH); else ready.push(f) },
   }
   fetch('theme/claude-themes.json').then((r) => r.json()).then((j) => {

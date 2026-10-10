@@ -94,7 +94,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ text: /^Context$/ })).toBeDefined()
     expect(await ui.find({ text: /^484k \/ 1M tok$/ })).toBeDefined()
     expect(await ui.find({ text: /^[ \u00a0]\(48%\)$/ })).toBeDefined()
-    expect((await ui.find({ key: 'ctx-expand' }))?.props.label).toBe('⌄')
+    expect((await ui.find({ key: 'ctx-expand' }))?.props.label).toBe('More')
     expect(await ui.find({ text: /^0 saved$/ })).toBeDefined()
     expect(await ui.find({ text: /No response yet: the cache clock starts after the first reply/ })).toBeDefined()
     if (surface === 'terminal') {
@@ -104,6 +104,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
       const svgs = await ui.findAll({ type: 'Svg' })
       expect(svgs.length).toBeGreaterThanOrEqual(2)          // the cache cells and the context bar
       expect(svgs.some((s: any) => /Context 48%/.test(String(s.props.alt)))).toBe(true)
+      const ctxBar: any = svgs.find((s: any) => /Context 48%/.test(String(s.props.alt)))
+      expect(String(ctxBar.props.source)).toContain('fill="#353533"')       // the design's track, not the near-black one
     }
     expect(await ui.find({ text: /Claude's working memory/ })).toBeUndefined()   // closed: nothing between the bar and the bottom row
 
@@ -115,8 +117,15 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(later?.props.role).toBe('dismiss')
 
     await ui.press({ key: 'ctx-expand' })
-    expect((await ui.find({ key: 'ctx-expand' }))?.props.label).toBe('⌃')
+    expect((await ui.find({ key: 'ctx-expand' }))?.props.label).toBe('Less')
     expect(await ui.find({ text: /^Claude's working memory$/ })).toBeDefined()
+    if (surface === 'desktop') {
+      // the open pane's inner bars get 5 px of air above and below (Saved and cards 10 px tall, memory 14 px)
+      const svgs = await ui.findAll({ type: 'Svg' })
+      const saved = svgs.find((x: any) => /^Saved/.test(String(x.props.alt))), mem = svgs.find((x: any) => /working memory by kind/.test(String(x.props.alt)))
+      expect(saved?.props.height).toBe(10 + 2 * 5)
+      expect(mem?.props.height).toBe(14 + 2 * 5)
+    }
     expect(await ui.find({ text: /^484k of 1M tok$/ })).toBeDefined()
     expect(await ui.find({ text: /^Re-read every time Claude replies or uses a tool$/ })).toBeDefined()
     expect(await ui.find({ text: /^MCP tools \(deferred\)$/ })).toBeDefined()
@@ -309,3 +318,39 @@ test('the glossary on a subscription never shows a dollar', { options: { ...OPTI
   expect(await ui.find({ text: /^Glossary$/, type: 'Text' })).toBeDefined()
   expect(await ui.find({ text: /\$/ })).toBeUndefined()
 })
+
+for (const [surface, cols] of [['mobile', 44], ['desktop', 60]] as const) {
+  test(`context pane narrow on ${surface} (${cols} cols): no ⤢, Saved splits in two, cards one per row`, { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+    setup(on, () => USAGE)
+    const ui: any = await mount($, surface as any, { ...PANE, bodyColumns: cols })
+    if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
+    expect(await ui.find({ key: 'ctx-popout' })).toBeUndefined()
+    expect(await ui.find({ text: /^Cut 0% of input$/ })).toBeDefined()
+    expect(await ui.find({ text: /^ this session$/ })).toBeDefined()      // its own line, no trailing " · "
+    expect(await ui.find({ key: 'ctx-receipt' })).toBeDefined()
+    // no fixed-width card columns: each card grows to the body's width
+    const fixed = (await ui.findAll({ type: 'Box' })).filter((b: any) => b.props.width === Math.max(16, Math.floor((cols - 1 - 6) / 3)))
+    expect(fixed.length).toBe(0)
+    expect(await ui.find({ key: 'ctx-clear' })).toBeDefined()
+  })
+}
+
+
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`true numbers on ${surface}: Claude's own cache reads are shown, never counted as saved`, { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+    setup(on, () => USAGE)
+    await turn($)                                                     // one step: 150k cache reads, nothing the plugin did
+    const ui: any = await mount($, surface)
+    if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
+    expect(await ui.find({ text: /^0 tok$/ })).toBeDefined()           // Saved: zero, the plugin did nothing yet
+    expect(await ui.find({ text: /^Cut 0% of input$/ })).toBeDefined()
+    expect(await ui.find({ text: /Prompt cache read 150k tok at a tenth of the price/ })).toBeDefined()
+    expect(await ui.find({ text: /^Cache reads/ })).toBeUndefined()    // the old, false source is gone
+    await ui.press({ key: 'ctx-receipt' })
+    expect(await ui.find({ text: /^Prompt cache, Claude's own \(not counted\)$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Trimmed output$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Compactions vetoed$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Keep-warm$/ })).toBeDefined()
+  })
+}

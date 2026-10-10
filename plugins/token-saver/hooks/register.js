@@ -52,7 +52,7 @@ let rules = DEFAULT_RULES
 let levels = DEFAULT_LEVELS
 let pythonQuietOn = false
 let bandHidden = false
-let bandPane = false              // desktop: the full Context pane drawn in the band (no plugin panes there)
+let bandSurface = 'terminal'      // where the band last drew: the desktop's native buttons drop a press that spans a redraw
 const totals = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0 }   // this session, from turn.step usage
 let limitBase = null            // { pct, tokens } when the five-hour window was first seen: tokens per % of window
 let monthSaved = { key: '', tok: 0, usd: 0, sessionTok: 0, sessionUsd: 0 }   // carried in $.store across sessions
@@ -678,7 +678,7 @@ function progressSettled() {
 // ---------------------------------------------------------------------------
 // The Context pane (/tokens): the pack's own dashboard, drawn to the M4 design (design/m4.js). Closed: the title with
 // the fill, the context bar (F1 fire, ink in the threshold colour), the cache and saved line, Clear / Compact / Later.
-// Open (⌄): what was saved, three cards (next mark, billing, cache), Claude's working memory by kind, drill-down groups.
+// Open: what was saved, three cards (next mark, billing, cache), Claude's working memory by kind, drill-down groups.
 const CONTEXT_PANE = 'context'
 const BREAKDOWN_TTL = 10 * 1000     // $.session.usage({ breakdown: 'summary' }) is cached this long; redraws cost nothing
 let ctxCache = { at: 0, usage: null }
@@ -688,6 +688,7 @@ let ctxMsg = ''
 let ctxPaneOpen = false
 let ctxExpanded = false
 let ctxReceipt = false
+let ctxPopped = false            // desktop: the Pane was opened by the band's ⤢ (cleared when it closes)
 const ctxGroups = new Set()          // which drill-down groups are open
 let homeCache = null                 // $HOME, read once, to shorten memory-file paths
 /** Context added per message: tokens at turn.complete less tokens at turn.start, the last five. */
@@ -708,12 +709,17 @@ const WARM = '#ce9466'
 const COLD = '#629cde'
 const BAR_TRACK = '#2a2a2e'
 const BUFFER_CELL = '#45454b'
+// Desktop: the pane's ground lifted 7% toward the text, and the buffer 30% on toward faint, as design/m4.html draws them
+const DESK_TRACK = '#353533'
+const DESK_BUFFER = '#545350'
 const MARK_TICK = '#c2c0b6'
 const AUTO_TICK = '#7d7b75'
 /** Claude's working memory: one family around Claude's orange, so it never reads as a signal colour. */
 const MEM = { messages: '#e07a52', mcp: '#f2a07b', skills: '#c6613f', system: '#f6c9a8', tools: '#9e9a97', memory: '#b98b72', agents: '#d9a888', other: '#a8968a', buffer: '#64635e', free: '#46453f' }
 const MEM_RANK = ['messages', 'mcp', 'skills', 'system', 'tools', 'memory', 'agents', 'other']
-const PX = 6.5                      // desktop px per body column
+const BAR_PAD = 8                   // desktop: px of air above and below the context bar, as design/m4.html's 10 px gaps
+const INNER_PAD = 5                 // desktop: the same air, smaller, for the Saved, card and memory bars inside the open pane
+const PX = 7.8                      // desktop px per body column (the band measured 523 pt over 66 columns: 7.9)
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
 /** 484000 → "484k", 1000000 → "1M", 1500000 → "1.5M". */
@@ -929,17 +935,20 @@ function cellBar(ui, key, geo, colorAt, o = {}) {
     defs += `<radialGradient id="${id}"><stop offset="0" stop-color="${c}" stop-opacity="${g.alpha.toFixed(3)}"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></radialGradient>`
     glow = `<ellipse cx="${g.x.toFixed(1)}" cy="${g.y.toFixed(1)}" rx="${g.rx.toFixed(1)}" ry="${g.ry.toFixed(1)}" fill="url(#${id})" style="mix-blend-mode:screen"/>`
   }
-  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><defs>${defs}</defs>` +
+  // padY: clear space above and below, in px (a desktop Box margin is a whole line; the design wants ~10 px)
+  const pad = o.padY || 0, HH = H + 2 * pad
+  const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${HH}" viewBox="0 ${-pad} ${W} ${HH}"><defs>${defs}</defs>` +
     `<rect width="${W}" height="${H}" rx="${o.radius ?? Math.min(4, H / 2)}" fill="${track}"/>${cells.join('')}${glow}${ticks.join('')}</svg>`
-  return h(ui.Svg, { source, alt: o.alt || key, height: H, width: W })
+  return h(ui.Svg, { source, alt: o.alt || key, height: HH, width: W })
 }
 
 /** The context bar: F1 in the threshold colour, ticks at the marks still ahead, the auto-compact buffer drawn still. */
-function contextBar(ui, geo, view, t, live) {
-  const info = fireBar(geo, view.pct / 100, live, 31, inkOf(ui.hex(view.accent)), BAR_TRACK)
+function contextBar(ui, geo, view, t, live, padY = 0) {
+  const track = geo.term ? BAR_TRACK : DESK_TRACK
+  const info = fireBar(geo, view.pct / 100, live, 31, inkOf(ui.hex(view.accent)), track)
   const st = f1Frame(info, t)
   const autoX = view.compactPct === null ? Infinity : (view.compactPct / 100) * geo.W
-  const buf = rgb01(BUFFER_CELL)
+  const buf = rgb01(geo.term ? BUFFER_CELL : DESK_BUFFER)
   const colorAt = (cx, cy) => {
     const px = (cx + 0.5) * geo.pitch
     if (px >= autoX && px > info.head + 3 * geo.pitch) return buf
@@ -947,7 +956,7 @@ function contextBar(ui, geo, view, t, live) {
   }
   const ticks = view.marksAll.filter((m) => m.pct > view.pct && m.pct < 100).map((m) => ({ frac: m.pct / 100, color: MARK_TICK, w: 1.5 }))
   if (view.compactPct !== null) ticks.push({ frac: view.compactPct / 100, color: AUTO_TICK, w: 1 })
-  return cellBar(ui, 'ctx-bar', geo, colorAt, { ticks, glow: geo.term ? null : f1Glow(info, t), alt: `Context ${view.pct}%` })
+  return cellBar(ui, 'ctx-bar', geo, colorAt, { track, ticks, padY, glow: geo.term ? null : f1Glow(info, t), alt: `Context ${view.pct}%` })
 }
 
 /** A card's bar: F1 live ('fire') or calm ('ember'); a dim run to where it is heading; a tick (the time in a window). */
@@ -966,7 +975,7 @@ function cardBar(ui, key, geo, bar, t, style) {
     return dim && f > bar.fill + 1 / geo.cols && f <= bar.ext ? dim : null
   }
   const ticks = bar.tick === null || bar.tick === undefined ? [] : [{ frac: bar.tick, color: ui.hex('text'), w: 2 }]
-  return cellBar(ui, key, geo, colorAt, { track: CACHE_TRACK, ticks, glow: geo.term || !lit ? null : f1Glow(info, t), radius: 3, alt: key })
+  return cellBar(ui, key, geo, colorAt, { track: CACHE_TRACK, ticks, glow: geo.term || !lit ? null : f1Glow(info, t), radius: 3, padY: geo.term ? 0 : INNER_PAD, alt: key })
 }
 
 /** The Saved bar: three greens, one per source; a soft white glint sweeps across the fill every 3.2 s. */
@@ -983,7 +992,7 @@ function savedBar(ui, geo, parts, share, t) {
     const k = 0.55 * Math.exp(-dx * dx)
     return k > 0.01 ? mix3(base, WHITE, k) : base
   }
-  return cellBar(ui, 'saved-bar', geo, colorAt, { track: CACHE_TRACK, radius: 3, alt: `Saved, ${Math.round(share * 100)}% of input` })
+  return cellBar(ui, 'saved-bar', geo, colorAt, { track: CACHE_TRACK, radius: 3, padY: geo.term ? 0 : INNER_PAD, alt: `Saved, ${Math.round(share * 100)}% of input` })
 }
 
 /** Working memory: a cell per slice of the window by kind; a light wave runs through the used part every 2.8 s. */
@@ -1005,7 +1014,7 @@ function memoryBar(ui, geo, parts, t) {
     const k = 0.42 * Math.exp(-dx * dx)
     return k > 0.01 ? mix3(s.rgb, WHITE, k) : s.rgb
   }
-  return cellBar(ui, 'mem-bar', geo, colorAt, { alt: "Claude's working memory by kind" })
+  return cellBar(ui, 'mem-bar', geo, colorAt, { padY: geo.term ? 0 : INNER_PAD, alt: "Claude's working memory by kind" })
 }
 
 /** Five tiny cells for the closed pane: lit count is the warmth along the cache gradient; cold is all frozen blue. */
@@ -1162,12 +1171,15 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const rate = Number(saved.rate) || (hasCost && billedUnits > 50_000 ? (usage.cost.usd / billedUnits) * 1e6 : 0)
   const kw = saved.keepWarm || { pings: 0, savedTok: 0, costTok: 0 }
   const warmNet = kw.savedTok - kw.costTok                 // can be negative: pings you never came back for
+  // Only what the plugin itself did. Claude's own prompt cache is reported beside it, never added in: it would
+  // read the same with or without the plugin, and claiming it made the headline a lie.
   const sources = [
-    { label: 'Cache reads', tok: Math.round(T.cacheRead * 0.9) },
-    { label: 'Trimmed output', tok: T.keptOut },
-    { label: 'Re-cache saved', tok: Math.max(0, Math.round(T.vetoTokens * 1.25) + warmNet) },
+    { label: 'Trimmed output', tok: T.keptOut },                                   // ≈ chars ÷ 4, never re-sent
+    { label: 'Compactions vetoed', tok: Math.round(T.vetoTokens * 1.25) },         // the 1.25× re-write a cold /compact would have paid
+    { label: 'Keep-warm', tok: warmNet },                                          // re-writes avoided, less what the pings cost
   ]
-  const totalTok = Math.max(0, sources[0].tok + sources[1].tok + Math.round(T.vetoTokens * 1.25) + warmNet)
+  const totalTok = Math.max(0, sources[0].tok + sources[1].tok + warmNet)
+  const cacheInfo = { read: T.cacheRead, line: T.cacheRead > 0 ? `Prompt cache read ${fmtK(T.cacheRead)} tok at a tenth of the price — Claude's own, not counted` : '' }
   const share = totalTok > 0 ? totalTok / (totalTok + billedUnits) : 0
   const priced = mode === 'api' && rate > 0
   const usd = (tok) => (priced ? `$${((tok * rate) / 1e6).toFixed(2)}` : '')
@@ -1180,7 +1192,8 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const month = saved.month || null
   const monthName = month && /^saved:\d{4}-\d{2}$/.test(month.key) ? MONTHS[Number(month.key.slice(-2)) - 1] : ''
   const receipt = [
-    ...sources.map((s) => ({ label: s.label, tok: fmtK(s.tok), amount: priced ? `≈ ${usd(s.tok)}` : '', role: 'inactive', amountRole: 'success' })),
+    ...sources.map((s) => ({ label: s.label, tok: fmtK(s.tok), amount: priced ? `≈ ${usd(s.tok)}` : '', role: 'inactive', amountRole: s.tok < 0 ? 'warning' : 'success' })),
+    ...(T.cacheRead > 0 ? [{ label: "Prompt cache, Claude's own (not counted)", tok: fmtK(T.cacheRead), amount: '', role: 'inactive', amountRole: 'inactive' }] : []),
     { rule: true },
     { label: 'Total saved', tok: fmtK(totalTok), amount: priced ? `≈ ${usd(totalTok)}` : '', role: 'text', amountRole: 'success' },
     ...(priced ? [
@@ -1190,7 +1203,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   ]
   const note = mode === 'api' ? (Number(saved.rate) ? `At $${Number(saved.rate).toFixed(2)}/M input (your rate)` : rate ? `At ≈$${rate.toFixed(2)}/M input, derived from this session's bill` : 'Set $/M in /config for dollars')
     : mode === 'subscription' ? (tokPerPct > 0 ? 'Subscription: savings shown as window headroom' : 'Subscription: window maths appears once the 5-hour window moves') : 'Tokens only'
-  const savings = { mode, rate, priced, totalTok, share, sources, right, receipt, note, short: totalTok ? `${fmtK(totalTok)} saved` : '0 saved', spent, hasCost }
+  const savings = { mode, rate, priced, totalTok, share, sources, cacheInfo, right, receipt, note, short: totalTok ? `${fmtK(totalTok)} saved` : '0 saved', spent, hasCost }
 
   // Claude's working memory, by kind, as /context lists it
   let rows
@@ -1302,26 +1315,39 @@ function drawContextPane(ui, view, o) {
   const num = (s, color, w) => h(Box, { width: w, flexShrink: 0, justifyContent: 'flex-end' }, t(s, color))
   const fit = (child) => h(Box, { flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, child)
   const subtle = ui.hex('subtle')
-  const cells = Math.max(30, term ? o.W - 2 : o.W - 4)                 // the body, in character cells
-  const px = Math.max(240, Math.min(824, Math.round(cells * PX)))      // the desktop's bars, in px
+  const cells = Math.max(30, term ? o.W - 2 : o.W - 1)                 // the body, in character cells
+  const px = Math.max(240, Math.min(1600, Math.round(cells * PX)))     // the desktop's bars, in px: the full width
   const size = term ? cells : px
   const rule = () => t('─'.repeat(term ? cells : 200), subtle, { wrap: 'truncate' })
   const blank = () => t(' ')
   // Explain mode: small Claude-orange numbers on the parts it explains (superscripts on the terminal, one cell each)
   const ex = ctxExplain
+  const expanded = o.expanded ?? ctxExpanded
+  const plainT = term ? { plain: true } : {}
   const mark = (n) => (ex ? t(`${term ? SUP[n] : CIRCLED[n]} `, 'claude') : null)
   const markRow = (n, label) => (ex ? row({}, [mark(n), t(label, 'claude')]) : null)
+  // Desktop pieces stay on one line: a squeezed piece truncates instead of wrapping word by word
+  const one = (s, r) => t(s, r, { wrap: 'truncate' })
+  const line = term ? t : one
+  // A phone or a thin window: its text runs wider than `cells` counts, so long rows split, cards stack, ⤢ goes
+  const narrow = !term && (o.mobile || cells < 72)
 
-  // 1. Title: Context   96k / 200k tok (48%) … ⌄   (room is left before the chevron for a "?" later)
+  // 1. Title: Context   96k / 200k tok (48%) … ? More
   const title = row({ alignItems: 'center' }, [
-    t('Context', 'inactive'), t('   '), mark(1), t(view.title.used, 'text'), view.title.pct ? t(view.title.pct, view.accent) : null,
-    grow(),
-    h(Button, { key: 'ctx-explain', label: '?', plain: true, onPress: o.onExplain }), t(term ? ' ' : '  '),
-    h(Button, { key: 'ctx-expand', label: ctxExpanded ? '⌃' : '⌄', plain: true, onPress: o.onExpand }),
+    row({ alignItems: 'center', flexShrink: 1, overflow: 'hidden' }, [
+      line('Context', 'inactive'), t(narrow ? '  ' : '   '), mark(1), line(view.title.used, 'text'), view.title.pct ? line(view.title.pct, view.accent) : null,
+    ]),
+    grow(), t(' '),
+    // desktop: native buttons, as design/m4.html and the app's banners draw them; the terminal keeps bare labels
+    row({ gap: 1, flexShrink: 0 }, [                                   // spaced as Clear / Compact / Later are
+      o.onPopOut && expanded && !narrow ? h(Button, { key: 'ctx-popout', label: '⤢', ...plainT, onPress: o.onPopOut }) : null,
+      h(Button, { key: 'ctx-explain', label: '?', ...plainT, onPress: o.onExplain }),
+      o.onExpand ? h(Button, { key: 'ctx-expand', label: expanded ? 'Less' : 'More', ...plainT, onPress: o.onExpand }) : null,
+    ]),
   ])
 
   // 2. The context bar, full width, nothing on it
-  const barEl = contextBar(ui, geoOf(term, ex ? (term ? cells - 2 : px - 16) : size, 14, 4), view, o.t, o.live)
+  const barEl = contextBar(ui, geoOf(term, ex ? (term ? cells - 2 : px - 16) : size, 14, 4), view, o.t, o.live, term ? 0 : BAR_PAD)
   const bar = ex ? row({ alignItems: 'center' }, [mark(2), barEl]) : barEl
 
   // 3. Bottom row: cache and saved on the left, the actions on the right
@@ -1335,19 +1361,25 @@ function drawContextPane(ui, view, o) {
     btn('later', 'Later', o.onLater, { role: 'dismiss' }),
   ])
   const c = view.cache
-  const sentence = () => c.sentence.map(([s, r]) => t(s, r))
-  const bottom = row({ alignItems: 'center' }, [
-    mark(3), ...cacheMini(ui, c), t(' '),
-    ...(term ? [t(c.short, 'inactive')] : sentence()),
-    t(' · ', 'inactive'), mark(4), t(view.savings.short, 'inactive'),
-    grow(), t(' '), mark(5), buttons,
-  ])
-  // the terminal keeps the bottom row short; the whole sentence sits on its own line under it when it fits
   const sentLen = c.sentence.reduce((n, [s]) => n + s.length, 0)
+  const sentence = (tt = t) => c.sentence.map(([s, r]) => tt(s, r))
+  // desktop: the whole sentence when it fits beside the three buttons (about 26 columns), else the short words;
+  // one line either way: the pieces never wrap, and the left side gives way before the buttons do
+  const whole = !term && 6 + sentLen + 3 + view.savings.short.length + 26 <= cells
+  const status = row({ alignItems: 'center', flexShrink: 1, overflow: 'hidden' }, [
+    mark(3), ...cacheMini(ui, c), t(' '),
+    ...(term ? [t(c.short, 'inactive')] : whole && !narrow ? sentence(one) : [one(c.short, 'inactive')]),
+    line(' · ', 'inactive'), mark(4), line(view.savings.short, 'inactive'),
+  ])
+  // narrow: the status on its own line, the buttons under it, so neither squeezes the other to a stub
+  const bottom = narrow
+    ? col({}, [status, row({ alignItems: 'center', marginTop: 1 }, [grow(), mark(5), buttons])])
+    : row({ alignItems: 'center' }, [status, grow(), t(' '), mark(5), buttons])
+  // the terminal keeps the bottom row short; the whole sentence sits on its own line under it when it fits
   const under = term && sentLen <= cells ? row({}, sentence()) : null
   const msg = ctxMsg ? t(cap1(ctxMsg), 'inactive', { wrap: 'wrap' }) : null
   const explain = ex ? explainSection(ui, view, o, { row, col, t, grow, rule, cells }) : []
-  if (!ctxExpanded) return col({}, [title, bar, bottom, under, msg, ...explain])
+  if (!expanded) return col({}, [title, bar, bottom, under, msg, ...explain])
 
   // 4. Saved: the headline of the whole plugin
   const sv = view.savings
@@ -1355,17 +1387,30 @@ function drawContextPane(ui, view, o) {
   const shades = [ok, mixHex(ok, ui.hex('text'), 0.4), mixHex(ok, CACHE_TRACK, 0.5)]
   const srcSum = sv.sources.reduce((n, s) => n + s.tok, 0) || 1
   const parts = sv.sources.map((s, i) => ({ f: (sv.share * s.tok) / srcSum, color: shades[i] }))
-  const savedHead = row({}, [
-    t('Saved', 'text'), t(' '), t(`${fmtK(sv.totalTok)} tok`, 'success'), t(' this session · ', 'inactive'), t(`Cut ${Math.round(sv.share * 100)}% of input`, 'text'),
-    grow(), ...sv.right.map(([s, r]) => t(s, r)),
-  ])
+  const cut = `Cut ${Math.round(sv.share * 100)}% of input`
+  // narrow: "Saved … this session" over "Cut …% of input   ≈ $ · Spent $"
+  const savedHead = narrow
+    ? col({}, [
+        row({}, [one('Saved', 'text'), t(' '), one(`${fmtK(sv.totalTok)} tok`, 'success'), one(' this session', 'inactive')]),
+        row({}, [one(cut, 'text'), grow(), t(' '), ...sv.right.map(([s, r]) => one(s, r))]),
+      ])
+    : row({}, [
+        line('Saved', 'text'), t(' '), line(`${fmtK(sv.totalTok)} tok`, 'success'), line(' this session · ', 'inactive'), line(cut, 'text'),
+        grow(), ...sv.right.map(([s, r]) => line(s, r)),
+      ])
   const longKey = sv.sources.reduce((n, s) => n + 3 + s.label.length + fmtK(s.tok).length, 0) + 15
   const label = (s) => (term && longKey > cells ? s.label.split(' ')[0] : s.label)
-  const keyRow = row({ alignItems: 'center' }, [
-    ...sv.sources.flatMap((s, i) => [t('■ ', shades[i]), t(`${label(s)} `, 'inactive'), t(fmtK(s.tok), 'text'), i < sv.sources.length - 1 ? t(term ? ' ' : '    ') : null]),
-    grow(), t(' '),
-    h(Button, { key: 'ctx-receipt', label: ctxReceipt ? 'Receipt ⌃' : 'Receipt ⌄', onPress: o.onReceipt }),
-  ])
+  const receiptBtn = h(Button, { key: 'ctx-receipt', label: ctxReceipt ? 'Hide receipt' : 'Receipt', onPress: o.onReceipt })
+  // narrow: the key as a list, one source a line with its figure at the right, Receipt under it
+  const keyRow = narrow
+    ? col({}, [
+        ...sv.sources.map((s, i) => row({ alignItems: 'center' }, [t('■ ', shades[i]), fit(one(s.label, 'inactive')), num(fmtK(s.tok), 'text', 10)])),
+        row({ marginTop: 1 }, [grow(), receiptBtn]),
+      ])
+    : row({ alignItems: 'center' }, [
+        ...sv.sources.flatMap((s, i) => [t('■ ', shades[i]), line(`${label(s)} `, 'inactive'), line(fmtK(s.tok), 'text'), i < sv.sources.length - 1 ? t(term ? ' ' : '    ') : null]),
+        grow(), t(' '), receiptBtn,
+      ])
   const amtW = sv.priced ? Math.max(11, ...sv.receipt.map((r) => (r.amount || '').length + 1)) : 0
   const receiptLine = (r) => {
     if (r.rule) return rule()
@@ -1377,18 +1422,20 @@ function drawContextPane(ui, view, o) {
       num(r.tok, 'inactive', 8), sv.priced ? num(r.amount, r.amountRole, amtW + 1) : null])
   }
   const receipt = ctxReceipt ? col({}, [rule(), ...sv.receipt.map(receiptLine), t(sv.note, 'inactive')]) : null
-  const saved = col({}, [savedHead, savedBar(ui, geoOf(term, size, 10, 3), parts, sv.share, o.t), keyRow, receipt])
+  const cacheLine = sv.cacheInfo && sv.cacheInfo.line ? t(sv.cacheInfo.line, 'inactive', { wrap: term ? 'wrap' : 'truncate' }) : null
+  const saved = col({}, [savedHead, savedBar(ui, geoOf(term, size, 10, 3), parts, sv.share, o.t), keyRow, cacheLine, receipt])
 
   // 5. Three cards: what is next, billing (keep-warm or the 5-hour window), the cache
   const cardList = [nextCard(view, avgGrowth()), billCard(view, o.now, o.ttl, o.keepWarmMax, o.longTtl), cacheCard(view)]
   const cardKeys = ['card-next', 'card-bill', 'card-cache']
-  const perRow = term && o.W < 90 ? 2 : 3
+  // desktop: three across from 110 cells, two from 72, one (full width) on a phone or a thin window
+  const perRow = term ? (o.W < 90 ? 2 : 3) : narrow ? 1 : cells < 110 ? 2 : 3
   const gapN = term ? 4 : 3
   const cw = Math.max(16, Math.floor((cells - gapN * (perRow - 1)) / perRow))
-  const card = (cd, i) => col({ width: cw, flexShrink: 0, overflow: 'hidden' }, [
-    row({}, [t(cd.title, 'text'), cd.accent ? t(' · ', 'inactive') : null, cd.accent ? t(cd.accent, cd.tone) : null]),
+  const card = (cd, i) => col(perRow === 1 ? { flexGrow: 1, flexShrink: 1, overflow: 'hidden' } : { width: cw, flexShrink: 0, overflow: 'hidden' }, [
+    row({}, [line(cd.title, 'text'), cd.accent ? line(' · ', 'inactive') : null, cd.accent ? line(cd.accent, cd.tone) : null]),
     cardBar(ui, cardKeys[i], geoOf(term, term ? cw : Math.round(cw * PX), 10, 3), cd.bar, o.t, o.cardStyle),
-    row({}, [t(cd.strong, 'text'), cd.rest ? t(cd.rest, 'inactive') : null]),
+    row({}, [line(cd.strong, 'text'), cd.rest ? line(cd.rest, 'inactive') : null]),
     t(cd.foot, 'inactive', { wrap: 'truncate' }),
   ])
   const cardRows = []
@@ -1397,33 +1444,34 @@ function drawContextPane(ui, view, o) {
     cardRows.push(row({ gap: gapN }, cardList.slice(i, i + perRow).map((cd, j) => card(cd, i + j))))
   }
 
-  // 6. Claude's working memory, like /context: a bar by kind, then a row per kind
+  // 6. Claude's working memory, like /context: a bar by kind, then a row per kind (narrower figure columns when narrow)
+  const numW = narrow ? 8 : 10, pctW = narrow ? 7 : 9
   const memory = col({}, [
     rule(),
-    row({}, [t("Claude's working memory", 'text'), grow(), t(view.memory.title, 'text')]),
+    row({}, [line("Claude's working memory", 'text'), grow(), t(' '), line(view.memory.title, 'text')]),
     t('Re-read every time Claude replies or uses a tool', 'inactive'),
     memoryBar(ui, geoOf(term, size, 14, 4), view.memory.parts, o.t),
     ...view.memory.rows.map((r) => row({}, [t('■ ', r.color), fit(t(r.name, r.deferred ? 'inactive' : 'text', { wrap: 'truncate' })),
-      num(fmtK(r.tokens), 'inactive', 10), num(r.pct, r.deferred ? 'inactive' : 'text', 9)])),
+      num(fmtK(r.tokens), 'inactive', numW), num(r.pct, r.deferred ? 'inactive' : 'text', pctW)])),
   ])
 
   // 7. Drill-down groups: what is inside each kind, and the command that trims it
-  const nameW = term ? Math.max(14, Math.min(30, cells - 4 - 20 - 19)) : 40
+  const nameW = term ? Math.max(14, Math.min(30, cells - 4 - 20 - 19)) : narrow ? Math.max(12, Math.floor(cells * 0.4)) : 40
   const groups = (view.groups || []).flatMap((g) => {
     const open = ctxGroups.has(g.id)
     const head = row({ alignItems: 'center' }, [
-      h(Button, { key: `ctx-group:${g.id}`, label: open ? '⌄' : '›', plain: true, onPress: () => o.onGroup(g.id) }), t(' '),
-      fit(t(g.label, 'text')), num(fmtK(g.tokens), 'inactive', 10), num(String(g.count), 'inactive', 9),
+      h(Button, { key: `ctx-group:${g.id}`, label: open ? '−' : '+', plain: true, onPress: () => o.onGroup(g.id) }), t(' '),
+      fit(line(g.label, 'text')), num(fmtK(g.tokens), 'inactive', numW), num(String(g.count), 'inactive', pctW),
     ])
     if (!open) return [head]
     return [
       head,
-      ...g.items.map((it) => row({ paddingLeft: 4 }, [
-        h(Box, { width: nameW, flexShrink: 0 }, t(clip(it.name, nameW - 1), 'text')),
+      ...g.items.map((it) => row({ paddingLeft: narrow ? 2 : 4 }, [
+        h(Box, { width: nameW, flexShrink: 0, overflow: 'hidden' }, line(clip(it.name, nameW - 1), 'text')),
         fit(t(it.detail, it.warn ? 'warning' : 'inactive', { wrap: 'truncate' })),
-        num(fmtK(it.tokens), 'inactive', 10), num('', 'inactive', 9),
+        num(fmtK(it.tokens), 'inactive', numW), num('', 'inactive', pctW),
       ])),
-      row({ paddingLeft: 4, alignItems: 'center' }, [
+      row({ paddingLeft: narrow ? 2 : 4, alignItems: 'center' }, [
         t('↳ ', 'inactive'), h(Button, { key: `ctx-run:${g.id}`, label: `/${g.cmd}`, onPress: () => o.onRun(g.cmd) }),
         fit(t(`  ${g.what}`, 'inactive', { wrap: 'truncate' })), g.save ? t(`${g.save} each time`, 'success') : null,
       ]),
@@ -1482,7 +1530,7 @@ function explainSection(ui, view, o, k) {
       }
     }
   } else {
-    for (const [n, name, what, live, todo, id] of explainEntries(view, L, ctxExpanded)) {
+    for (const [n, name, what, live, todo, id] of explainEntries(view, L, o.expanded ?? ctxExpanded)) {
       body.push(...entry(`${term ? SUP[n] : CIRCLED[n]} `, name, what, live, todo, id, false))
     }
   }
@@ -1558,8 +1606,8 @@ function liveNumbers(view, s) {
     pings: usedPings, pingCap: s.keepWarmMax,
     nextMark: next ? `Next: ${next.id} at ${next.pct}%${msgs ? `, about ${msgs} message${msgs === 1 ? '' : 's'} away` : ''}.` : 'Past every mark.',
     auto: view.compactPct === null ? undefined : view.compactPct,
-    saved: fmtK(sv.totalTok), savedUsd: usdOf(sv.totalTok), share: Math.round(sv.share * 100), cacheSaved: fmtK(sv.sources[0].tok),
-    keptOut: fmtK(sv.sources[1].tok), keptRequests: T.turns, rewrites: s.rewrites, vetoes: s.vetoes, vetoTok: fmtK(sv.sources[2].tok),
+    saved: fmtK(sv.totalTok), savedUsd: usdOf(sv.totalTok), share: Math.round(sv.share * 100), cacheRead: fmtK(T.cacheRead),
+    keptOut: fmtK(sv.sources[0].tok), keptRequests: T.turns, rewrites: s.rewrites, vetoes: s.vetoes, vetoTok: fmtK(sv.sources[1].tok), warmNet: fmtK(sv.sources[2].tok),
     windowUsage: five ? pct100(five.percentUsed) : undefined, windowResets,
     // for Explain
     _msgs: msgs, _left: left,
@@ -1595,7 +1643,7 @@ function explainEntries(view, L, open) {
     [3, 'Cache', 'Anthropic keeps a copy of this conversation for a while. Reusing it costs a tenth; letting it lapse means paying again in full.',
       live3, c.known && c.warm ? 'Reply before it cools, and avoid switching model or editing CLAUDE.md mid-session.' : 'Clear beats Compact while cold: compacting would pay for everything again.', 'cache'],
     [4, 'Saved', 'Tokens the plugin kept off your bill this session.',
-      !c.known && !sv.totalTok ? 'Nothing yet: it counts from the first reply.' : `${L.saved} tokens${L.savedUsd ? ` ≈ ${L.savedUsd}` : ''}, ${L.share}% of what you would have sent.`, 'Open the pane (⌄) to see where it came from.', 'saved'],
+      !c.known && !sv.totalTok ? 'Nothing yet: it counts from the first reply.' : `${L.saved} tokens${L.savedUsd ? ` ≈ ${L.savedUsd}` : ''}, ${L.share}% of what you would have sent.`, 'Press Open on the band to see where it came from.', 'saved'],
     [5, 'Clear · Compact · Later', 'Clear starts fresh. Compact shrinks the conversation into a summary, cheap only while the cache is warm. Later closes this.',
       `Recommended now: ${{ clear: 'Clear', compact: 'Compact', later: 'Later' }[acts.prim]}.`, '', 'compact'],
   ]
@@ -1604,8 +1652,8 @@ function explainEntries(view, L, open) {
     const mcpGroup = (view.groups || []).find((g) => g.id === 'mcp')
     const billing = view.savings.mode === 'subscription' && view.five ? `Usage ${pct100(view.five.percentUsed)}% of the 5-hour window` : L.keepWarmOn ? `Pings ${L.pings} of ${L.pingCap}` : 'Keep-warm off'
     entries.push(
-      [6, 'Saved this session', 'Where the saving came from: cache reads, trimmed tool output, and cold compactions that were blocked.',
-        `Cache reads ${L.cacheSaved} · Trimmed ${L.keptOut} · Re-cache ${L.vetoTok}.`, 'Press Receipt for the money, line by line.', 'cut'],
+      [6, 'Saved this session', 'Only what the plugin did: trimmed tool output, cold compactions it vetoed, and keep-warm pings net of their cost. Claude\'s own prompt cache is shown beside it, never added in.',
+        `Trimmed ${L.keptOut} · Vetoed ${L.vetoTok} · Keep-warm ${L.warmNet} · Cache read ${L.cacheRead}, not counted.`, 'Press Receipt for the money, line by line.', 'cut'],
       [7, 'The cards', 'What is coming (your next mark), what keeps the cache alive while you are away, and how long it stays warm.',
         `Runway ${runway ? runway[1] : 100}% · ${billing} · ${c.known && c.warm ? `${c.leftMin}m left` : 'Cold'}.`, '', 'keepwarm'],
       [8, 'Claude’s working memory', 'Everything Claude re-reads each time it replies or uses a tool, by kind.',
@@ -1643,7 +1691,7 @@ function invalidate($) {
 async function rollMonth($) {
   try {
     const key = `saved:${new Date().toISOString().slice(0, 7)}`
-    const sessionTok = Math.round(totals.cacheRead * 0.9) + totals.keptOut + Math.round(totals.vetoTokens * 1.25) + keepWarm.savedTok - keepWarm.costTok
+    const sessionTok = Math.max(0, totals.keptOut + Math.round(totals.vetoTokens * 1.25) + keepWarm.savedTok - keepWarm.costTok)
     const delta = sessionTok - monthSaved.sessionTok
     if (monthSaved.key !== key) { const prev = await $.store.get(key); monthSaved = { key, tok: Number(prev && prev.tok) || 0, usd: 0, sessionTok: 0, sessionUsd: 0 } }
     monthSaved.tok += Math.max(0, delta)
@@ -1726,16 +1774,9 @@ function bandHint(pct, clock) {
   return `Past your ${hit.id} mark (${hit.pct}%): note decisions as you go`
 }
 
-function bandSentence(c) {
-  if (!c.known) return [['No response yet', 'inactive']]
-  if (!c.warm) return [['Cache cold: next message re-caches ', 'inactive'], [c.amount, 'text']]
-  if (c.cooling) return [[`Cache cooling: ${c.leftMin}m left to reuse `, 'inactive'], [c.amount, 'text']]
-  return [['Cache warm: next message reuses ', 'inactive'], [c.amount, 'text']]
-}
-
 /** A drill-down group's command (/mcp, /memory, /agents, /loadout): close the pane, then run it as /clear does. */
 async function runFromPane($, command) {
-  ctxPaneOpen = false
+  ctxPaneOpen = false; ctxPopped = false
   try { await $.ui.close({ id: CONTEXT_PANE }) } catch { /* already closed */ }
   try {
     await $.command.run({ command })
@@ -1757,13 +1798,22 @@ async function compactNow($, ttl, compactGuard) {
       const ctx = await contextOf($)
       ctxMsg = `compact vetoed: cache cold (idle ${mins(clock.idleMs)}m), it would re-send ~${fmt(ctx.tokens)} tokens. Prefer /handoff then /clear; /compact force overrides.`
     } else {
-      const r = await $.session.compact({})
-      if (r && r.skip) ctxMsg = `compact skipped: ${r.skip}`
+      let r
+      try {
+        r = await $.session.compact({})
+      } catch (err) {
+        // The desktop and other SDK hosts compact only inside a turn: send /compact as the person would type it
+        if (!/headless|not available/i.test(String(err && err.message))) throw err
+        await $.prompt.submit({ text: '/compact' })
+        r = { queued: true }
+      }
+      if (r && r.queued) ctxMsg = 'compacting: /compact sent'
+      else if (r && r.skip) ctxMsg = `compact skipped: ${r.skip}`
       else if (r && Number.isFinite(r.tokensBefore)) ctxMsg = `compacted ${fmtK(r.tokensBefore)} → ${Number.isFinite(r.tokensAfter) ? fmtK(r.tokensAfter) : '?'}`
       else ctxMsg = 'compacted'
     }
   } catch (err) {
-    ctxMsg = `compact failed: ${err && err.message ? err.message : String(err)}`
+    ctxMsg = `compact failed: ${String(err && err.message ? err.message : err).replace(/^token-saver:\s*/, '')} — type /compact`
   }
   ctxBusy = false
   ctxCache.at = 0
@@ -1782,6 +1832,7 @@ let ENV = { ttl: TTL_SHORT, options: {}, keepWarmMax: 5, cardBars: 'fire', compa
 
 /* The Context pane's drawing, shared: the terminal shows it in a real Pane; the desktop app (its Code tab has no
    slot for plugin panes, so a Pane there is never drawn) shows it in the band above the prompt instead. */
+/** The Context pane's tree. `inBand`: drawn above the prompt (desktop), where ⤢ opens the real pane. */
 async function renderContext($, e, inBand) {
 const { ttl, options, keepWarmMax, cardBars, compactGuard, inputPricePerM } = ENV
   try {
@@ -1792,6 +1843,7 @@ const { ttl, options, keepWarmMax, cardBars, compactGuard, inputPricePerM } = EN
       Box: el.Box, Text: el.Text, Button: el.Button, Svg: term ? undefined : el.Svg, Raster: term ? el.Raster : undefined, term,
       hex: (k) => (String(k).startsWith('#') ? k : pal[k] || pal.inactive),
     }
+    const popped = !inBand && ctxPopped                             // the Pane ⤢ opened: always open, its own frame
     const W = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
     const now = await $.clock.now()
     const data = await loadContext($, now, W)
@@ -1801,17 +1853,25 @@ const { ttl, options, keepWarmMax, cardBars, compactGuard, inputPricePerM } = EN
     view.groups = drillGroups(view.breakdown, homeCache)
     const L = ctxExplain ? liveNumbers(view, { ttl, now, keepWarmMax, longTtl: !!options.longCacheTtl, totals, rewrites, vetoes }) : null
     return drawContextPane(ui, view, {
-      W, t: progressTick * TICK_S, now, ttl, keepWarmMax, longTtl: !!options.longCacheTtl, cardStyle: cardBars, live: clock.known, L,
+      W, mobile: e.surface === 'mobile', t: progressTick * TICK_S, now, ttl, keepWarmMax, longTtl: !!options.longCacheTtl, cardStyle: cardBars, live: clock.known, L,
+      // desktop, on a surface that places panes (what More used to do there): ⤢ moves the open band into a
+      // Pane of its own, always open, and the band folds back
+      expanded: popped ? true : undefined,
+      onPopOut: inBand && !term && e.viewport && e.viewport.isFullscreen === true ? async () => { if (await openContextPane($)) { ctxPopped = true; ctxExpanded = false; invalidate($) } } : undefined,
       onExplain: () => { ctxExplain = !ctxExplain; if (!ctxExplain) ctxGloss = { open: false, focus: null }; invalidate($) },
       onGlossary: (focus) => { ctxGloss = { open: true, focus }; invalidate($) },
       onGlossaryBack: () => { ctxGloss = { open: false, focus: null }; invalidate($) },
-      onExpand: inBand ? () => { bandPane = false; ctxExpanded = false; invalidate($) } : () => { ctxExpanded = !ctxExpanded; invalidate($) },
+      onExpand: popped ? undefined : () => { ctxExpanded = !ctxExpanded; ctxCache.at = 0; invalidate($) },   // More / Less: open in place
       onReceipt: () => { ctxReceipt = !ctxReceipt; invalidate($) },
       onGroup: (id) => { if (ctxGroups.has(id)) ctxGroups.delete(id); else ctxGroups.add(id); invalidate($) },
       onRun: (cmd) => runFromPane($, cmd),
       onClear: () => clearSession($),
       onCompact: () => compactNow($, ttl, compactGuard),
-      onLater: inBand ? () => { bandPane = false; ctxExpanded = false; invalidate($) } : async () => { ctxPaneOpen = false; try { await $.ui.close({ id: CONTEXT_PANE }) } catch { /* closed */ } },
+      onLater: inBand ? () => {
+        if (ctxExpanded) { ctxExpanded = false; invalidate($); return }       // open: fold back to the closed frame
+        bandHidden = true; invalidate($)                                      // closed: put the band away for this session
+        try { $.ui.toast('Context band hidden. /tokens show brings it back.', { timeoutMs: 6000 }) } catch { /* no UI */ }
+      } : async () => { ctxPaneOpen = false; ctxPopped = false; try { await $.ui.close({ id: CONTEXT_PANE }) } catch { /* closed */ } },
     })
   } catch (err) {
     const { Text } = $.ui.resolve(e)
@@ -1904,6 +1964,10 @@ export function register(on, options = {}) {
     progressRows.clear()
     progressTicker = $.clock.every(70, () => {
       const bandOn = cacheBand && !!lastUsage && !bandHidden      // the band's bar burns while it shows; hidden, it costs nothing
+      // The desktop holds a Button's press for the drawing it came from: redrawn every 140 ms, most clicks land on a
+      // drawing already gone. So the band's bar stands still there and redraws only on news (and BAND_TICK).
+      const bandAnimates = bandOn && bandSurface === 'terminal'
+      const paneAnimates = ctxPaneOpen && bandSurface === 'terminal'   // the desktop draws the open pane in the band: same rule
       if (progressRows.size === 0 && !ctxPaneOpen && !bandOn) return
       const now = Date.now()
       let changed = false
@@ -1923,7 +1987,7 @@ export function register(on, options = {}) {
         r.state === 'running' || r.state === 'waiting' || (r.state === 'done' && tNow - (r.settledAt || 0) < SH.sparkleFor + SH.MAX_AGE))
       if (moving) for (const r of progressRows.values()) r.shown += (r.target - r.shown) * 0.16
       // the shader runs at the tick rate while a row is live or a finished one still sparkles; afterwards a row costs nothing
-      if (changed || moving || animating || ((ctxPaneOpen || bandOn) && progressTick % 2 === 0)) {
+      if (changed || moving || animating || ((paneAnimates || bandAnimates) && progressTick % 2 === 0)) {
         try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
       }
     })
@@ -1978,7 +2042,8 @@ export function register(on, options = {}) {
     }
     if (arg === '' || arg === 'pane') {
       // The Context pane: the engine's own context dialog, drawn by the mod. Text where panes do not draw (vscode).
-      bandPane = true; ctxExpanded = true; invalidate($)              // desktop: shown above the prompt
+      // desktop: shown above the prompt, unless the surface places panes (then the Pane below is the one)
+      if (!(e.presentation && e.presentation.isFullscreen === true)) { ctxExpanded = true; invalidate($) }
       if (await openContextPane($)) return { text: 'Context pane opened. Esc closes it. /tokens list prints the same as text.' }
     }
     const ctx = await contextOf($)
@@ -2280,7 +2345,7 @@ export function register(on, options = {}) {
   })
 
   on('ui.close', ($, e, next) => {
-    if (e && e.id === CONTEXT_PANE) ctxPaneOpen = false
+    if (e && e.id === CONTEXT_PANE) { ctxPaneOpen = false; ctxPopped = false }
     return next(e)
   })
 
@@ -2293,6 +2358,7 @@ export function register(on, options = {}) {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props && e.props.hasSurvey) return next(e)
+    bandSurface = e.surface
     const showTokens = cacheBand && lastUsage && !bandHidden
     if (progressRows.size === 0 && !showTokens) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
@@ -2319,14 +2385,15 @@ export function register(on, options = {}) {
       }
       if (row.note) children.push(h(Text, { dimColor: true }, '    ' + row.note))
     }
-    if (showTokens && bandPane && e.surface !== 'terminal') {
+    if (showTokens && e.surface !== 'terminal') {
+      // desktop: M4's closed frame (title, bar, cache · saved with Clear / Compact / Later); More opens it in place
       children.push(await renderContext($, e, true))
       return h(Box, { flexDirection: 'column' }, ...children)
     }
     if (showTokens) {
       try {
-        // M4's closed pane in one row: a short fire bar, the percent, the cache cells and words, what was saved, ⌄ ×
-        const term = e.surface === 'terminal'
+        // the terminal: M4's closed pane in one row: a short fire bar, the percent, the cache cells and words, what was saved, Open ×
+        const term = true
         const pal = THEME_HEX[term ? 'terminal' : 'desktop']
         const el = $.ui.resolve(e)
         const ui = { Box, Text, Button, Svg: term ? undefined : el.Svg, Raster: term ? el.Raster : undefined, term, hex: (k) => (String(k).startsWith('#') ? k : pal[k] || pal.inactive) }
@@ -2338,29 +2405,22 @@ export function register(on, options = {}) {
         const t = (str, color) => h(Text, color ? { color:term ? color : ui.hex(color) } : null, term ? str : nbsp(str))
         const pctText = view.window ? `${view.pct}%` : fmtK(view.used)
         const buttons = [
-          h(Button, { key: 'band-open', label: '⌄', plain: true, onPress: () => {
-            if (term) return openContextPane($)
-            bandPane = true; ctxExpanded = true; ctxCache.at = 0; invalidate($)         // desktop: open it right here, above the prompt
-          } }), t(' '),
-          h(Button, { key: 'hide', label: '×', plain: true, onPress: () => { bandHidden = true; invalidate($) } }),
+          h(Button, { key: 'band-open', label: 'Open', plain: true, onPress: () => openContextPane($) }), t(' '),
+          h(Button, { key: 'hide', label: '×', role: 'dismiss', plain: true, onPress: () => { bandHidden = true; invalidate($) } }),
         ]
         const row = []
-        if (term) {
-          // ▬ 48%  ▪▪▪▪▪ Warm 47m · Reuses 96k · 2.2M saved      ⌄ ×   — drop "Reuses" first, then the bar, when narrow
+        {
+          // ▬ 48%  ▪▪▪▪▪ Warm 47m · Reuses 96k · 2.2M saved      Open ×   — drop "Reuses" first, then the bar, when narrow
           const words = !c.known ? 'No response yet' : !c.warm ? 'Cold' : c.cooling ? `Cooling ${c.leftMin}m` : `Warm ${c.leftMin}m`
           const reuse = !c.known ? '' : c.warm ? `Reuses ${c.amount}` : `Re-caches ${c.amount}`
           const BAR = 16
-          const fixed = 1 + pctText.length + 2 + 5 + 1 + words.length + 3 + view.savings.short.length + 1 + 3
+          const fixed = 1 + pctText.length + 2 + 5 + 1 + words.length + 3 + view.savings.short.length + 1 + 6
           const room = Math.max(20, width - 2)
           const withReuse = reuse && fixed + BAR + 3 + reuse.length <= room
           const withBar = fixed + BAR <= room
           if (withBar) row.push(contextBar(ui, geoOf(true, BAR, 14, 4), view, progressTick * TICK_S, clock.known))
           row.push(t(`${withBar ? ' ' : ''}${pctText}`, view.accent), t('  '), ...cacheMini(ui, c), t(' '), t(words, 'inactive'))
           if (withReuse) row.push(t(' · ', 'inactive'), t(reuse, 'inactive'))
-        } else {
-          const barPx = Math.max(160, Math.min(220, Math.round(width * 1.8)))
-          row.push(contextBar(ui, geoOf(false, barPx, 10, 3), view, progressTick * TICK_S, clock.known), t(' '), t(pctText, view.accent), t('  '), ...cacheMini(ui, c), t(' '),
-            ...bandSentence(c).map(([s, r]) => t(s, r)))
         }
         row.push(t(' · ', 'inactive'), t(view.savings.short, 'inactive'), h(Box, { flexGrow: 1 }), t(' '), ...buttons)
         children.push(h(Box, { flexDirection: 'row', alignItems: 'center' }, ...row.filter(Boolean)))
