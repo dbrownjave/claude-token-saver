@@ -92,8 +92,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(log.usageArgs[0].breakdown).toBe('summary')          // never 'full'
     expect(await ui.find({ text: /Context window/ })).toBeUndefined()
     expect(await ui.find({ text: /^Context$/ })).toBeDefined()
-    expect(await ui.find({ text: /^484k \/ 1M tok$/ })).toBeDefined()
-    expect(await ui.find({ text: /^[ \u00a0]\(48%\)$/ })).toBeDefined()
+    expect(await ui.find({ text: /^484k \/ 1M \(48%\)$/ })).toBeDefined()   // one grey piece, as the app's Context window card
+    expect(await ui.find({ text: /^[ \u00a0]\(48%\)$/ })).toBeUndefined()
     expect((await ui.find({ key: 'ctx-expand' }))?.props.label).toBe('More')
     expect(await ui.find({ text: /^0 saved$/ })).toBeDefined()
     expect(await ui.find({ text: /No response yet: the cache clock starts after the first reply/ })).toBeDefined()
@@ -230,8 +230,7 @@ test('context pane counts context growth per message and says how many messages 
 test('context pane without a breakdown falls back to one Used row and no groups', { options: { ...OPTIONS, cardBars: 'ember' }, timeoutMs: SLOW }, async ($, on) => {
   setup(on, () => ({ startedAt: NOW, context: { tokens: 120_000, window: 200_000, percent: 60 }, rateLimits: [] }))
   const ui: any = await mount($, 'desktop')
-  expect(await ui.find({ text: /^120k \/ 200k tok$/ })).toBeDefined()
-  expect(await ui.find({ text: /^[ \u00a0]\(60%\)$/ })).toBeDefined()
+  expect(await ui.find({ text: /^120k \/ 200k \(60%\)$/ })).toBeDefined()
   await ui.press({ key: 'ctx-expand' })
   expect(await ui.find({ text: /^Used$/ })).toBeDefined()
   expect(await ui.find({ text: /^Free space$/ })).toBeDefined()

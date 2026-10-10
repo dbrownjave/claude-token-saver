@@ -1319,7 +1319,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
 
   return {
     hasData: !!usage, pct, used, window, measure, crossed, accent: ACC[crossed], marksAll, nextMark, prevMark, compactPct, handoffPct, compactMarkPct,
-    title: { used: window ? `${fmtK(used)} / ${fmtK(window)} tok` : `${fmtK(used)} tok`, pct: window ? ` (${pct}%)` : '' },
+    title: { used: window ? `${fmtK(used)} / ${fmtK(window)} (${pct}%)` : `${fmtK(used)} tok` },
     cache, savings, five, memory: { rows, parts, title: window ? `${fmtK(used)} of ${fmtK(window)} tok` : `${fmtK(used)} tok` }, breakdown: b,
   }
 }
@@ -1393,7 +1393,8 @@ function clip(s, n) {
 
 /**
  * Draw the pane from its view model. No bold anywhere; colour carries the hierarchy: figures in 'text', labels in
- * 'inactive', the percentage in the threshold colour, savings in 'success'. `o.t` is the animation clock (s).
+ * 'inactive', savings in 'success'; the title is the other way round, as the app's Context window card (name in 'text',
+ * figures grey), and only the bar carries the threshold colour. `o.t` is the animation clock (s).
  */
 function drawContextPane(ui, view, o) {
   const { Box, Text, Button, term } = ui
@@ -1424,10 +1425,10 @@ function drawContextPane(ui, view, o) {
   // A phone or a thin window: its text runs wider than `cells` counts, so long rows split, cards stack, ⤢ goes
   const narrow = !term && (o.mobile || cells < 72)
 
-  // 1. Title: Context   96k / 200k tok (48%) … ? More
+  // 1. Title: Context   96k / 200k (48%) … ? More   (the app's own Context window card: name in 'text', figures grey)
   const title = row({ alignItems: 'center' }, [
     row({ alignItems: 'center', flexShrink: 1, overflow: 'hidden' }, [
-      line('Context', 'inactive'), t(narrow ? '  ' : '   '), mark(1), line(view.title.used, 'text'), view.title.pct ? line(view.title.pct, view.accent) : null,
+      line('Context', 'text'), t(narrow ? '  ' : '   '), mark(1), line(view.title.used, 'inactive'),
     ]),
     grow(), t(' '),
     // desktop: native buttons, as design/m4.html and the app's banners draw them; the terminal keeps bare labels
