@@ -1,4 +1,5 @@
 import { test, expect, mock } from 'claude-code/testing'
+import { compactNow } from './register.js'
 
 const NOW = Date.UTC(2026, 9, 7, 12, 0, 0)
 const MIN = 60_000
@@ -208,6 +209,35 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ text: /^Compact vetoed: cache cold/ })).toBeDefined()
   })
 }
+
+/** A host whose $.session.compact rejects as the desktop's does; the harness cannot carry that message through a hook. */
+function noCompactHost(fill: any = { isFilled: true }) {
+  const log = { commands: [] as any[], submits: [] as any[], fills: [] as any[], toasts: [] as string[] }
+  const $: any = {
+    clock: { now: async () => NOW },
+    session: { compact: async () => { throw new Error('session.compact: not available on this host') } },
+    command: { run: async (e: any) => { log.commands.push(e) } },
+    prompt: { submit: async (e: any) => { log.submits.push(e) }, fill: async (e: any) => { log.fills.push(e); return fill } },
+    ui: { toast: (t: string) => { log.toasts.push(t) }, invalidate: () => {} },
+  }
+  return { $, log }
+}
+
+test('Compact where session.compact is not available runs the compact command, never a / prompt', async () => {
+  const { $, log } = noCompactHost()
+  await compactNow($, 5 * MIN, false)
+  expect(log.commands).toEqual([{ command: 'compact', args: '' }])
+  expect(log.submits).toEqual([])
+  expect(log.toasts.some((t) => /\/compact sent/.test(t))).toBe(true)
+})
+
+test('Compact from inside a command.run hook drafts /compact in the box and says to press Enter', async () => {
+  const { $, log } = noCompactHost()
+  await compactNow($, 5 * MIN, false, { inCommandHook: true })
+  expect(log.commands).toEqual([])
+  expect(log.fills).toEqual([{ text: '/compact' }])
+  expect(log.toasts.some((t) => /press Enter/.test(t))).toBe(true)
+})
 
 test('context pane counts context growth per message and says how many messages to the next mark', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
   const ctx = { tokens: 100_000, window: 200_000, percent: 50 }

@@ -1969,8 +1969,24 @@ async function runFromPane($, command) {
   }
 }
 
+/**
+ * Run a slash command as the person would. From a press: $.command.run (the host refuses $.prompt.submit of a
+ * '/' text). Inside a command.run hook, where command.run is refused too: draft it in the box for Enter.
+ * Resolves 'ran' or 'filled'; rejects when neither works.
+ */
+async function submitCommand($, command, { inCommandHook = false } = {}) {
+  if (!inCommandHook) {
+    await $.command.run({ command, args: '' })
+    return 'ran'
+  }
+  const r = await $.prompt.fill({ text: `/${command}` })
+  if (r && r.isFilled === false) throw new Error(`could not draft /${command}`)
+  toast($, `token-saver: /${command} is in the prompt box — press Enter`, 8000)
+  return 'filled'
+}
+
 /** Compact from the pane: the mod's own guard (cold cache → veto, keep-list) applies as it does to a typed /compact. */
-async function compactNow($, ttl, compactGuard) {
+export async function compactNow($, ttl, compactGuard, { inCommandHook = false } = {}) {
   if (ctxBusy) return
   ctxBusy = true
   ctxMsg = 'compacting…'
@@ -1986,12 +2002,12 @@ async function compactNow($, ttl, compactGuard) {
       try {
         r = await $.session.compact({})
       } catch (err) {
-        // The desktop and other SDK hosts compact only inside a turn: send /compact as the person would type it
+        // The desktop and other SDK hosts compact only inside a turn: run /compact as the person would
         if (!/headless|not available/i.test(String(err && err.message))) throw err
-        await $.prompt.submit({ text: '/compact' })
-        r = { queued: true }
+        r = { queued: await submitCommand($, 'compact', { inCommandHook }) }
       }
-      if (r && r.queued) ctxMsg = 'compacting: /compact sent'
+      if (r && r.queued === 'filled') ctxMsg = 'compact: /compact is in the prompt box, press Enter'
+      else if (r && r.queued) ctxMsg = 'compacting: /compact sent'
       else if (r && r.skip) ctxMsg = `compact skipped: ${r.skip}`
       else if (r && Number.isFinite(r.tokensBefore)) ctxMsg = `compacted ${fmtK(r.tokensBefore)} → ${Number.isFinite(r.tokensAfter) ? fmtK(r.tokensAfter) : '?'}`
       else ctxMsg = 'compacted'
