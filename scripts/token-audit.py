@@ -10,8 +10,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
 from pathlib import Path
+
+# What decides a subagent's prompt-cache TTL, strongest first. Every subagent request gets the 5-minute cache unless
+# one of these says 1h; a 1h cache write costs 2× base input against 1.25× for 5m, so it pays only for agents that idle
+# past 5 minutes mid-run. The mod (/tokens) measures those lapses; this audit shows what is set.
+TTL_ENV_FORCE = "FORCE_PROMPT_CACHING_5M"
+TTL_ENV = "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL"
+TTL_SETTING = "subagentPromptCacheTtl"
+TTL_INFO_ENV = "ENABLE_PROMPT_CACHING_1H"
 
 
 def find_root(start: Path) -> Path:
@@ -45,6 +55,83 @@ def approx_tokens(n: int) -> int:
     return max(0, n // 4)
 
 
+def config_dir() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+
+
+def frontmatter(text: str) -> str:
+    m = re.match(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n|\Z)", text, re.S)
+    return m.group(1) if m else ""
+
+
+def cache_ttl_of(fm: str) -> str | None:
+    """`experimental:\n  cacheTtl: 1h` or `experimental: { cacheTtl: 1h }` in an agent file's frontmatter; no PyYAML."""
+    inline = re.search(r"^experimental:\s*\{[^}]*\bcacheTtl\s*:\s*[\"']?(\w+)", fm, re.M)
+    if inline:
+        return inline.group(1)
+    lines = fm.splitlines()
+    for i, line in enumerate(lines):
+        if re.match(r"^experimental:\s*$", line):
+            for child in lines[i + 1:]:
+                if child.strip() and not child.startswith((" ", "\t")):
+                    break
+                m = re.match(r"^\s+cacheTtl\s*:\s*[\"']?(\w+)", child)
+                if m:
+                    return m.group(1)
+    return None
+
+
+def agent_files(root: Path) -> list[dict]:
+    """Agent files the person owns: ~/.claude/agents (user) and <root>/.claude/agents (project). Plugin agents are
+    not listed: a plugin update overwrites them, so a cacheTtl set there does not last."""
+    out: list[dict] = []
+    for scope, folder in (("user", config_dir() / "agents"), ("project", root / ".claude" / "agents")):
+        if not folder.is_dir():
+            continue
+        for f in sorted(folder.glob("*.md")):
+            try:
+                fm = frontmatter(f.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                fm = ""
+            name = re.search(r"^name:\s*(.+)$", fm, re.M)
+            out.append({"scope": scope, "name": (name.group(1).strip() if name else f.stem), "path": str(f), "cacheTtl": cache_ttl_of(fm)})
+    return out
+
+
+def read_json(path: Path) -> dict:
+    try:
+        v = json.loads(path.read_text(encoding="utf-8"))
+        return v if isinstance(v, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def ttl_sources(root: Path) -> list[dict]:
+    """Every place a subagent TTL is set, in precedence order: FORCE_PROMPT_CACHING_5M in the live environment, then
+    CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL there, then each settings file's subagentPromptCacheTtl and env block."""
+    out: list[dict] = []
+    for key in (TTL_ENV_FORCE, TTL_ENV):
+        if os.environ.get(key):
+            out.append({"source": "environment", "key": key, "value": os.environ[key]})
+    files = [
+        ("~/.claude/settings.json", config_dir() / "settings.json"),
+        ("~/.claude/settings.local.json", config_dir() / "settings.local.json"),
+        (".claude/settings.json", root / ".claude" / "settings.json"),
+        (".claude/settings.local.json", root / ".claude" / "settings.local.json"),
+    ]
+    for label, path in files:
+        data = read_json(path)
+        if not data:
+            continue
+        env = data.get("env") if isinstance(data.get("env"), dict) else {}
+        for key in (TTL_ENV_FORCE, TTL_ENV):
+            if env.get(key):
+                out.append({"source": label, "key": f"env.{key}", "value": str(env[key])})
+        if data.get(TTL_SETTING):
+            out.append({"source": label, "key": TTL_SETTING, "value": str(data[TTL_SETTING])})
+    return out
+
+
 def collect(root: Path) -> dict:
     claude_md = bytes_of(root / "CLAUDE.md") + bytes_of(root / ".claude" / "CLAUDE.md")
     rules_b, rules_n = dir_md(root / ".claude" / "rules")
@@ -63,6 +150,8 @@ def collect(root: Path) -> dict:
             mcp_servers = -1
 
     startup = claude_md + rules_b + settings_b + mcp_b
+    agents = agent_files(root)
+    sources = ttl_sources(root)
     return {
         "root": str(root),
         "claude_md_bytes": claude_md,
@@ -77,6 +166,10 @@ def collect(root: Path) -> dict:
         "mcp_bytes": mcp_b,
         "mcp_servers": mcp_servers,
         "startup_tokens_est": approx_tokens(startup),
+        "agents": agents,
+        "ttl_sources": sources,
+        "ttl_override": sources[0] if sources else None,
+        "ttl_1h_env": os.environ.get(TTL_INFO_ENV) or None,
         "warnings": [],
     }
 
@@ -93,7 +186,36 @@ def warn(report: dict) -> list[str]:
         )
     if report["rules_tokens"] > 2000:
         w.append(f"Rules total ~{report['rules_tokens']} tokens. Split with paths: so unused rules stay cold.")
+    o = report.get("ttl_override")
+    if o:
+        w.append(f"{o['key']}={o['value']} in {o['source']} overrides cacheTtl in every agent file.")
+    elif report.get("agents") and not any(a["cacheTtl"] for a in report["agents"]):
+        n = len(report["agents"])
+        w.append(
+            f"{n} agent file{'s' if n != 1 else ''} use the 5-minute cache default; set experimental.cacheTtl: 1h only for "
+            "agents that idle past 5 minutes (a 1h write costs 2×). /tokens shows which ones lapsed."
+        )
     return w
+
+
+def render_agents(report: dict) -> list[str]:
+    lines = ["", "Subagents (prompt-cache TTL)"]
+    agents = report.get("agents") or []
+    if agents:
+        for a in agents:
+            lines.append(f"  {a['scope']}/{a['name']:<28} cacheTtl {a['cacheTtl'] or 'default 5m'}")
+    else:
+        lines.append("  no agent files in ~/.claude/agents or .claude/agents")
+    o = report.get("ttl_override")
+    if o:
+        lines.append(f"  override      {o['key']}={o['value']}  ({o['source']}) wins over every per-file cacheTtl")
+    else:
+        lines.append("  override      none (no subagentPromptCacheTtl, CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL or FORCE_PROMPT_CACHING_5M)")
+    if report.get("ttl_1h_env"):
+        lines.append(f"  {TTL_INFO_ENV}={report['ttl_1h_env']} in the environment (informational)")
+    lines.append("  Plugin agents are not listed: an update overwrites their files. Copy one into ~/.claude/agents to pin its cacheTtl.")
+    lines.append("  A 1M window compacting above 900k is checked live by /tokens (the script cannot see the model).")
+    return lines
 
 
 def render(report: dict) -> str:
@@ -109,6 +231,7 @@ def render(report: dict) -> str:
         "Not counted here: system prompt, bundled tools, MCP schemas once connected, conversation history.",
         "In a session run /context for the live breakdown.",
     ]
+    lines.extend(render_agents(report))
     if report["warnings"]:
         lines.append("")
         lines.extend("  WARN  " + x for x in report["warnings"])

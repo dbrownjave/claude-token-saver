@@ -21,6 +21,8 @@ If this pack lives at repo root:
 python3 scripts/token-audit.py
 ```
 
+1b. The audit's `Subagents` block lists every agent file in `~/.claude/agents` and `.claude/agents` with its `cacheTtl`, and names any `subagentPromptCacheTtl` / `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` / `FORCE_PROMPT_CACHING_5M` that overrides them all. Subagents run on the 5-minute cache by default; `/tokens` in a session shows which agent types lapsed and whether a 1-hour cache would pay. Recommend `experimental.cacheTtl: 1h` only for those, and never while a subscription is on usage credits.
+
 2. Read `/context` with the user if they are in an active session. Call out system tools, MCP, and CLAUDE.md first — those load every turn.
 
 3. If CLAUDE.md is over ~200 lines or ~1k tokens:
