@@ -114,6 +114,10 @@ export function GLOSSARY(L) {
     { id:'blocked', name:'Cold compaction blocked',
       what:'The plugin stops a compaction that would pay to store everything again while the cache is cold.',
       live:`${L.vetoes} blocked, ${L.vetoTok} saved.` },
+    { id:'agents', name:'Agents',
+      what:'Each agent Claude starts remembers what it has read for 5 minutes. If one step takes longer (a build, a test run), its next step re-reads everything at full price. The plugin counts those re-reads; it cannot stop them.',
+      live:L.agentLapses ? `${L.agentLapses} re-read${L.agentLapses === 1 ? '' : 's'} after a long wait, ${L.agentLapseTok} tokens, not counted as saved.` : 'None this session.',
+      todo:L.agentLine || '' },
   ] },
   { group:'Billing', terms:[
     { id:'api', name:'API billing',

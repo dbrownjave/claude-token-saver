@@ -1,7 +1,7 @@
 {
   "name": "token-saver",
-  "version": "0.3.24",
-  "description": "Token-saver mod: quiet bash, trim output, cache band, /tokens, cold-cache compaction veto, priced model-switch guard, keep-warm pings",
+  "version": "0.3.26",
+  "description": "Token-saver mod: quiet bash, trim output, cache band, /tokens, cold-cache compaction veto, priced model-switch guard, keep-warm pings, agents that re-read after a long wait",
   "author": {
     "name": "token-saver"
   },

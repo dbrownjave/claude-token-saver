@@ -54,7 +54,21 @@ let levels = DEFAULT_LEVELS
 let pythonQuietOn = false
 let bandHidden = false
 let bandSurface = 'terminal'      // where the band last drew: the desktop's native buttons drop a press that spans a redraw
-const totals = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0, switchHeld: 0, switchPaid: 0, oneShot: 0 }   // this session, from turn.step usage
+const totals = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0, switchHeld: 0, switchPaid: 0, oneShot: 0, agentLapses: 0, agentLapseTok: 0 }   // this session, from turn.step usage
+/**
+ * Subagent cache lapses. Every subagent request gets the 5-minute cache TTL, even where the main thread has an hour.
+ * An agent that idles past 5 minutes mid-run (a test suite, a build, a CI wait) re-writes its whole context at 1.25×
+ * on its next step. The mod cannot set a TTL; it measures the lapses and says which agent file would pay for
+ * `experimental.cacheTtl: 1h` (writes at 2× instead of 1.25×, so only agents that actually lapse come out ahead).
+ *  - `agents`: the running ones, agentId → record; dropped when the agent answers
+ *  - `agentTypes`: this session's sums per agent type (Explore, Plan, …), what the pane and /tokens read
+ *  - `$.store` `lapses:<type>`: week and lifetime counts, so a line can say "3 times this week"
+ */
+const agents = new Map()        // agentId → { type, model, lastStepAt, lapses, lapseWrite, otherWrite, steps }
+const agentTypes = new Map()    // type → { lapses, lapseWrite, otherWrite, runs }
+let agentWeeks = {}             // type → weekCount, read from $.store once per loadContext
+const LAPSE_RE = 1.15           // a lapse write at 1.25× that a longer cache would have made a hit at 0.1×
+const LONG_PREMIUM = 0.75       // what every other write would have cost extra at the 1-hour price (2× − 1.25×)
 let oneShot = null              // { model } while the next main-thread turn goes to another model and the session stays put
 let limitBase = null            // { pct, tokens } when the five-hour window was first seen: tokens per % of window
 let monthSaved = { key: '', tok: 0, usd: 0, sessionTok: 0, sessionUsd: 0 }   // carried in $.store across sessions
@@ -199,6 +213,61 @@ async function billing($) {
   const inputAll = totals.input + totals.cacheRead + totals.cacheWrite
   const tokPerPct = limitBase && five && five.percentUsed - limitBase.pct >= 1 ? (inputAll - limitBase.tokens) / (five.percentUsed - limitBase.pct) : 0
   return { priced, tokPerPct }
+}
+
+/**
+ * A subscription on usage credits: a five-hour window exists and is either spent (100%) or billed beside (a dollar
+ * cost next to a window). A plain API key has no five-hour window. The engine ignores a 1-hour subagent cacheTtl
+ * while on credits, so the recommendation is not made there; the measurements still are.
+ */
+function onCredits(usage) {
+  const five = (usage && usage.rateLimits || []).find((r) => r.kind === 'five_hour') || null
+  if (!five) return false
+  return Number(five.percentUsed) >= 100 || !!(usage.cost && Number.isFinite(usage.cost.usd))
+}
+
+/** ISO week key, UTC: 2026-W41. */
+function isoWeek(ms) {
+  const d = new Date(ms)
+  const day = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
+  const dow = day.getUTCDay() || 7
+  day.setUTCDate(day.getUTCDate() + 4 - dow)
+  const jan1 = new Date(Date.UTC(day.getUTCFullYear(), 0, 1))
+  const week = Math.ceil(((day - jan1) / 86_400_000 + 1) / 7)
+  return `${day.getUTCFullYear()}-W${String(week).padStart(2, '0')}`
+}
+
+/** A finished subagent run folds into its type's session sums; a run that lapsed also rolls into the store's week count. */
+async function rollAgent($, rec) {
+  const t = agentTypes.get(rec.type) || { lapses: 0, lapseWrite: 0, otherWrite: 0, runs: 0 }
+  t.lapses += rec.lapses; t.lapseWrite += rec.lapseWrite; t.otherWrite += rec.otherWrite; t.runs += 1
+  agentTypes.set(rec.type, t)
+  if (!rec.lapses) return
+  try {
+    const key = `lapses:${rec.type}`, weekKey = isoWeek(await $.clock.now())
+    const prev = (await $.store.get(key)) || {}
+    const sameWeek = prev.weekKey === weekKey
+    const next = {
+      weekKey, weekCount: (sameWeek ? Number(prev.weekCount) || 0 : 0) + rec.lapses, weekTok: (sameWeek ? Number(prev.weekTok) || 0 : 0) + Math.round(rec.lapseWrite * 1.25),
+      allCount: (Number(prev.allCount) || 0) + rec.lapses, allTok: (Number(prev.allTok) || 0) + Math.round(rec.lapseWrite * 1.25),
+    }
+    await $.store.set(key, next)
+    agentWeeks[rec.type] = next.weekCount
+  } catch { /* no store */ }
+}
+
+/** Week counts per agent type from the store, for "lapsed 3 times this week". */
+async function loadAgentWeeks($, now) {
+  const out = {}
+  try {
+    const weekKey = isoWeek(now)
+    for (const key of await $.store.keys()) {
+      if (!key.startsWith('lapses:')) continue
+      const v = await $.store.get(key)
+      if (v && v.weekKey === weekKey) out[key.slice(7)] = Number(v.weekCount) || 0
+    }
+  } catch { /* no store */ }
+  return out
 }
 
 /** One question, 2-4 labels: `$.ui.ask` where the engine has it, else the AskUserQuestion tool call it stands for. Rejects when dismissed. */
@@ -1254,6 +1323,9 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const pct = b && Number.isFinite(b.percentage) ? pct100(b.percentage) : Number.isFinite(ctx.percent) ? pct100(ctx.percent) : pct100((100 * used) / measure)
   const compactOn = !!(b && b.isAutoCompactEnabled && Number.isFinite(b.autoCompactThreshold) && b.autoCompactThreshold > 0)
   const compactPct = compactOn ? pct100((100 * b.autoCompactThreshold) / measure) : null
+  // A 1M window with auto-compact near the top: the compaction itself re-reads close to a million tokens
+  const compactHint1M = compactOn && measure >= 1_000_000 && b.autoCompactThreshold > 900_000
+    ? `Auto-compact at ${fmtK(b.autoCompactThreshold)} on a 1M window: run /autocompact 400k so a compaction never re-reads near a million tokens` : ''
   const marksAll = levels.map((l) => ({ pct: Number(l.pct), id: String(l.id || ''), hint: l.hint })).filter((m) => Number.isFinite(m.pct)).sort((x, y) => x.pct - y.pct)
   const crossed = Math.min(3, marksAll.filter((m) => m.pct <= pct).length)
   const nextMark = marksAll.find((m) => m.pct > pct) || null
@@ -1323,6 +1395,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
     ...sources.map((s) => ({ label: s.label, tok: fmtK(s.tok), amount: priced ? `≈ ${usd(s.tok)}` : '', role: 'inactive', amountRole: s.tok < 0 ? 'warning' : 'success' })),
     ...(T.cacheRead > 0 ? [{ label: "Prompt cache, Claude's own (not counted)", tok: fmtK(T.cacheRead), amount: '', role: 'inactive', amountRole: 'inactive' }] : []),
     ...(T.switchPaid > 0 ? [{ label: 'Model switches, cold re-read (not a saving)', tok: fmtK(Math.round(T.switchPaid * 1.25)), amount: priced ? `≈ ${usd(Math.round(T.switchPaid * 1.25))}` : '', role: 'inactive', amountRole: 'inactive' }] : []),
+    ...(T.agentLapses > 0 ? [{ label: 'Agents re-read after a long wait (not a saving)', tok: fmtK(T.agentLapseTok), amount: priced ? `≈ ${usd(T.agentLapseTok)}` : '', role: 'inactive', amountRole: 'inactive' }] : []),
     { rule: true },
     { label: 'Total saved', tok: fmtK(totalTok), amount: priced ? `≈ ${usd(totalTok)}` : '', role: 'text', amountRole: 'success' },
     ...(priced ? [
@@ -1344,7 +1417,27 @@ function contextView(usage, ttl, usageLast, clock, stats) {
       ? { verdict: 'cheap', short: 'Switch model: cheap', line: `Switching model now is cheap: ${fmtK(used)} tokens re-read once.` }
       : { verdict: 'costly', short: `Switch model ≈ ${switchUsd || switchPct || `${fmtK(switchUnits)} tokens`}`,
           line: `Switching model now re-caches ${fmtK(used)} tokens at 1.25× the input price${switchUsd ? `, ≈ ${switchUsd} at this session's rate` : switchPct ? `, ≈ ${switchPct}` : ''}.` }
-  const savings = { mode, rate, priced, totalTok, share, sources, cacheInfo, right, receipt, note: note + oneShotNote, short: totalTok ? `${fmtK(totalTok)} saved` : '0 saved', spent, hasCost }
+  // Subagent cache lapses: the worst agent type by what a 1-hour cache would have saved, net of its 2× write price.
+  // Measured (the receipt row above) whatever the billing; recommended only where the engine would honour it.
+  const types = (saved.agents && saved.agents.types) || new Map()
+  const weeks = (saved.agents && saved.agents.weeks) || {}
+  let worst = null
+  for (const [type, a] of types) {
+    if (!a.lapses) continue
+    const net = Math.round(LAPSE_RE * a.lapseWrite - LONG_PREMIUM * a.otherWrite)
+    if (!worst || net > worst.net) worst = { type, net, lapses: a.lapses, reread: a.lapseWrite }
+  }
+  // Plain words: an agent "waited over 5 minutes and re-read" what it had. No cache jargon in the pane.
+  let agentLine = ''
+  if (worst && !onCredits(usage)) {
+    const week = Number(weeks[worst.type]) || 0
+    const times = `${worst.lapses}× this session${week > worst.lapses ? ` (${week} this week)` : ''}`
+    const what = `The ${worst.type} agent waited over 5 minutes ${times} and re-read ${fmtK(worst.reread)} tokens.`
+    agentLine = worst.net > 0
+      ? `${what} A 1-hour cache for it would have saved ≈ ${fmtK(worst.net)} tokens: put cacheTtl: 1h under experimental in its agent file.`
+      : `${what} A 1-hour cache would cost more than it saves here; shorten its waits instead.`
+  }
+  const savings = { mode, rate, priced, totalTok, share, sources, cacheInfo, right, receipt, note: note + oneShotNote, short: totalTok ? `${fmtK(totalTok)} saved` : '0 saved', spent, hasCost, agentLine, agentLapses: T.agentLapses, agentLapseTok: T.agentLapseTok }
 
   // Claude's working memory, by kind, as /context lists it
   let rows
@@ -1367,7 +1460,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
     .map((r) => ({ f: Math.max(0, r.tokens / measure), color: r.key === 'free' ? null : r.color }))
 
   return {
-    hasData: !!usage, pct, used, window, measure, crossed, accent: ACC[crossed], marksAll, nextMark, prevMark, compactPct, handoffPct, compactMarkPct,
+    hasData: !!usage, pct, used, window, measure, crossed, accent: ACC[crossed], marksAll, nextMark, prevMark, compactPct, compactHint1M, handoffPct, compactMarkPct,
     title: { used: window ? `${fmtK(used)} / ${fmtK(window)} (${pct}%)` : `${fmtK(used)} tokens` },
     cache, savings, switchCost, five, memory: { rows, parts, title: window ? `${fmtK(used)} of ${fmtK(window)} tokens` : `${fmtK(used)} tokens` }, breakdown: b,
   }
@@ -1522,7 +1615,8 @@ function drawContextPane(ui, view, o) {
   const under = term && sentLen <= cells ? row({}, sentence()) : null
   const msg = ctxMsg ? t(cap1(ctxMsg), 'inactive', { wrap: 'wrap' }) : null
   const explain = ex ? explainSection(ui, view, o, { row, col, t, grow, rule, cells }) : []
-  if (!expanded) return col({}, [title, bar, bottom, under, msg, ...explain])
+  const hint1M = view.compactHint1M ? t(view.compactHint1M, 'inactive', { wrap: term ? 'wrap' : 'truncate' }) : null
+  if (!expanded) return col({}, [title, bar, hint1M, bottom, under, msg, ...explain])
 
   // 4. Saved: the headline of the whole plugin
   const sv = view.savings
@@ -1566,7 +1660,8 @@ function drawContextPane(ui, view, o) {
   }
   const receipt = ctxReceipt ? col({}, [rule(), ...sv.receipt.map(receiptLine), t(sv.note, 'inactive')]) : null
   const cacheLine = sv.cacheInfo && sv.cacheInfo.line ? t(sv.cacheInfo.line, 'inactive', { wrap: term ? 'wrap' : 'truncate' }) : null
-  const saved = col({}, [savedHead, savedBar(ui, geoOf(term, size, 10, 3), parts, sv.share, o.t), keyRow, cacheLine, receipt])
+  const agentLine = sv.agentLine ? t(sv.agentLine, 'inactive', { wrap: term ? 'wrap' : 'truncate' }) : null
+  const saved = col({}, [savedHead, savedBar(ui, geoOf(term, size, 10, 3), parts, sv.share, o.t), keyRow, cacheLine, agentLine, receipt])
 
   // 5. Three cards: what is next, billing (keep-warm or the 5-hour window), the cache
   const cardList = [nextCard(view, avgGrowth()), billCard(view, o.now, o.ttl, o.keepWarmMax, o.longTtl), cacheCard(view)]
@@ -1622,7 +1717,7 @@ function drawContextPane(ui, view, o) {
     ]
   })
 
-  return col({}, [title, bar, blank(), markRow(6, 'Saved this session'), saved, blank(), markRow(7, 'Cards: what is next, keep-warm, cache'), ...cardRows, blank(),
+  return col({}, [title, bar, hint1M, blank(), markRow(6, 'Saved this session'), saved, blank(), markRow(7, 'Cards: what is next, keep-warm, cache'), ...cardRows, blank(),
     markRow(8, 'Claude’s working memory'), memory, ...(groups.length ? [blank(), markRow(9, 'What is inside each kind, with a button to trim it'), ...groups] : []),
     blank(), bottom, under, msg, ...explain])
 }
@@ -1753,6 +1848,7 @@ function liveNumbers(view, s) {
     auto: view.compactPct === null ? undefined : view.compactPct,
     saved: fmtK(sv.totalTok), savedUsd: usdOf(sv.totalTok), share: Math.round(sv.share * 100), cacheRead: fmtK(T.cacheRead),
     keptOut: fmtK(sv.sources[0].tok), keptRequests: T.turns, rewrites: s.rewrites, vetoes: s.vetoes, vetoTok: fmtK(sv.sources[1].tok), warmNet: fmtK(sv.sources[2].tok),
+    agentLapses: T.agentLapses || 0, agentLapseTok: fmtK(T.agentLapseTok || 0), agentLine: sv.agentLine || '',
     windowUsage: five ? pct100(five.percentUsed) : undefined, windowResets,
     // for Explain
     _msgs: msgs, _left: left,
@@ -1855,6 +1951,7 @@ async function loadContext($, now, columns) {
     } catch {
       try { usage = await $.session.usage() } catch { usage = null }
     }
+    if (agentTypes.size) agentWeeks = await loadAgentWeeks($, now)   // "lapsed N times this week", only once an agent has run
     ctxCache = { at: now, usage }
     return ctxCache
   })().finally(() => { ctxLoading = null })
@@ -1874,6 +1971,7 @@ function listText(view, o) {
   rows.push(['Context', view.window ? `${fmtK(view.used)} of ${fmtK(view.window)} (${view.pct}%)` : `${fmtK(view.used)} tokens`, bar(view.pct / 100)])
   rows.push(['Cache', c.short, dots(c.sentence.map((p) => p[0]).join('').replace(/^[^:]*: /, ''), c.known ? low(c.rest) : '')])
   rows.push(['Saved', `${fmtK(sv.totalTok)} tokens${sv.priced ? ` ≈ $${((sv.totalTok * sv.rate) / 1e6).toFixed(2)}` : ''}`, dots(...sv.sources.map((x) => `${low(x.label)} ${fmtK(x.tok)}`))])
+  if (sv.agentLapses > 0) rows.push(['Agents', `${sv.agentLapses} re-read${sv.agentLapses === 1 ? '' : 's'} after a long wait · ${fmtK(sv.agentLapseTok)} tokens`, sv.agentLine ? low(sv.agentLine) : 'not a saving: an agent that waits over 5 minutes re-reads what it had'])
   rows.push(['Keep-warm', keepWarm.on ? 'on' : `off${keepWarm.stopped ? ` (${keepWarm.stopped})` : ''}`,
     keepWarm.on ? `${keepWarm.pings} ping${keepWarm.pings === 1 ? '' : 's'} · avoided ${fmt(keepWarm.savedTok)} · spent ${fmt(keepWarm.costTok)} tokens` : ''])
   if (sv.mode === 'subscription' && view.five) {
@@ -1896,7 +1994,8 @@ function listText(view, o) {
   const out = [line('┌', '┬', '┐')]
   for (const r of rows) out.push(`│${cell(r[0], w0)}│${cell(r[1], w1)}│${cell(r[2], w2)}│`)
   out.push(line('└', '┴', '┘'))
-  out.push(dots('/tokens opens the pane', '/tokens learn explains each row', '/tokens hide|show the band', 'marks: ~/.claude/token-saver/thresholds.json', o.compactGuard ? 'a vetoed /compact: /compact force' : ''))
+  out.push(dots('/tokens opens the pane', '/tokens learn explains each row', '/tokens hide|show the band', 'marks: ~/.claude/token-saver/thresholds.json', o.compactGuard ? 'a vetoed /compact: /compact force' : '',
+    view.compactHint1M ? low(view.compactHint1M) : ''))   // a 1M window compacting near the top: the one setting worth changing today
   return out.join('\n')
 }
 
@@ -2049,7 +2148,7 @@ const { ttl, options, keepWarmMax, cardBars, compactGuard, inputPricePerM } = EN
     const data = await loadContext($, now, W)
     if (homeCache === null) { try { homeCache = await homeDir($) } catch { homeCache = '' } }
     const clock = cacheClock(now, ttl)
-    const view = contextView(data.usage, ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
+    const view = contextView(data.usage, ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
     view.groups = drillGroups(view.breakdown, homeCache)
     const L = ctxExplain ? liveNumbers(view, { ttl, now, keepWarmMax, longTtl: !!options.longCacheTtl, totals, rewrites, vetoes }) : null
     return drawContextPane(ui, view, {
@@ -2256,7 +2355,7 @@ export function register(on, options = {}) {
       const now = await $.clock.now()
       const data = await loadContext($, now, 80)
       if (homeCache === null) { try { homeCache = await homeDir($) } catch { homeCache = '' } }
-      const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
+      const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
       view.groups = drillGroups(view.breakdown, homeCache)
       const L = liveNumbers(view, { ttl, now, keepWarmMax, longTtl: !!options.longCacheTtl, totals, rewrites, vetoes })
       return { text: learnText(L, (e.args || '').trim().slice(5)) }
@@ -2275,7 +2374,7 @@ export function register(on, options = {}) {
     // /tokens list: the pane's cards as text, one line each, from the same view the pane draws.
     const now = await $.clock.now()
     const data = await loadContext($, now, 80)
-    const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
+    const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
     return { text: listText(view, { now, ttl, keepWarmMax, longTtl: !!options.longCacheTtl, compactGuard, columns: e.presentation && e.presentation.columns }) }
   })
 
@@ -2381,6 +2480,11 @@ export function register(on, options = {}) {
       return await next(e)
     } finally {
       inTurn = false
+      if (e.agentId && agents.has(e.agentId)) {          // a subagent's answer: fold its run into its type's sums
+        const rec = agents.get(e.agentId)
+        agents.delete(e.agentId)
+        await rollAgent($, rec)
+      }
       if (oneShot && !e.agentId) {
         oneShot = null
         try { $.ui.status(undefined) } catch { /* no UI */ }
@@ -2401,6 +2505,27 @@ export function register(on, options = {}) {
 
   on('turn.step', async function* ($, e, next) {
     const result = yield* next(oneShot && !e.agentId ? { ...e, model: oneShot.model } : e)   // 'One message' from the switch guard
+    if (e.agentId && result && result.usage) {
+      // A subagent's step: its own cache clock, never the main thread's. A gap past the 5-minute TTL followed by a
+      // request that missed (the context written again, not read) is a lapse; a gap followed by a hit means a longer
+      // TTL was already in force and nothing was lost.
+      const stepAt = await $.clock.now()
+      const a = agents.get(e.agentId) || { type: 'subagent', model: e.model || '', lastStepAt: 0, lapses: 0, lapseWrite: 0, otherWrite: 0, steps: 0 }
+      agents.set(e.agentId, a)
+      if (e.model) a.model = e.model
+      const write = result.usage.cache_creation_input_tokens || 0
+      if (a.lastStepAt && stepAt - a.lastStepAt > TTL_SHORT && write > 0 && hitPct(result.usage) < 50) {
+        a.lapses += 1
+        a.lapseWrite += write
+        totals.agentLapses += 1
+        totals.agentLapseTok += Math.round(write * 1.25)
+        try { $.ui.invalidate('ui.render') } catch { /* no UI */ }
+      } else {
+        a.otherWrite += write
+      }
+      a.lastStepAt = stepAt
+      a.steps += 1
+    }
     if (!e.agentId && result && result.usage) {
       const stepAt = await $.clock.now()
       // Kept warm through an idle stretch that would have lapsed, and this request hit: the re-write was avoided
@@ -2443,6 +2568,25 @@ export function register(on, options = {}) {
       }
     }
     return result
+  })
+
+  // Subagent identity: the classic SubagentStart input names the agent's type (Explore, Plan, a plugin's agent);
+  // turn.step only carries the id. Stop clears a record whose turn.complete never came. Neither changes the event.
+  on('classic.SubagentStart', ($, e, next) => {
+    if (e && e.agent_id) {
+      const a = agents.get(e.agent_id) || { type: 'subagent', model: '', lastStepAt: 0, lapses: 0, lapseWrite: 0, otherWrite: 0, steps: 0 }
+      a.type = String(e.agent_type || a.type || 'subagent')
+      agents.set(e.agent_id, a)
+    }
+    return next(e)
+  })
+  on('classic.SubagentStop', async ($, e, next) => {
+    if (e && e.agent_id && agents.has(e.agent_id)) {
+      const rec = agents.get(e.agent_id)
+      agents.delete(e.agent_id)
+      await rollAgent($, rec)
+    }
+    return next(e)
   })
 
   /**
@@ -2666,7 +2810,7 @@ export function register(on, options = {}) {
         const ui = { Box, Text, Button, Svg: term ? undefined : el.Svg, Raster: term ? el.Raster : undefined, term, hex: (k) => (String(k).startsWith('#') ? k : pal[k] || pal.inactive) }
         const now = await $.clock.now()
         const clock = cacheClock(now, ttl)
-        const view = contextView(await bandUsage($, now), ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm })
+        const view = contextView(await bandUsage($, now), ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
         view.compactPct = null                                   // no breakdown here: marks only
         const c = view.cache
         const t = (str, color) => h(Text, color ? { color:term ? color : ui.hex(color) } : null, term ? str : nbsp(str))
