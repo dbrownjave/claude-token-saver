@@ -174,21 +174,25 @@ def cmd_scan(args: argparse.Namespace) -> int:
         for r in requests_of(s):
             main5 += r["write_5m"]
             main1 += r["write_1h"]
-    print(f"Subagent cache lapses in {len(files)} runs across {len(sessions)} sessions{f' (last {args.days} days)' if args.days else ''}")
-    print(f"{'agent type':<22}{'runs':>6}{'lapsed':>8}{'lapses':>8}{'re-written':>12}{'cost ×1.25':>12}{'1h net':>10}  writes at 5m / 1h")
+    print(f"Agents that waited over 5 minutes and had to re-read what they had: {len(files)} agent runs, {len(sessions)} sessions{f', last {args.days} days' if args.days else ''}")
+    print(f"{'agent':<22}{'runs':>6}{'waited':>8}{'re-reads':>9}{'tokens':>11}{'cost':>11}  {'1-hour cache?':<18}")
     tot = {"runs": 0, "lapses": 0, "cost": 0, "net": 0, "gap_hits": 0}
     for name, t in sorted(by_type.items(), key=lambda kv: -kv[1]["lapse_write"]):
         cost = round(t["lapse_write"] * 1.25)
         net = round(LAPSE_RE * t["lapse_write"] - LONG_PREMIUM * t["other_write"])
         tot["runs"] += t["runs"]; tot["lapses"] += t["lapses"]; tot["cost"] += cost; tot["net"] += max(0, net); tot["gap_hits"] += t["gap_hits"]
-        verdict = f"{fmt_k(net)} saved" if net > 0 else ("would not pay" if t["lapses"] else "")
-        print(f"{name:<22}{t['runs']:>6}{t['runs_lapsed']:>8}{t['lapses']:>8}{fmt_k(t['lapse_write']):>12}{fmt_k(cost):>12}{verdict:>14}  {fmt_k(t['write_5m'])} / {fmt_k(t['write_1h'])}")
-    print(f"{'total':<22}{tot['runs']:>6}{'':>8}{tot['lapses']:>8}{'':>12}{fmt_k(tot['cost']):>12}{fmt_k(tot['net']) + ' tokens':>14}")
+        verdict = f"saves ≈ {fmt_k(net)} tokens" if net > 0 else ("costs more than it saves" if t["lapses"] else "no waits, leave it")
+        print(f"{name:<22}{t['runs']:>6}{t['runs_lapsed']:>8}{t['lapses']:>9}{fmt_k(t['lapse_write']):>11}{fmt_k(cost):>11}  {verdict:<18}")
+    print(f"{'all agents':<22}{tot['runs']:>6}{'':>8}{tot['lapses']:>9}{'':>11}{fmt_k(tot['cost']):>11}  {'saves ≈ ' + fmt_k(tot['net']) + ' tokens' if tot['net'] else 'nothing to change'}")
     print()
-    print(f"Every subagent write used the 5-minute cache: {'yes' if not any(t['write_1h'] for t in by_type.values()) else 'NO, some 1h writes seen'}.")
-    print(f"Main threads of the same sessions wrote {fmt_k(main5)} tokens at 5m and {fmt_k(main1)} at 1h.")
-    print(f"Gaps over 5 minutes that still hit the cache (not counted, right at the boundary): {tot['gap_hits']}.")
-    print("cost = tokens re-written × 1.25. 1h net = 1.15 × lapsed writes − 0.75 × every other write of that type (the 2× price of a 1-hour write).")
+    all5 = not any(t['write_1h'] for t in by_type.values())
+    print("How to read it: 'waited' is runs with a step over 5 minutes; 're-reads' is how many times an agent then re-read everything it had;")
+    print("'tokens' is what it re-read; 'cost' is that at the 1.25× price of writing it back. '1-hour cache?' says whether giving that agent a")
+    print("1-hour cache (cacheTtl: 1h under experimental in its agent file) would come out ahead, since every write then costs 2× instead of 1.25×.")
+    print(f"Agents here remember for 5 minutes{' (every write confirms it)' if all5 else ' mostly; some 1-hour writes were seen'}; the main conversation remembers for an hour"
+          f" ({fmt_k(main1)} tokens written at 1 hour, {fmt_k(main5)} at 5 minutes).")
+    if tot['gap_hits']:
+        print(f"Not counted: {tot['gap_hits']} wait{'s' if tot['gap_hits'] != 1 else ''} right at 5 minutes where the agent still remembered.")
     return 0
 
 
@@ -278,24 +282,24 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(f"no subagent transcripts for session {args.session}")
         return 1
     expected: dict[str, dict] = {}
-    print(f"Session {args.session}: {len(files)} subagent run(s)")
+    print(f"Session {args.session}: {len(files)} agent run(s)")
     for f in files:
         a = analyse(requests_of(f))
         t = agent_type_of(f)
         e = expected.setdefault(t, {"lapses": 0, "cost": 0})
         e["lapses"] += a["lapses"]; e["cost"] += a["cost"]
-        gaps = ", ".join(f"{g}m → wrote {fmt_k(w)} (hit {h}%)" for g, w, h in a["lapse_gaps"]) or "none"
-        print(f"  {t:<18} {a['steps']} requests, longest gap {round(a['max_gap_s'] / 60)}m, lapses: {gaps}; writes at 5m {fmt_k(a['write_5m'])}, at 1h {fmt_k(a['write_1h'])}")
+        gaps = ", ".join(f"after {g}m re-read {fmt_k(w)} tokens (remembered {h}%)" for g, w, h in a["lapse_gaps"]) or "none"
+        print(f"  {t:<18} {a['steps']} steps, longest wait {round(a['max_gap_s'] / 60)}m, re-reads: {gaps}; wrote {fmt_k(a['write_5m'])} tokens at 5 minutes, {fmt_k(a['write_1h'])} at 1 hour")
     before = lapse_rows(read_store(Path(args.baseline))) if args.baseline else {}
     after = lapse_rows(read_store(store_path()))
     ok = True
-    print("Mod store (lapses:<type>, cumulative) against the transcripts:")
+    print("What the plugin recorded (its store, cumulative) against the transcripts:")
     for t, e in expected.items():
         got = (after.get(t, {}).get("allCount") or 0) - (before.get(t, {}).get("allCount") or 0)
         got_tok = (after.get(t, {}).get("allTok") or 0) - (before.get(t, {}).get("allTok") or 0)
         mark = "PASS" if got == e["lapses"] and (e["lapses"] == 0 or abs(got_tok - e["cost"]) <= max(50, e["cost"] * 0.02)) else "FAIL"
         ok &= mark == "PASS"
-        print(f"  {mark} {t:<18} transcript: {e['lapses']} lapse(s), {fmt_k(e['cost'])} tokens ×1.25   store delta: {got} lapse(s), {fmt_k(got_tok)} tokens")
+        print(f"  {mark} {t:<18} transcript: {e['lapses']} re-read(s), {fmt_k(e['cost'])} tokens at 1.25×   plugin: {got} re-read(s), {fmt_k(got_tok)} tokens")
     if not args.baseline:
         print("  (no --baseline: the store is cumulative, so a delta could not be formed; counts above are the whole store)")
     if not after and expected and any(e["lapses"] for e in expected.values()):

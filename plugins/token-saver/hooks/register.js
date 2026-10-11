@@ -1395,7 +1395,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
     ...sources.map((s) => ({ label: s.label, tok: fmtK(s.tok), amount: priced ? `≈ ${usd(s.tok)}` : '', role: 'inactive', amountRole: s.tok < 0 ? 'warning' : 'success' })),
     ...(T.cacheRead > 0 ? [{ label: "Prompt cache, Claude's own (not counted)", tok: fmtK(T.cacheRead), amount: '', role: 'inactive', amountRole: 'inactive' }] : []),
     ...(T.switchPaid > 0 ? [{ label: 'Model switches, cold re-read (not a saving)', tok: fmtK(Math.round(T.switchPaid * 1.25)), amount: priced ? `≈ ${usd(Math.round(T.switchPaid * 1.25))}` : '', role: 'inactive', amountRole: 'inactive' }] : []),
-    ...(T.agentLapses > 0 ? [{ label: 'Subagent cache lapses (not a saving)', tok: fmtK(T.agentLapseTok), amount: priced ? `≈ ${usd(T.agentLapseTok)}` : '', role: 'inactive', amountRole: 'inactive' }] : []),
+    ...(T.agentLapses > 0 ? [{ label: 'Agents re-read after a long wait (not a saving)', tok: fmtK(T.agentLapseTok), amount: priced ? `≈ ${usd(T.agentLapseTok)}` : '', role: 'inactive', amountRole: 'inactive' }] : []),
     { rule: true },
     { label: 'Total saved', tok: fmtK(totalTok), amount: priced ? `≈ ${usd(totalTok)}` : '', role: 'text', amountRole: 'success' },
     ...(priced ? [
@@ -1425,15 +1425,17 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   for (const [type, a] of types) {
     if (!a.lapses) continue
     const net = Math.round(LAPSE_RE * a.lapseWrite - LONG_PREMIUM * a.otherWrite)
-    if (!worst || net > worst.net) worst = { type, net, lapses: a.lapses }
+    if (!worst || net > worst.net) worst = { type, net, lapses: a.lapses, reread: a.lapseWrite }
   }
+  // Plain words: an agent "waited over 5 minutes and re-read" what it had. No cache jargon in the pane.
   let agentLine = ''
   if (worst && !onCredits(usage)) {
     const week = Number(weeks[worst.type]) || 0
-    const times = `lapsed ${worst.lapses}× this session${week > worst.lapses ? `, ${week} times this week` : ''}`
+    const times = `${worst.lapses}× this session${week > worst.lapses ? ` (${week} this week)` : ''}`
+    const what = `The ${worst.type} agent waited over 5 minutes ${times} and re-read ${fmtK(worst.reread)} tokens.`
     agentLine = worst.net > 0
-      ? `Subagent ${worst.type} ${times}: a 1-hour cache would have saved ≈ ${fmtK(worst.net)} tokens net of its 2× write price. Set experimental.cacheTtl: 1h in its agent file.`
-      : `Subagent ${worst.type} ${times}; a 1-hour cache would not pay here (its writes cost 2×).`
+      ? `${what} A 1-hour cache for it would have saved ≈ ${fmtK(worst.net)} tokens: put cacheTtl: 1h under experimental in its agent file.`
+      : `${what} A 1-hour cache would cost more than it saves here; shorten its waits instead.`
   }
   const savings = { mode, rate, priced, totalTok, share, sources, cacheInfo, right, receipt, note: note + oneShotNote, short: totalTok ? `${fmtK(totalTok)} saved` : '0 saved', spent, hasCost, agentLine, agentLapses: T.agentLapses, agentLapseTok: T.agentLapseTok }
 
@@ -1846,6 +1848,7 @@ function liveNumbers(view, s) {
     auto: view.compactPct === null ? undefined : view.compactPct,
     saved: fmtK(sv.totalTok), savedUsd: usdOf(sv.totalTok), share: Math.round(sv.share * 100), cacheRead: fmtK(T.cacheRead),
     keptOut: fmtK(sv.sources[0].tok), keptRequests: T.turns, rewrites: s.rewrites, vetoes: s.vetoes, vetoTok: fmtK(sv.sources[1].tok), warmNet: fmtK(sv.sources[2].tok),
+    agentLapses: T.agentLapses || 0, agentLapseTok: fmtK(T.agentLapseTok || 0), agentLine: sv.agentLine || '',
     windowUsage: five ? pct100(five.percentUsed) : undefined, windowResets,
     // for Explain
     _msgs: msgs, _left: left,
@@ -1968,7 +1971,7 @@ function listText(view, o) {
   rows.push(['Context', view.window ? `${fmtK(view.used)} of ${fmtK(view.window)} (${view.pct}%)` : `${fmtK(view.used)} tokens`, bar(view.pct / 100)])
   rows.push(['Cache', c.short, dots(c.sentence.map((p) => p[0]).join('').replace(/^[^:]*: /, ''), c.known ? low(c.rest) : '')])
   rows.push(['Saved', `${fmtK(sv.totalTok)} tokens${sv.priced ? ` ≈ $${((sv.totalTok * sv.rate) / 1e6).toFixed(2)}` : ''}`, dots(...sv.sources.map((x) => `${low(x.label)} ${fmtK(x.tok)}`))])
-  if (sv.agentLapses > 0) rows.push(['Subagents', `${sv.agentLapses} cache lapse${sv.agentLapses === 1 ? '' : 's'} · ${fmtK(sv.agentLapseTok)} tokens re-read`, sv.agentLine ? low(sv.agentLine) : 'not a saving; subagents run on the 5-minute cache'])
+  if (sv.agentLapses > 0) rows.push(['Agents', `${sv.agentLapses} re-read${sv.agentLapses === 1 ? '' : 's'} after a long wait · ${fmtK(sv.agentLapseTok)} tokens`, sv.agentLine ? low(sv.agentLine) : 'not a saving: an agent that waits over 5 minutes re-reads what it had'])
   rows.push(['Keep-warm', keepWarm.on ? 'on' : `off${keepWarm.stopped ? ` (${keepWarm.stopped})` : ''}`,
     keepWarm.on ? `${keepWarm.pings} ping${keepWarm.pings === 1 ? '' : 's'} · avoided ${fmt(keepWarm.savedTok)} · spent ${fmt(keepWarm.costTok)} tokens` : ''])
   if (sv.mode === 'subscription' && view.five) {

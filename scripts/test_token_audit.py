@@ -53,13 +53,13 @@ class SubagentAudit(unittest.TestCase):
         self.assertEqual(by, {("user", "researcher"): "1h", ("project", "builder"): None, ("project", "inline"): "5m"})
         self.assertIsNone(r["ttl_override"])
         self.assertEqual(r["ttl_sources"], [])
-        self.assertFalse(any("overrides cacheTtl" in w for w in r["warnings"]))
+        self.assertFalse(any("sets how long every agent" in w for w in r["warnings"]))
 
     def test_env_override_wins_and_warns(self) -> None:
         env = {**self.base_env, "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "5m"}
         r = self.run_audit(env)
         self.assertEqual(r["ttl_override"], {"source": "environment", "key": "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL", "value": "5m"})
-        self.assertTrue(any("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=5m in environment overrides cacheTtl in every agent file" in w for w in r["warnings"]))
+        self.assertTrue(any("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=5m in environment sets how long every agent's cache lasts" in w for w in r["warnings"]))
 
     def test_force_5m_outranks_the_ttl_env(self) -> None:
         env = {**self.base_env, "FORCE_PROMPT_CACHING_5M": "1", "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h"}
@@ -78,16 +78,16 @@ class SubagentAudit(unittest.TestCase):
         (self.cfg / "agents" / "researcher.md").unlink()
         (self.proj / ".claude" / "agents" / "inline.md").unlink()
         r = self.run_audit()
-        self.assertTrue(any("1 agent file use the 5-minute cache default" in w for w in r["warnings"]))
+        self.assertTrue(any("1 agent file keeps the default" in w for w in r["warnings"]))
 
     def test_text_render_has_the_section(self) -> None:
         proc = subprocess.run([sys.executable, "-I", str(SCRIPT)], cwd=self.proj, env=self.base_env, capture_output=True, text=True, check=False)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("Subagents (prompt-cache TTL)", proc.stdout)
+        self.assertIn("Agents: how long each one remembers what it read", proc.stdout)
         self.assertIn("user/researcher", proc.stdout)
-        self.assertIn("cacheTtl 1h", proc.stdout)
-        self.assertIn("cacheTtl default 5m", proc.stdout)
-        self.assertIn("override      none", proc.stdout)
+        self.assertIn("researcher                   1 hour", proc.stdout)
+        self.assertIn("5 minutes (default)", proc.stdout)
+        self.assertIn("override      none: each agent file decides", proc.stdout)
         self.assertNotIn(" tok ", proc.stdout)
 
 

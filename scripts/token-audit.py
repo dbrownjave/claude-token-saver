@@ -188,33 +188,34 @@ def warn(report: dict) -> list[str]:
         w.append(f"Rules total ~{report['rules_tokens']} tokens. Split with paths: so unused rules stay cold.")
     o = report.get("ttl_override")
     if o:
-        w.append(f"{o['key']}={o['value']} in {o['source']} overrides cacheTtl in every agent file.")
+        w.append(f"{o['key']}={o['value']} in {o['source']} sets how long every agent's cache lasts, whatever its own file says.")
     elif report.get("agents") and not any(a["cacheTtl"] for a in report["agents"]):
         n = len(report["agents"])
         w.append(
-            f"{n} agent file{'s' if n != 1 else ''} use the 5-minute cache default; set experimental.cacheTtl: 1h only for "
-            "agents that idle past 5 minutes (a 1h write costs 2×). /tokens shows which ones lapsed."
+            f"{n} agent file{'s' if n != 1 else ''} keep{'s' if n == 1 else ''} the default: an agent forgets what it read after 5 minutes of waiting and "
+            "re-reads it. Give an agent a 1-hour cache (cacheTtl: 1h under experimental) only if /tokens shows it waiting that long; a 1-hour cache costs more per write."
         )
     return w
 
 
 def render_agents(report: dict) -> list[str]:
-    lines = ["", "Subagents (prompt-cache TTL)"]
+    lines = ["", "Agents: how long each one remembers what it read"]
     agents = report.get("agents") or []
     if agents:
         for a in agents:
-            lines.append(f"  {a['scope']}/{a['name']:<28} cacheTtl {a['cacheTtl'] or 'default 5m'}")
+            ttl = {"1h": "1 hour", "5m": "5 minutes", None: "5 minutes (default)"}.get(a["cacheTtl"], str(a["cacheTtl"]))
+            lines.append(f"  {a['scope']}/{a['name']:<28} {ttl}")
     else:
         lines.append("  no agent files in ~/.claude/agents or .claude/agents")
     o = report.get("ttl_override")
     if o:
-        lines.append(f"  override      {o['key']}={o['value']}  ({o['source']}) wins over every per-file cacheTtl")
+        lines.append(f"  override      {o['key']}={o['value']} in {o['source']} sets every agent, whatever its file says")
     else:
-        lines.append("  override      none (no subagentPromptCacheTtl, CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL or FORCE_PROMPT_CACHING_5M)")
+        lines.append("  override      none: each agent file decides (subagentPromptCacheTtl, CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL and FORCE_PROMPT_CACHING_5M are unset)")
     if report.get("ttl_1h_env"):
         lines.append(f"  {TTL_INFO_ENV}={report['ttl_1h_env']} in the environment (informational)")
-    lines.append("  Plugin agents are not listed: an update overwrites their files. Copy one into ~/.claude/agents to pin its cacheTtl.")
-    lines.append("  A 1M window compacting above 900k is checked live by /tokens (the script cannot see the model).")
+    lines.append("  An agent that waits over 5 minutes on one step (a build, a test run) re-reads everything it had. /tokens shows which agents did.")
+    lines.append("  Agents that come with a plugin are not listed: an update overwrites their files. Copy one into ~/.claude/agents to change it.")
     return lines
 
 

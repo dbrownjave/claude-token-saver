@@ -84,12 +84,12 @@ test('a 6-minute gap followed by a cold write is a lapse: a receipt row that is 
   await mainTurn($, h.step)
   await agentRun($, h, 'a1', 'Explore', 6, WRITE(50_000))
   const ui = await openReceipt($)
-  expect(await ui.find({ text: /^Subagent cache lapses \(not a saving\)$/ })).toBeDefined()
+  expect(await ui.find({ text: /^Agents re-read after a long wait \(not a saving\)$/ })).toBeDefined()
   expect(await ui.find({ text: /^62\.5k$/ })).toBeDefined()                         // 50k written again × 1.25
   expect(await ui.find({ text: /^Total saved$/ })).toBeDefined()
   expect(await ui.find({ text: /^0 tokens$/ })).toBeDefined()                       // the lapse is never counted as saved
   // net = 1.15 × 50k lapsed − 0.75 × 50k other writes = 20k
-  expect(await ui.find({ text: /^Subagent Explore lapsed 1× this session: a 1-hour cache would have saved ≈ 20k tokens net of its 2× write price\. Set experimental\.cacheTtl: 1h in its agent file\.$/ })).toBeDefined()
+  expect(await ui.find({ text: /^The Explore agent waited over 5 minutes 1× this session and re-read 50k tokens\. A 1-hour cache for it would have saved ≈ 20k tokens: put cacheTtl: 1h under experimental in its agent file\.$/ })).toBeDefined()
 })
 
 test('a gap followed by a cache hit is not a lapse: a longer cache was already in force', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -97,8 +97,8 @@ test('a gap followed by a cache hit is not a lapse: a longer cache was already i
   await mainTurn($, h.step)
   await agentRun($, h, 'a1', 'Explore', 6, READ(50_000))
   const ui = await openReceipt($)
-  expect(await ui.find({ text: /^Subagent cache lapses/ })).toBeUndefined()
-  expect(await ui.find({ text: /^Subagent Explore/ })).toBeUndefined()
+  expect(await ui.find({ text: /^Agents re-read after a long wait/ })).toBeUndefined()
+  expect(await ui.find({ text: /^The Explore agent/ })).toBeUndefined()
 })
 
 test('a 4-minute gap is inside the TTL: no lapse even when the request writes', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -106,7 +106,7 @@ test('a 4-minute gap is inside the TTL: no lapse even when the request writes', 
   await mainTurn($, h.step)
   await agentRun($, h, 'a1', 'Explore', 4, WRITE(50_000))
   const ui = await openReceipt($)
-  expect(await ui.find({ text: /^Subagent cache lapses/ })).toBeUndefined()
+  expect(await ui.find({ text: /^Agents re-read after a long wait/ })).toBeUndefined()
 })
 
 test("subagent steps never touch the main thread's cache clock or turn count", { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -117,7 +117,7 @@ test("subagent steps never touch the main thread's cache clock or turn count", {
   await agentRun($, h, 'a1', 'Explore', 6, WRITE(50_000))       // the clock moved 6 minutes; the agent's last step was just now
   const after = await list()
   expect(after).toMatch(/│ Cache +│ Cold/)                       // idle 6m past the 5m TTL: the agent's steps did not refresh the main clock
-  expect(after).toMatch(/│ Subagents +│ 1 cache lapse/)
+  expect(after).toMatch(/│ Agents +│ 1 re-read after a long wait/)
   expect(h.log.steps.filter((s) => !s.agentId)).toHaveLength(1)
 })
 
@@ -127,7 +127,7 @@ test('the store carries a week count per agent type: "3 times this week" with tw
   await mainTurn($, h.step)
   await agentRun($, h, 'a1', 'Explore', 6, WRITE(50_000))
   const ui = await openReceipt($)
-  expect(await ui.find({ text: /lapsed 1× this session, 3 times this week/ })).toBeDefined()
+  expect(await ui.find({ text: /waited over 5 minutes 1× this session \(3 this week\)/ })).toBeDefined()
   const row: any = h.store.get('lapses:Explore')
   expect(row.weekKey).toBe(weekKey)
   expect(row.weekCount).toBe(3)
@@ -140,8 +140,8 @@ test('on usage credits the lapse is still measured but the 1-hour recommendation
   await mainTurn($, h.step)
   await agentRun($, h, 'a1', 'Explore', 6, WRITE(50_000))
   const ui = await openReceipt($)
-  expect(await ui.find({ text: /^Subagent cache lapses \(not a saving\)$/ })).toBeDefined()
-  expect(await ui.find({ text: /^Subagent Explore/ })).toBeUndefined()
+  expect(await ui.find({ text: /^Agents re-read after a long wait \(not a saving\)$/ })).toBeDefined()
+  expect(await ui.find({ text: /^The Explore agent/ })).toBeUndefined()
 })
 
 test('a small lapse after many warm writes: the 1-hour cache would not pay, and the line says so', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -149,17 +149,21 @@ test('a small lapse after many warm writes: the 1-hour cache would not pay, and 
   await mainTurn($, h.step)
   await agentRun($, h, 'a1', 'Plan', 6, WRITE(10_000), WRITE(200_000))          // 1.15 × 10k − 0.75 × 200k < 0
   const ui = await openReceipt($)
-  expect(await ui.find({ text: /^Subagent Plan lapsed 1× this session; a 1-hour cache would not pay here \(its writes cost 2×\)\.$/ })).toBeDefined()
+  expect(await ui.find({ text: /^The Plan agent waited over 5 minutes 1× this session and re-read 10k tokens\. A 1-hour cache would cost more than it saves here; shorten its waits instead\.$/ })).toBeDefined()
 })
 
-test('/tokens list gains a Subagents row once an agent has lapsed', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+test('/tokens list gains an Agents row once an agent has re-read, and /tokens learn agents explains it', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
   const h = setup(on, () => API)
   await mainTurn($, h.step)
   const none: any = await $.command.run({ command: 'tokens', args: 'list', presentation: { columns: 160 } })
   expect(none.text).not.toContain('Subagents')
   await agentRun($, h, 'a1', 'Explore', 6, WRITE(50_000))
   const r: any = await $.command.run({ command: 'tokens', args: 'list', presentation: { columns: 160 } })
-  expect(r.text).toMatch(/│ Subagents +│ 1 cache lapse · 62\.5k tokens re-read +│ subagent Explore lapsed 1× this session/)
+  expect(r.text).toMatch(/│ Agents +│ 1 re-read after a long wait · 62\.5k tokens +│ the Explore agent waited over 5 minutes 1× this session/)
+  const learn: any = await $.command.run({ command: 'tokens', args: 'learn agents' })
+  expect(learn.text).toContain('Agents: Each agent Claude starts remembers what it has read for 5 minutes.')
+  expect(learn.text).toContain('1 re-read after a long wait, 62.5k tokens, not counted as saved.')
+  expect(learn.text).toContain('→ The Explore agent waited over 5 minutes 1× this session')
 })
 
 test('a 1M window with auto-compact above 900k: the pane and /tokens say to run /autocompact 400k; at 400k they do not', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
