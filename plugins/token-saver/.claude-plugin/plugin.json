@@ -78,6 +78,13 @@
       "description": "Fire: the cards' cell bars burn like the context bar. Ember: the same cells with a calm glow at each head and no wind, so only the context bar moves.",
       "options": ["fire", "ember"],
       "default": "fire"
+    },
+    "theme": {
+      "type": "string",
+      "title": "Light or dark palette",
+      "description": "The colours of the Context pane, the band and the cards. Auto: the terminal follows its /config Theme (light themes get the light palette); the desktop app tells a mod nothing about its appearance, so auto stays dark there. Pick light if you use the desktop app in light mode.",
+      "options": ["auto", "dark", "light"],
+      "default": "auto"
     }
   }
 }

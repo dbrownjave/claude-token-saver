@@ -655,3 +655,64 @@ test('mobile pane: one card per row, nothing wider than the screen, long lines w
   for (const k of ['ctx-explain', 'ctx-clear', 'ctx-compact', 'ctx-later']) expect(await ui.find({ key: k })).toBeDefined()
   expect(await ui.find({ text: /^Idle compaction$/ })).toBeDefined()
 })
+
+/** Relative luminance of a #rrggbb, 0 (black) to 1 (white). */
+const lum = (hex: string) => {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+}
+const HEXC = /^#[0-9a-f]{6}$/i
+/** What the open pane paints: Text colours (bar cells and ■ swatches left out) and each bar's track. */
+async function paints($: any, surface: 'terminal' | 'desktop') {
+  const ui: any = await mount($, surface)
+  if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
+  const texts: string[] = [], tracks: string[] = []
+  const walk = (n: any) => {
+    if (!n || typeof n !== 'object') return
+    const p = n.props || {}
+    if (n.type === 'Text' && typeof p.color === 'string' && HEXC.test(p.color) && !p.backgroundColor && !/^■\s*$/.test((n.children || []).join(''))) texts.push(p.color)   // a ■ swatch is its bar's colour
+    if (n.type === 'Svg') { const m = /<\/defs><rect width="[^"]+" height="[^"]+" rx="[^"]+" fill="(#[0-9a-f]{6})"/i.exec(p.source || ''); if (m) tracks.push(m[1]) }
+    if (n.type === 'Raster' && p.cells && (n.key ?? p.key) !== 'card-cache') {   // card-cache is full at Warmth 100%: no bare track
+      // [char, fg, bg] per cell; past the fill the bottom half is the bare track
+      const b = Uint8Array.from(atob(p.cells), (ch) => ch.charCodeAt(0)), w = new Uint32Array(b.buffer)
+      tracks.push('#' + w[w.length - 1].toString(16).padStart(6, '0'))
+    }
+    ;(n.children || []).forEach(walk)
+  }
+  walk(await ui.drawn())
+  await ui.unmount()
+  return { texts, tracks }
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  for (const theme of ['dark', 'light'] as const) {
+    test(`theme ${theme} on ${surface}: text readable on its ground, bar tracks on the ${theme} side`, { options: { ...OPTIONS, keepWarm: false, theme }, timeoutMs: SLOW }, async ($, on) => {
+      setup(on, () => USAGE, STEP_TTL('1h'))
+      SETTINGS(on, {})
+      await turn($)
+      const { texts, tracks } = await paints($, surface)
+      expect(tracks.length).toBeGreaterThan(3)
+      if (surface === 'desktop') expect(texts.length).toBeGreaterThan(5)       // the desktop paints its Text in hex
+      if (theme === 'light') {
+        for (const c of texts) expect(lum(c)).toBeLessThan(0.6)               // no near-white text on a light pane
+        for (const c of tracks) expect(lum(c)).toBeGreaterThan(0.5)           // no near-black track
+      } else {
+        for (const c of texts) expect(lum(c)).toBeGreaterThan(0.08)           // no near-black text on a dark pane
+        for (const c of tracks) expect(lum(c)).toBeLessThan(0.2)
+      }
+    })
+  }
+}
+
+test('theme auto: the terminal follows its /config Theme row and a later change; the desktop stays dark', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => USAGE, STEP_TTL('1h'))
+  SETTINGS(on, {})
+  on('config.list' as any, () => ({ value: [{ key: 'model', value: 'opus' }, { key: 'theme', value: 'light-daltonized' }] }))
+  on('config.set' as any, (_$: any, e: any) => ({ value: e.value }))
+  await turn($)
+  const side = async (s: 'terminal' | 'desktop') => (await paints($, s)).tracks.map((c) => (lum(c) > 0.5 ? 'light' : lum(c) < 0.2 ? 'dark' : c))
+  expect(new Set(await side('terminal'))).toEqual(new Set(['light']))
+  expect(new Set(await side('desktop'))).toEqual(new Set(['dark']))
+  await ($ as any).config.set({ key: 'theme', value: 'dark' })
+  expect(new Set(await side('terminal'))).toEqual(new Set(['dark']))
+})
