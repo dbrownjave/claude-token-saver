@@ -182,22 +182,22 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await turn($)
 
     let ui: any = await mount($, surface)
-    expect(await ui.find({ text: /^Cache warm: next message reuses[ \u00a0]$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Cache (very warm|warm|chill): next message reuses[ \u00a0]$/ })).toBeDefined()
     expect(await ui.find({ text: /^800k$/ })).toBeDefined()
     expect(await ui.find({ text: /[ \u00a0]· 5m left$/ })).toBeDefined()
     expect((await ui.find({ key: 'ctx-compact' }))?.props.variant).toBe('primary')   // past compact, cache warm
     expect((await ui.find({ key: 'ctx-clear' }))?.props.variant).toBeUndefined()
-    if (surface === 'terminal') expect(await ui.find({ text: /^Warm 5m$/ })).toBeDefined()
+    if (surface === 'terminal') expect(await ui.find({ text: /^Very warm 5m$/ })).toBeDefined()
     await ui.press({ key: 'ctx-expand' })
     expect(await ui.find({ text: /^Compact$/ })).toBeDefined()
     expect(await ui.find({ text: /^Now$/ })).toBeDefined()
-    expect(await ui.find({ text: /^Warm$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Very warm$/ })).toBeDefined()
     expect(await ui.find({ text: /^Warmth 100%$/ })).toBeDefined()
 
     await clock.advance(10 * MIN)
     await ui.unmount()
     ui = await mount($, surface)
-    expect(await ui.find({ text: /^Cache cold: next message re-caches[ \u00a0]$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Cache frozen: next message re-caches[ \u00a0]$/ })).toBeDefined()
     const compact = await ui.find({ key: 'ctx-compact' })
     expect(compact?.props.variant).toBeUndefined()                // cold: Compact would re-cache everything
     expect(compact?.props.dimColor).toBe(true)
@@ -439,7 +439,7 @@ test('/tokens list is the pane as a table: context with a bar, cache, saved, kee
   const lines = text.split('\n')
   expect(lines[0]).toMatch(/^┌─+┬─+┬─+┐$/)
   expect(lines[1]).toMatch(/^│ Context +│ 484k of 1M \(48%\) +│ █{10}░{10} +│$/)
-  expect(lines[2]).toMatch(/^│ Cache +│ Warm \d+m +│ next message reuses 484k from cache · \d+m left · hit \d+% +│$/)
+  expect(lines[2]).toMatch(/^│ Cache +│ Very warm \d+m +│ next message reuses 484k from cache · \d+m left · hit \d+% +│$/)
   expect(lines[3]).toMatch(/^│ Saved +│ 0 tokens +│ trimmed output 0 · compactions vetoed 0 · keep-warm 0 · model switches held 0 +│$/)
   expect(lines[4]).toMatch(/^│ Keep-warm +│ (on|off[^│]*) +│/)
   expect(lines[5]).toMatch(/^│ Idle +│ \S[^│]* +│ compaction: /)
@@ -614,3 +614,25 @@ for (const cols of [24, 40, 50, 120]) {
     if (cols >= 72 && (await ui.find({ key: 'ctx-popout' }))) expect(inFrame('ctx-popout')).toBe(false)
   })
 }
+
+test('the cache reads Very warm, Warm, Chill, Cold, then Frozen, with one square in its colour and room above the bottom row', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  const { clock } = setup(on, () => USAGE, STEP_TTL('5m'))
+  SETTINGS(on, {})
+  await turn($)
+  const seen: string[] = []
+  const colors = new Set<string>()
+  for (const [mins, word] of [[0.5, 'Very warm'], [1, 'Warm'], [1, 'Chill'], [1.5, 'Cold'], [2, 'Frozen']] as const) {
+    await clock.advance(mins * MIN)
+    const ui: any = await mount($, 'desktop', { ...PANE, bodyColumns: 50 })
+    const minis = (await ui.findAll({ type: 'Svg' })).filter((x: any) => /^Cache /.test(String(x.props.alt)))
+    expect(minis.length).toBe(1)                                              // one square, not five cells
+    expect(minis[0].props.alt).toBe(`Cache ${word}`)
+    colors.add(String(minis[0].props.source).match(/fill="([^"]+)"/)![1])
+    const root: any = await ui.drawn()
+    expect(root.children.some((c: any) => c && c.props && c.props.marginTop === 1)).toBe(true)
+    seen.push(word)
+    await ui.unmount()
+  }
+  expect(seen.length).toBe(5)
+  expect(colors.size).toBe(5)                                                 // each word its own colour
+})

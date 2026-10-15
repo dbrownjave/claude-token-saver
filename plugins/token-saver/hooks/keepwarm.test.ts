@@ -137,7 +137,7 @@ test('keep-warm turns itself off when the engine writes to the one-hour cache, w
   expect(forks.length).toBe(0)                              // a 5-minute ping would be wasted on an hour-long TTL
   const text = await tokensText($)
   expect(text).toContain('off (one-hour cache)')
-  expect(text).toContain('Warm 30m')
+  expect(text).toContain('Chill 30m')
 })
 
 test('keep-warm keeps pinging when the engine writes to the 5-minute cache', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {

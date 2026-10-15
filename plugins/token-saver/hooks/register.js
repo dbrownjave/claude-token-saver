@@ -1298,14 +1298,11 @@ function memoryBar(ui, geo, parts, t) {
   return cellBar(ui, 'mem-bar', geo, colorAt, { padY: geo.term ? 0 : INNER_PAD, glint, alt: "Claude's working memory by kind" })
 }
 
-/** Five tiny cells for the closed pane: lit count is the warmth along the cache gradient; cold is all frozen blue. */
+/** One small square for the closed pane and the band, in the colour of the cache's word (Frozen … Very warm). */
 function cacheMini(ui, cache) {
-  const FROZEN = mixHex(COLD, CACHE_TRACK, 0.45)
-  const lit = cache.warm ? Math.max(1, Math.ceil(cache.fill * 5)) : 0
-  const colors = Array.from({ length: 5 }, (_, i) => (cache.warm ? (i < lit ? gradAt((i + 0.5) / 5) : CACHE_TRACK) : cache.known ? FROZEN : CACHE_TRACK))
-  if (ui.term || typeof ui.Svg !== 'function') return colors.map((c, i) => h(ui.Text, { key: `mini${i}`, color: c }, '▪'))
-  const rects = colors.map((c, i) => `<rect x="${i * 7}" y="2.5" width="5" height="5" rx="1" fill="${c}"/>`).join('')
-  return [h(ui.Svg, { source: `<svg xmlns="http://www.w3.org/2000/svg" width="33" height="10" viewBox="0 0 33 10">${rects}</svg>`, alt: `Cache ${cache.accent}`, width: 33, height: 10 })]
+  const c = cache.color || CACHE_TRACK
+  if (ui.term || typeof ui.Svg !== 'function') return [h(ui.Text, { key: 'mini', color: c }, '■')]
+  return [h(ui.Svg, { source: `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="2" fill="${c}"/></svg>`, alt: `Cache ${cache.accent}`, width: 10, height: 10 })]
 }
 
 /** Fold one breakdown row to a working-memory kind (colour and order). */
@@ -1399,6 +1396,20 @@ function drillGroups(b, home) {
 }
 
 /** The pane's view model: context fill and breakdown, our thresholds, cache warmth, and what the pack saved. */
+/**
+ * The cache in five words, each with its own colour along the cache gradient: Frozen (lapsed), Cold (the last
+ * minutes: the last third of a short TTL, the last five of a long one), Chill, Warm, Very warm (just written).
+ */
+function warmthLevel(clock, ttl) {
+  if (!clock || !clock.known) return { word: 'Not yet', color: CACHE_TRACK }
+  if (!clock.warm) return { word: 'Frozen', color: mixHex(COLD, CACHE_TRACK, 0.45) }
+  const f = clock.leftMs / ttl
+  if (clock.leftMs <= Math.min(5 * MINUTE, ttl / 3)) return { word: 'Cold', color: gradAt(0.05) }
+  if (f <= 0.55) return { word: 'Chill', color: gradAt(0.4) }
+  if (f <= 0.8) return { word: 'Warm', color: gradAt(0.72) }
+  return { word: 'Very warm', color: gradAt(1) }
+}
+
 function contextView(usage, ttl, usageLast, clock, stats) {
   const ctx = (usage && usage.context) || {}
   const b = ctx.breakdown || null
@@ -1422,25 +1433,27 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const ttlMin = Math.max(1, Math.round(ttl / MINUTE))
   const amount = fmtK(used || sentOf(usageLast))
   const hit = hitPct(usageLast)
+  const level = warmthLevel(clock, ttl)
   let cache
   if (!clock || !clock.known) {
-    cache = { known: false, warm: false, cooling: false, leftMin: 0, fill: 0, accent: 'Cold', strong: 'No response yet', rest: '', foot: 'The clock starts after the first reply', short: 'Cache after 1st reply',
+    cache = { known: false, warm: false, cooling: false, leftMin: 0, fill: 0, accent: level.word, strong: 'No response yet', rest: '', foot: 'The clock starts after the first reply', short: 'Cache after 1st reply',
       sentence: [['No response yet: the cache clock starts after the first reply', 'inactive']] }
   } else if (clock.warm) {
     const leftMin = Math.max(1, Math.round(clock.leftMs / MINUTE))
     // "cooling" in the last five minutes, or the last third of a short TTL (a 5-minute TTL would otherwise always cool)
     const cooling = clock.leftMs <= Math.min(5 * MINUTE, ttl / 3)
-    cache = { known: true, warm: true, cooling, leftMin, fill: clock.leftMs / ttl, accent: 'Warm', strong: `Warmth ${pct100((100 * clock.leftMs) / ttl)}%`, rest: ` · Hit ${hit}%`,
-      foot: `${leftMin}m left of ${ttlMin}m`, short: `Warm ${leftMin}m`,
+    cache = { known: true, warm: true, cooling, leftMin, fill: clock.leftMs / ttl, accent: level.word, strong: `Warmth ${pct100((100 * clock.leftMs) / ttl)}%`, rest: ` · Hit ${hit}%`,
+      foot: `${leftMin}m left of ${ttlMin}m`, short: `${level.word} ${leftMin}m`,
       sentence: cooling
-        ? [['Cache cooling: ', 'inactive'], [`${leftMin}m left to reuse `, 'inactive'], [amount, 'text'], [' from cache', 'inactive']]
-        : [['Cache warm: next message reuses ', 'inactive'], [amount, 'text'], [' from cache', 'inactive'], [` · ${leftMin}m left`, 'inactive']] }
+        ? [[`Cache ${level.word.toLowerCase()}: `, 'inactive'], [`${leftMin}m left to reuse `, 'inactive'], [amount, 'text'], [' from cache', 'inactive']]
+        : [[`Cache ${level.word.toLowerCase()}: next message reuses `, 'inactive'], [amount, 'text'], [' from cache', 'inactive'], [` · ${leftMin}m left`, 'inactive']] }
   } else {
-    cache = { known: true, warm: false, cooling: false, leftMin: 0, fill: 0, accent: 'Cold', strong: 'Warmth 0%', rest: ` · Hit ${hit}%`,
-      foot: `Idle ${Math.max(1, Math.round(clock.idleMs / MINUTE))}m, past ${ttlMin}m`, short: 'Cold',
-      sentence: [['Cache cold: next message re-caches ', 'inactive'], [amount, 'text']] }
+    cache = { known: true, warm: false, cooling: false, leftMin: 0, fill: 0, accent: level.word, strong: 'Warmth 0%', rest: ` · Hit ${hit}%`,
+      foot: `Idle ${Math.max(1, Math.round(clock.idleMs / MINUTE))}m, past ${ttlMin}m`, short: level.word,
+      sentence: [[`Cache ${level.word.toLowerCase()}: next message re-caches `, 'inactive'], [amount, 'text']] }
   }
   cache.amount = amount
+  cache.color = level.color
 
   // what the pack saved, in the currency you pay in
   const saved = stats || {}
@@ -1609,7 +1622,7 @@ function billCard(view, now, ttl, keepWarmMax, longTtl) {
 
 function cacheCard(view) {
   const c = view.cache
-  return { title: 'Cache', accent: c.accent, tone: c.warm ? WARM : c.known ? COLD : 'inactive', bar: { fill: c.fill, ink: 'grad' }, strong: c.strong, rest: c.rest, foot: c.foot,
+  return { title: 'Cache', accent: c.accent, tone: c.known ? c.color : 'inactive', bar: { fill: c.fill, ink: 'grad' }, strong: c.strong, rest: c.rest, foot: c.foot,
     foot2: c.known && view.switchCost ? view.switchCost.short : undefined }
 }
 
@@ -1712,7 +1725,7 @@ function drawContextPane(ui, view, o) {
   const msg = ctxMsg ? t(cap1(ctxMsg), 'inactive', { wrap: 'wrap' }) : null
   const explain = ex ? explainSection(ui, view, o, { row, col, t, grow, rule, cells }) : []
   const hint1M = view.compactHint1M ? t(view.compactHint1M, 'inactive', { wrap: 'wrap' }) : null
-  if (!expanded) return col({}, [title, frame([bar, hint1M]), bottom, under, msg, ...explain])
+  if (!expanded) return col({}, [title, frame([bar, hint1M]), term ? bottom : col({ marginTop: 1 }, [bottom]), under, msg, ...explain])
 
   // 4. Saved: the headline of the whole plugin
   const sv = view.savings
@@ -2940,11 +2953,11 @@ export function register(on, options = {}) {
         ]
         const row = []
         {
-          // ▬ 48%  ▪▪▪▪▪ Warm 47m · Reuses 96k · 2.2M saved      Open ×   — drop "Reuses" first, then the bar, when narrow
-          const words = !c.known ? 'No response yet' : !c.warm ? 'Cold' : c.cooling ? `Cooling ${c.leftMin}m` : `Warm ${c.leftMin}m`
+          // ▬ 48%  ■ Warm 47m · Reuses 96k · 2.2M saved      Open ×   — drop "Reuses" first, then the bar, when narrow
+          const words = !c.known ? 'No response yet' : c.short
           const reuse = !c.known ? '' : c.warm ? `Reuses ${c.amount}` : `Re-caches ${c.amount}`
           const BAR = 16
-          const fixed = 1 + pctText.length + 2 + 5 + 1 + words.length + 3 + view.savings.short.length + 1 + 6
+          const fixed = 1 + pctText.length + 2 + 1 + 1 + words.length + 3 + view.savings.short.length + 1 + 6
           const room = Math.max(20, width - 2)
           const withReuse = reuse && fixed + BAR + 3 + reuse.length <= room
           const withBar = fixed + BAR <= room

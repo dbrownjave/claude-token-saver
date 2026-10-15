@@ -31,7 +31,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     if (surface === 'terminal') {
       // one row: bar, percent, cache words, saved, Open ×
       expect((await ui.find({ text: /^[ \u00a0]?60%$/ }))?.props.color).toBe('claude')          // past handoff: Claude orange
-      expect(await ui.find({ text: /^Warm 5m$/ })).toBeDefined()
+      expect(await ui.find({ text: /^Very warm 5m$/ })).toBeDefined()
       expect(await ui.find({ text: /^Reuses 120k$/ })).toBeDefined()
       expect(await ui.find({ type: 'Raster', key: 'ctx-bar' })).toBeDefined()
       expect(await ui.find({ text: /saved$/ })).toBeDefined()
@@ -52,11 +52,11 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(await ui.find({ key: 'hide' })).toBeUndefined()
       expect((await ui.findAll({ type: 'Svg' })).some((x: any) => /^Context 60%$/.test(String(x.props.alt)))).toBe(true)   // the bar, full width
       // 78 columns: the whole cache sentence would crowd the buttons, so the short words, on one line
-      expect(await ui.find({ text: /^Warm[ \u00a0]5m$/ })).toBeDefined()
-      expect(await ui.find({ text: /Cache[ \u00a0]warm/ })).toBeUndefined()
+      expect(await ui.find({ text: /^Very[ \u00a0]warm[ \u00a0]5m$/ })).toBeDefined()
+      expect(await ui.find({ text: /Cache[ \u00a0]very[ \u00a0]warm/ })).toBeUndefined()
       for (const x of await ui.findAll({ type: 'Text', text: /saved$/ })) expect(x.props.wrap).toBe('truncate')
       const wide: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface, component: 'AbovePrompt', props: { ...BAND, bodyColumns: 140 } as any })
-      expect(await wide.find({ text: /Cache[ \u00a0]warm/ })).toBeDefined()      // room: the whole sentence (no-break spaces on the desktop)
+      expect(await wide.find({ text: /Cache[ \u00a0]very[ \u00a0]warm/ })).toBeDefined()      // room: the whole sentence (no-break spaces on the desktop)
       await wide.unmount()
       for (const k of ['ctx-explain', 'ctx-expand', 'ctx-clear', 'ctx-compact', 'ctx-later']) {
         const b = await ui.find({ key: k })

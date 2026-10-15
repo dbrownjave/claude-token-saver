@@ -113,10 +113,10 @@ test("subagent steps never touch the main thread's cache clock or turn count", {
   const h = setup(on, () => API)
   await mainTurn($, h.step)
   const list = async () => String((await $.command.run({ command: 'tokens', args: 'list', presentation: { columns: 160 } })).text)
-  expect(await list()).toMatch(/│ Cache +│ Warm/)
+  expect(await list()).toMatch(/│ Cache +│ Very warm/)
   await agentRun($, h, 'a1', 'Explore', 6, WRITE(50_000))       // the clock moved 6 minutes; the agent's last step was just now
   const after = await list()
-  expect(after).toMatch(/│ Cache +│ Cold/)                       // idle 6m past the 5m TTL: the agent's steps did not refresh the main clock
+  expect(after).toMatch(/│ Cache +│ Frozen/)                       // idle 6m past the 5m TTL: the agent's steps did not refresh the main clock
   expect(after).toMatch(/│ Agents +│ 1 re-read after a long wait/)
   expect(h.log.steps.filter((s) => !s.agentId)).toHaveLength(1)
 })
