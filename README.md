@@ -96,9 +96,9 @@ A settings hook can only add a note before `/compact`. The mod sits on the compa
 | idle compaction (Claude Code 2.1.299+) | Never refused. Keep-list appended. The pane names it as Claude Code's own work, with the before and after size, and never counts it in Saved. Keep-warm stops for that stretch, since the prefix it would re-read is gone. Claude Code runs it on the 1-hour cache, for sessions over 200k tokens (`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`, 100k floor), about 54 minutes after the last reply. Opt out with `"idleCompaction": false`. |
 | subagent transcripts | Left alone. |
 
-"Cold" means idle longer than the prompt-cache TTL since the last response. Default TTL is 5 minutes; turn on `longCacheTtl` if your sessions get the 1-hour cache. `/tokens` shows which state you are in.
+"Cold" means idle longer than the prompt-cache TTL since the last response. The TTL follows Claude Code: a reply's cache writes say 5 minutes or 1 hour, a model switch reports it, and an idle compaction only happens on the 1-hour cache. Until one of those is seen it is 5 minutes. `longCacheTtl` forces 1 hour. `/tokens` shows which state you are in.
 
-**Keep-warm** (`keepWarm`, on by default) applies only to API billing with the 5-minute TTL. While you are idle, it re-reads the session's own cached prefix with one tiny request (`$.model.fork`) about 75 seconds before the cache lapses. A read costs about 0.1× the input price and restarts the TTL. Your next message then hits the cache instead of paying a 1.25× re-write.
+**Keep-warm** (`keepWarm`, on by default) applies only to API billing with the 5-minute TTL, and turns itself off once Claude Code is seen on the 1-hour cache. While you are idle, it re-reads the session's own cached prefix with one tiny request (`$.model.fork`) about 75 seconds before the cache lapses. A read costs about 0.1× the input price and restarts the TTL. Your next message then hits the cache instead of paying a 1.25× re-write.
 - It stops after `keepWarmPings` pings per idle stretch (default 5, about 20 minutes, the break-even if you come back half the time).
 - It stops on the first miss, and it never runs during a turn.
 - It is off on a subscription, which already caches the main thread for an hour; pings there would spend plan quota.

@@ -80,7 +80,34 @@ let announcedPct = 0            // highest threshold already toasted this sessio
  * TTL; a lapse costs a 1.25× re-write, so a ping pays while pings × 0.1 < chance-you-return × 1.15. The cap (default 5,
  * about 20 minutes) assumes about even odds. Costs and savings are booked in fresh-input-token equivalents.
  */
-const keepWarm = { on: false, streak: 0, pings: 0, misses: 0, costTok: 0, savedTok: 0, busy: false, refreshedAt: 0, stopped: '' }
+const keepWarm = { on: false, want: false, streak: 0, pings: 0, misses: 0, costTok: 0, savedTok: 0, busy: false, refreshedAt: 0, stopped: '' }
+/**
+ * The engine's prompt-cache TTL. The mod API has no read for it, so it is learned: a main-thread step's usage may carry
+ * the write buckets (cache_creation.ephemeral_1h / _5m_input_tokens), a model switch carries cache_ttl, and Claude
+ * Code's idle compaction runs only on the one-hour cache (weakest: never overrides the other two). Until one is seen
+ * the TTL is 5 minutes. `longCacheTtl` forces one hour. On one hour, keep-warm turns itself off.
+ */
+const engineTtl = { value: '', via: '' }     // '1h' | '5m' | '' (not seen yet)
+let longTtlOption = false
+function ttlNow() { return longTtlOption || engineTtl.value === '1h' ? TTL_LONG : TTL_SHORT }
+/** Record a TTL the engine reported. Returns true when the TTL in force changed. */
+function noteEngineTtl(value, via) {
+  if (value !== '1h' && value !== '5m') return false
+  if (via === 'idle compaction' && engineTtl.via && engineTtl.via !== via) return false
+  const before = ttlNow()
+  engineTtl.value = value
+  engineTtl.via = via
+  keepWarm.on = keepWarm.want && !keepWarm.stopped && ttlNow() !== TTL_LONG
+  return ttlNow() !== before
+}
+/** '1h' or '5m' from a response's cache-write buckets, '' when it wrote nothing or the buckets are absent. */
+function ttlOfUsage(u) {
+  const cc = u && u.cache_creation
+  if (!cc || typeof cc !== 'object') return ''
+  if ((Number(cc.ephemeral_1h_input_tokens) || 0) > 0) return '1h'
+  if ((Number(cc.ephemeral_5m_input_tokens) || 0) > 0) return '5m'
+  return ''
+}
 let inTurn = false
 // Progress rows above the prompt, driven by the `progress` tool the model calls.
 const PROGRESS_TOOL = 'mcp__token-saver__progress'
@@ -1973,7 +2000,7 @@ function listText(view, o) {
   rows.push(['Cache', c.short, dots(c.sentence.map((p) => p[0]).join('').replace(/^[^:]*: /, ''), c.known ? low(c.rest) : '')])
   rows.push(['Saved', `${fmtK(sv.totalTok)} tokens${sv.priced ? ` ≈ $${((sv.totalTok * sv.rate) / 1e6).toFixed(2)}` : ''}`, dots(...sv.sources.map((x) => `${low(x.label)} ${fmtK(x.tok)}`))])
   if (sv.agentLapses > 0) rows.push(['Agents', `${sv.agentLapses} re-read${sv.agentLapses === 1 ? '' : 's'} after a long wait · ${fmtK(sv.agentLapseTok)} tokens`, sv.agentLine ? low(sv.agentLine) : 'not a saving: an agent that waits over 5 minutes re-reads what it had'])
-  rows.push(['Keep-warm', keepWarm.on ? 'on' : `off${keepWarm.stopped ? ` (${keepWarm.stopped})` : ''}`,
+  rows.push(['Keep-warm', keepWarm.on ? 'on' : `off${keepWarm.stopped ? ` (${keepWarm.stopped})` : o.longTtl && keepWarm.want ? ' (one-hour cache)' : ''}`,
     keepWarm.on ? `${keepWarm.pings} ping${keepWarm.pings === 1 ? '' : 's'} · avoided ${fmt(keepWarm.savedTok)} · spent ${fmt(keepWarm.costTok)} tokens` : ''])
   if (sv.mode === 'subscription' && view.five) {
     const b = billCard(view, o.now, o.ttl, o.keepWarmMax, o.longTtl)
@@ -2128,13 +2155,14 @@ function daysAgo(ts) {
 }
 
 /* Per-load settings the module-level renderers read (set once in register). */
-let ENV = { ttl: TTL_SHORT, options: {}, keepWarmMax: 5, cardBars: 'fire', compactGuard: true, inputPricePerM: 0 }
+let ENV = { keepWarmMax: 5, cardBars: 'fire', compactGuard: true, inputPricePerM: 0 }
 
 /* The Context pane's drawing, shared: the terminal shows it in a real Pane; the desktop app (its Code tab has no
    slot for plugin panes, so a Pane there is never drawn) shows it in the band above the prompt instead. */
 /** The Context pane's tree. `inBand`: drawn above the prompt (desktop), where ⤢ opens the real pane. */
 async function renderContext($, e, inBand) {
-const { ttl, options, keepWarmMax, cardBars, compactGuard, inputPricePerM } = ENV
+const { keepWarmMax, cardBars, compactGuard, inputPricePerM } = ENV
+const ttl = ttlNow(), longTtl = ttl === TTL_LONG
   try {
     const el = $.ui.resolve(e)
     const term = e.surface === 'terminal'
@@ -2151,9 +2179,9 @@ const { ttl, options, keepWarmMax, cardBars, compactGuard, inputPricePerM } = EN
     const clock = cacheClock(now, ttl)
     const view = contextView(data.usage, ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
     view.groups = drillGroups(view.breakdown, homeCache)
-    const L = ctxExplain ? liveNumbers(view, { ttl, now, keepWarmMax, longTtl: !!options.longCacheTtl, totals, rewrites, vetoes }) : null
+    const L = ctxExplain ? liveNumbers(view, { ttl, now, keepWarmMax, longTtl, totals, rewrites, vetoes }) : null
     return drawContextPane(ui, view, {
-      W, mobile: e.surface === 'mobile', t: progressTick * TICK_S, now, ttl, keepWarmMax, longTtl: !!options.longCacheTtl, cardStyle: cardBars, live: clock.known, L,
+      W, mobile: e.surface === 'mobile', t: progressTick * TICK_S, now, ttl, keepWarmMax, longTtl, cardStyle: cardBars, live: clock.known, L,
       // desktop, on a surface that places panes (what More used to do there): ⤢ moves the open band into a
       // Pane of its own, always open, and the band folds back
       expanded: popped ? true : undefined,
@@ -2189,12 +2217,13 @@ export function register(on, options = {}) {
   const modelGuard = options.modelGuard !== false
   const inputPricePerM = Number(options.inputPricePerM) || 0
   const suggestSkills = options.suggestSkills !== false
-  const ttl = options.longCacheTtl ? TTL_LONG : TTL_SHORT
+  longTtlOption = !!options.longCacheTtl     // an override; otherwise the TTL follows the engine (ttlNow)
   // Keep-warm pings only make sense against the 5-minute TTL; with the 1-hour TTL a lapse is already rare
   const keepWarmMax = Math.max(0, Math.round(Number(options.keepWarmPings ?? 5)))
   const cardBars = options.cardBars === 'ember' ? 'ember' : 'fire'
-  ENV = { ttl, options, keepWarmMax, cardBars, compactGuard, inputPricePerM }
-  keepWarm.on = options.keepWarm !== false && !options.longCacheTtl && keepWarmMax > 0
+  ENV = { keepWarmMax, cardBars, compactGuard, inputPricePerM }
+  keepWarm.want = options.keepWarm !== false && keepWarmMax > 0
+  keepWarm.on = keepWarm.want && ttlNow() !== TTL_LONG
 
   on('session.start', async ($, e, next) => {
     await loadConfig($, e.cwd)
@@ -2299,7 +2328,7 @@ export function register(on, options = {}) {
         if (lastStepAt) $.ui.invalidate('ui.render')
       })
     }
-    if (keepWarm.on) $.clock.every(KEEP_WARM_TICK, () => { tickKeepWarm($, ttl, keepWarmMax).catch(() => { keepWarm.busy = false }) })
+    if (keepWarm.want) $.clock.every(KEEP_WARM_TICK, () => { tickKeepWarm($, ttlNow(), keepWarmMax).catch(() => { keepWarm.busy = false }) })
     if (suggestSkills) {
       // Parked skills that fit this repo: one UI line, nothing into the prompt.
       try {
@@ -2356,9 +2385,9 @@ export function register(on, options = {}) {
       const now = await $.clock.now()
       const data = await loadContext($, now, 80)
       if (homeCache === null) { try { homeCache = await homeDir($) } catch { homeCache = '' } }
-      const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
+      const view = contextView(data.usage, ttlNow(), lastUsage, cacheClock(now, ttlNow()), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
       view.groups = drillGroups(view.breakdown, homeCache)
-      const L = liveNumbers(view, { ttl, now, keepWarmMax, longTtl: !!options.longCacheTtl, totals, rewrites, vetoes })
+      const L = liveNumbers(view, { ttl: ttlNow(), now, keepWarmMax, longTtl: ttlNow() === TTL_LONG, totals, rewrites, vetoes })
       return { text: learnText(L, (e.args || '').trim().slice(5)) }
     }
     if (arg === 'hide' || arg === 'show') {
@@ -2375,8 +2404,8 @@ export function register(on, options = {}) {
     // /tokens list: the pane's cards as text, one line each, from the same view the pane draws.
     const now = await $.clock.now()
     const data = await loadContext($, now, 80)
-    const view = contextView(data.usage, ttl, lastUsage, cacheClock(now, ttl), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
-    return { text: listText(view, { now, ttl, keepWarmMax, longTtl: !!options.longCacheTtl, compactGuard, columns: e.presentation && e.presentation.columns }) }
+    const view = contextView(data.usage, ttlNow(), lastUsage, cacheClock(now, ttlNow()), { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
+    return { text: listText(view, { now, ttl: ttlNow(), keepWarmMax, longTtl: ttlNow() === TTL_LONG, compactGuard, columns: e.presentation && e.presentation.columns }) }
   })
 
   /**
@@ -2529,8 +2558,9 @@ export function register(on, options = {}) {
     }
     if (!e.agentId && result && result.usage) {
       const stepAt = await $.clock.now()
+      noteEngineTtl(ttlOfUsage(result.usage), 'step')     // before the keep-warm booking: an hour-long TTL lapses nothing in minutes
       // Kept warm through an idle stretch that would have lapsed, and this request hit: the re-write was avoided
-      if (keepWarm.streak > 0 && lastStepAt && stepAt - lastStepAt >= ttl && stepAt - keepWarm.refreshedAt < ttl && hitPct(result.usage) >= 80) {
+      if (keepWarm.streak > 0 && lastStepAt && stepAt - lastStepAt >= ttlNow() && stepAt - keepWarm.refreshedAt < ttlNow() && hitPct(result.usage) >= 80) {
         keepWarm.savedTok += Math.round(1.15 * (result.usage.cache_read_input_tokens || 0))
       }
       keepWarm.streak = 0
@@ -2560,7 +2590,7 @@ export function register(on, options = {}) {
           const hit = levelFor(ctx.percent)
           if (hit && Number(hit.pct) > announcedPct) {
             announcedPct = Number(hit.pct)
-            const clock = cacheClock(lastStepAt, ttl)
+            const clock = cacheClock(lastStepAt, ttlNow())
             $.ui.toast(`context ${ctx.percent}% — ${hintFor(ctx.percent, clock)}`, { timeoutMs: 12000 })
           }
         } catch {
@@ -2610,7 +2640,7 @@ export function register(on, options = {}) {
     const instructions = [own, KEEP].filter(Boolean).join('\n')
 
     if (compactGuard && e.trigger === 'manual' && !forced) {
-      const clock = cacheClock(await $.clock.now(), ttl)
+      const clock = cacheClock(await $.clock.now(), ttlNow())
       if (clock.known && !clock.warm) {
         vetoes += 1
         const ctx = await contextOf($)
@@ -2628,6 +2658,7 @@ export function register(on, options = {}) {
     const r = await next({ ...e, instructions })
     if (r && !r.skip) {
       keepWarm.streak = Infinity     // the cached prefix is gone: a ping now would only miss
+      noteEngineTtl('1h', 'idle compaction')     // Claude Code compacts idle sessions only on the one-hour cache
       const sizes = Number.isFinite(r.tokensBefore) && Number.isFinite(r.tokensAfter) ? ` ${fmtK(r.tokensBefore)} → ${fmtK(r.tokensAfter)} tokens` : ''
       ctxMsg = `Claude compacted while idle (${mins(now - lastStepAt)}m):${sizes}. Claude Code's own feature, not counted in Saved.`
       ctxCache.at = 0
@@ -2646,6 +2677,7 @@ export function register(on, options = {}) {
    *  - subagents and headless switches (source 'sdk') are never questioned
    */
   on('classic.PreModelSwitch', async ($, e, next) => {
+    if (!e.agent_id && noteEngineTtl(e.cache_ttl, 'model switch')) invalidate($)
     if (!modelGuard || e.agent_id || e.source === 'sdk' || !e.to_model || e.to_model === e.from_model) return next(e)
     const used = Number(e.context_tokens) || 0
     const from = modelName(e.from_model), to = modelName(e.to_model)
@@ -2823,8 +2855,8 @@ export function register(on, options = {}) {
         const el = $.ui.resolve(e)
         const ui = { Box, Text, Button, Svg: term ? undefined : el.Svg, Raster: term ? el.Raster : undefined, term, hex: (k) => (String(k).startsWith('#') ? k : pal[k] || pal.inactive) }
         const now = await $.clock.now()
-        const clock = cacheClock(now, ttl)
-        const view = contextView(await bandUsage($, now), ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
+        const clock = cacheClock(now, ttlNow())
+        const view = contextView(await bandUsage($, now), ttlNow(), lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
         view.compactPct = null                                   // no breakdown here: marks only
         const c = view.cache
         const t = (str, color) => h(Text, color ? { color:term ? color : ui.hex(color) } : null, term ? str : nbsp(str))

@@ -48,8 +48,10 @@ const USAGE = {
 }
 
 const STEP = { input_tokens: 2_000, cache_read_input_tokens: 150_000, cache_creation_input_tokens: 1_000, output_tokens: 400 }
+// The same step with its write split by TTL bucket, as the API reports it
+const STEP_TTL = (ttl: '5m' | '1h') => ({ ...STEP, cache_creation: { ephemeral_5m_input_tokens: ttl === '5m' ? 1_000 : 0, ephemeral_1h_input_tokens: ttl === '1h' ? 1_000 : 0 } })
 
-function wire(on: any, usage: () => any, log: { usageArgs: any[], closed: string[], compacts: any[], commands: any[] }) {
+function wire(on: any, usage: () => any, log: { usageArgs: any[], closed: string[], compacts: any[], commands: any[] }, step: any = STEP) {
   on('session.usage' as any, (_$: any, e: any) => { log.usageArgs.push(e); return { value: usage() } })
   on('ui.close' as any, (_$: any, e: any) => { log.closed.push(e.id); return { value: undefined } })
   on('session.compact' as any, (_$: any, e: any) => { log.compacts.push(e); return { messages: [{ role: 'assistant', text: 'summary', toolUses: [] }], tokensBefore: 484_000, tokensAfter: 120_000 } })
@@ -57,17 +59,17 @@ function wire(on: any, usage: () => any, log: { usageArgs: any[], closed: string
   on('turn.start' as any, (_$: any, e: any) => ({ turnId: e.turnId }))
   on('turn.complete' as any, () => ({ text: 'ok' }))
   on('turn.step' as any, async function* () {
-    return { turnId: 't', index: 0, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: STEP }
+    return { turnId: 't', index: 0, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: step }
   })
   for (const ev of ['ui.toast', 'ui.status', 'ui.log']) on(ev as any, () => ({ value: undefined }))
 }
 
-function setup(on: any, usage: () => any) {
+function setup(on: any, usage: () => any, step: any = STEP) {
   const clock = mock.clock(on, { now: NOW })
   mock.store(on)
   mock.env(on, { HOME: '/nonexistent-home' })
   const log = { usageArgs: [] as any[], closed: [] as string[], compacts: [] as any[], commands: [] as any[] }
-  wire(on, usage, log)
+  wire(on, usage, log, step)
   return { clock, log }
 }
 
@@ -468,4 +470,45 @@ test('an auto-compaction right after a reply is not called idle', { options: { .
   await ($ as any).session.compact({ trigger: 'auto', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
   const ui: any = await mount($, 'terminal')
   expect(await ui.find({ text: /compacted while idle/ })).toBeUndefined()
+})
+
+test('the cache clock follows the engine\'s one-hour TTL: warm after 10 minutes, and /compact goes through', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  const { clock, log } = setup(on, () => USAGE, STEP_TTL('1h'))
+  await turn($)
+  await clock.advance(10 * MIN)
+  const ui: any = await mount($, 'terminal')
+  expect(await ui.find({ text: /[ \u00a0]· 50m left$/ })).toBeDefined()
+  const r: any = await ($ as any).session.compact({ trigger: 'manual', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
+  expect(r.skip).toBeUndefined()
+  expect(log.compacts.length).toBe(1)
+})
+
+test('on the engine\'s 5-minute TTL the same 10 minutes is cold, and /compact is vetoed', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  const { clock, log } = setup(on, () => USAGE, STEP_TTL('5m'))
+  await turn($)
+  await clock.advance(10 * MIN)
+  const r: any = await ($ as any).session.compact({ trigger: 'manual', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
+  expect(String(r.skip)).toContain('prompt cache is cold')
+  expect(log.compacts.length).toBe(0)
+})
+
+test('longCacheTtl overrides the engine\'s 5-minute reading', { options: { ...OPTIONS, keepWarm: false, longCacheTtl: true }, timeoutMs: SLOW }, async ($, on) => {
+  const { clock, log } = setup(on, () => USAGE, STEP_TTL('5m'))
+  await turn($)
+  await clock.advance(10 * MIN)
+  const r: any = await ($ as any).session.compact({ trigger: 'manual', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
+  expect(r.skip).toBeUndefined()
+  expect(log.compacts.length).toBe(1)
+})
+
+test('an idle compaction means the one-hour cache: the clock runs an hour after it, without overriding a step\'s reading', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  const { clock, log } = setup(on, () => USAGE)            // steps without TTL buckets
+  await turn($)
+  await clock.advance(54 * MIN)
+  await ($ as any).session.compact({ trigger: 'auto', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
+  await turn($)
+  await clock.advance(10 * MIN)
+  const r: any = await ($ as any).session.compact({ trigger: 'manual', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
+  expect(r.skip).toBeUndefined()
+  expect(log.compacts.length).toBe(2)
 })
