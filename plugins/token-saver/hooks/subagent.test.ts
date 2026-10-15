@@ -173,7 +173,7 @@ test('a 1M window with auto-compact above 900k: the pane and /tokens say to run 
   const h = setup(on, () => usage())
   await mainTurn($, h.step)
   const ui: any = await mount($)
-  expect(await ui.find({ text: /^Auto-compact at 950k on a 1M window: run \/autocompact 400k/ })).toBeDefined()
+  expect(await ui.find({ text: /^Auto-compact at 950k\. Try \/autocompact 400k\.$/ })).toBeDefined()
   const list = async () => String((await $.command.run({ command: 'tokens', args: 'list', presentation: { columns: 160 } })).text)
   expect(await list()).toContain('auto-compact at 950k on a 1M window: run /autocompact 400k')   // the help line under the table
   threshold = 400_000

@@ -655,3 +655,64 @@ test('mobile pane: one card per row, nothing wider than the screen, long lines w
   for (const k of ['ctx-explain', 'ctx-clear', 'ctx-compact', 'ctx-later']) expect(await ui.find({ key: k })).toBeDefined()
   expect(await ui.find({ text: /^Idle compaction$/ })).toBeDefined()
 })
+
+const hintOf = async ($: any) => {
+  const ui: any = await mount($, 'terminal')
+  const all = await ui.findAll({ type: 'Text', text: /^(Idle compaction (in|now)|Cache (cold|frozen)|Compacted while away|Auto-compact)/ })
+  await ui.unmount()
+  return all.map((x: any) => String(x.text))
+}
+const USAGE_AT = (tokens: number, threshold: number) => ({
+  ...USAGE, context: { ...USAGE.context, tokens, percent: tokens / 10_000, breakdown: { ...BREAKDOWN, totalTokens: tokens, percentage: tokens / 10_000, autoCompactThreshold: threshold } },
+})
+
+test('hint: idle compaction close says so, and beats the 1M auto-compact advice', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  const { clock } = setup(on, () => USAGE, STEP_TTL('1h'))
+  SETTINGS(on, {})
+  await turn($)
+  await clock.advance(MIN)
+  expect((await hintOf($))[0]).toMatch(/^Auto-compact at 970k\. Try \/autocompact 400k\.$/)
+  await clock.advance(45 * MIN)
+  expect((await hintOf($))[0]).toMatch(/^Idle compaction in ≈8m\. Reply to keep full history\.$/)
+})
+
+test('hint: armed idle compaction is a quiet note when nothing else needs saying', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  const { clock } = setup(on, () => USAGE_AT(250_000, 400_000), STEP_TTL('1h'))
+  SETTINGS(on, {})
+  await turn($)
+  await clock.advance(MIN)
+  expect((await hintOf($))[0]).toMatch(/^Idle compaction in ≈53m if you step away\.$/)
+})
+
+test('hint: the 5-minute cache goes cold, then frozen, and the line says what each costs', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  const { clock } = setup(on, () => USAGE_AT(250_000, 400_000), STEP_TTL('5m'))
+  SETTINGS(on, {})
+  await turn($)
+  await clock.advance(MIN)
+  expect(await hintOf($)).toEqual([])                                          // warm, nothing to say
+  await clock.advance(3 * MIN)
+  expect((await hintOf($))[0]).toMatch(/^Cache cold: 1m left to reuse 250k tokens\.$/)
+  await clock.advance(2 * MIN)
+  expect((await hintOf($))[0]).toMatch(/^Cache frozen: next message re-reads 250k tokens\.$/)
+})
+
+test('hint: after an idle compaction it says the next message reads the summary', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  const { clock } = setup(on, () => USAGE, STEP_TTL('1h'))
+  SETTINGS(on, {})
+  await turn($)
+  await clock.advance(54 * MIN)
+  await ($ as any).session.compact({ trigger: 'auto', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
+  expect((await hintOf($))[0]).toMatch(/^Compacted while away: 484k → 120k tokens\.$/)
+})
+
+test('hint: auto-compact a few messages away is counted from this session\'s growth', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  let tokens = 330_000
+  const { clock } = setup(on, () => USAGE_AT(tokens, 400_000), STEP_TTL('5m'))
+  SETTINGS(on, {})
+  for (let k = 0; k < 3; k++) {
+    await turn($, () => { tokens += 20_000 })
+    await clock.advance(MIN)
+  }
+  const h = (await hintOf($))[0]
+  expect(h).toMatch(/^Auto-compact in ≈\d+ messages? \(400k\)\.$/)
+})

@@ -140,30 +140,30 @@ function idleView(used, ttl, clock, autoCompactOn) {
   const at = Math.round(IDLE_COMPACT_AT * TTL_LONG)
   const atMin = Math.round(at / MINUTE)
   const floor = `${fmtK(idleCfg.minTokens)} tokens${idleCfg.minSet ? ' (your setting)' : ''}`
-  const v = (accent, tone, fill, strong, foot, ink = 'inactive') => ({ accent, tone, bar: { fill, ink }, strong, foot })
-  if (idleCfg.off === 'setting') return v('Off', 'inactive', 0, 'Off in your settings', '"idleCompaction": false')
-  if (idleCfg.off === 'auto-compact' || autoCompactOn === false) return v('Off', 'inactive', 0, 'Off: auto-compact is off', 'It runs only while auto-compact is on')
+  const v = (accent, tone, fill, strong, foot, ink = 'inactive', state = '', leftMin = 0) => ({ accent, tone, bar: { fill, ink }, strong, foot, state, leftMin })
+  if (idleCfg.off === 'setting') return v('Off', 'inactive', 0, 'Off in your settings', '"idleCompaction": false', 'inactive', 'off')
+  if (idleCfg.off === 'auto-compact' || autoCompactOn === false) return v('Off', 'inactive', 0, 'Off: auto-compact is off', 'It runs only while auto-compact is on', 'inactive', 'off')
   if (idleDone) {
     const sizes = Number.isFinite(idleDone.before) && Number.isFinite(idleDone.after) ? `${fmtK(idleDone.before)} → ${fmtK(idleDone.after)}` : 'Summarized'
-    return v('Done', 'success', 1, `Compacted ${sizes}`, "Claude Code's own work, not counted in Saved", 'success')
+    return v('Done', 'success', 1, `Compacted ${sizes}`, "Claude Code's own work, not counted in Saved", 'success', 'done')
   }
   if (ttl !== TTL_LONG) {
     return engineTtl.value === '5m'
-      ? v('Not here', 'inactive', 0, 'Needs the one-hour cache', 'This session caches for 5 minutes')
-      : v('Waiting', 'inactive', 0, 'Needs the one-hour cache', 'Learned from the next reply')
+      ? v('Not here', 'inactive', 0, 'Needs the one-hour cache', 'This session caches for 5 minutes', 'inactive', 'not-here')
+      : v('Waiting', 'inactive', 0, 'Needs the one-hour cache', 'Learned from the next reply', 'inactive', 'waiting')
   }
-  if (!clock || !clock.known) return v('Waiting', 'inactive', 0, 'Starts after the first reply', `Then ≈${atMin}m after each reply, from ${floor}`)
+  if (!clock || !clock.known) return v('Waiting', 'inactive', 0, 'Starts after the first reply', `Then ≈${atMin}m after each reply, from ${floor}`, 'inactive', 'waiting')
   if (used < idleCfg.minTokens) {
-    return v('Too small', 'inactive', used / idleCfg.minTokens, `${fmtK(used)} of ${fmtK(idleCfg.minTokens)}`, `Runs from ${floor}`)
+    return v('Too small', 'inactive', used / idleCfg.minTokens, `${fmtK(used)} of ${fmtK(idleCfg.minTokens)}`, `Runs from ${floor}`, 'inactive', 'small')
   }
-  if (inTurn) return v('Paused', 'inactive', 0, 'Claude is working', `The clock restarts at the reply: ≈${atMin}m`)
+  if (inTurn) return v('Paused', 'inactive', 0, 'Claude is working', `The clock restarts at the reply: ≈${atMin}m`, 'inactive', 'paused')
   const left = at - clock.idleMs
   if (left > 0) {
     const leftMin = Math.max(1, Math.ceil(left / MINUTE))
-    return v(`≈${leftMin}m`, WARM, clock.idleMs / at, `≈${leftMin}m left`, `${fmtK(used)} becomes a summary ≈${atMin}m after your last reply`, 'grad')
+    return v(`≈${leftMin}m`, WARM, clock.idleMs / at, `≈${leftMin}m left`, `${fmtK(used)} becomes a summary ≈${atMin}m after your last reply`, 'grad', 'counting', leftMin)
   }
-  if (clock.warm) return v('Due', WARM, 1, 'Due now', 'Claude Code compacts in the last minutes of the cache', 'grad')
-  return v('Skipped', 'inactive', 0, 'Did not run this break', 'The cache lapsed first, or Claude Code has not turned it on for you')
+  if (clock.warm) return v('Due', WARM, 1, 'Due now', 'Claude Code compacts in the last minutes of the cache', 'grad', 'due')
+  return v('Skipped', 'inactive', 0, 'Did not run this break', 'The cache lapsed first, or Claude Code has not turned it on for you', 'inactive', 'skipped')
 }
 // Progress rows above the prompt, driven by the `progress` tool the model calls.
 const PROGRESS_TOOL = 'mcp__token-saver__progress'
@@ -1558,7 +1558,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
     .map((r) => ({ f: Math.max(0, r.tokens / measure), color: r.key === 'free' ? null : r.color }))
 
   return {
-    hasData: !!usage, pct, used, window, measure, crossed, accent: ACC[crossed], marksAll, nextMark, prevMark, compactPct, compactHint1M, handoffPct, compactMarkPct,
+    hasData: !!usage, pct, used, window, measure, crossed, accent: ACC[crossed], marksAll, nextMark, prevMark, compactPct, compactHint1M, autoCompactAt: compactOn ? b.autoCompactThreshold : null, handoffPct, compactMarkPct,
     title: { used: window ? `${fmtK(used)} / ${fmtK(window)} (${pct}%)` : `${fmtK(used)} tokens` },
     cache, savings, switchCost, five, idle: idleView(used, ttl, clock, b && typeof b.isAutoCompactEnabled === 'boolean' ? b.isAutoCompactEnabled : null),
     memory: { rows, parts, title: window ? `${fmtK(used)} of ${fmtK(window)} tokens` : `${fmtK(used)} tokens` }, breakdown: b,
@@ -1574,6 +1574,46 @@ function paneActions(view) {
 }
 
 /** The next-mark card: runway from the last mark crossed to the next, and messages to go at the recent growth. */
+/**
+ * The line under the Context bar: the one thing worth knowing now, picked by urgency from live state (the cache's
+ * word, Claude Code's idle compaction, how many messages until auto-compact, the window). Null when nothing needs
+ * saying, and the line goes. Figures are this session's own; time to idle compaction is ≈ (Claude Code tunes it).
+ */
+function contextHint(view, avg) {
+  const c = view.cache, iv = view.idle || {}, at = view.autoCompactAt
+  const big = view.used >= 50_000
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`
+  // 1. Claude Code compacted while you were away: say what that means for the next message
+  if (iv.state === 'done') {
+    return { text: `${iv.strong.replace(/^Compacted/, 'Compacted while away:')} tokens.`, tone: 'success' }
+  }
+  // 2. The cache lapsed on a big context: the next message pays full price either way
+  if (c.known && !c.warm && big) {
+    return { text: `Cache frozen: next message re-reads ${c.amount} tokens.`, tone: 'warning' }
+  }
+  // 3. Idle compaction is close: a person stepping away should know their history is about to become a summary
+  if (iv.state === 'counting' && iv.leftMin <= 10) {
+    return { text: `Idle compaction in ≈${iv.leftMin}m. Reply to keep full history.`, tone: 'warning' }
+  }
+  if (iv.state === 'due') return { text: 'Idle compaction now. Reply to keep full history.', tone: 'warning' }
+  // 4. The cache is cold but still reusable: the cheapest moment to act
+  if (c.known && c.warm && c.cooling && big) {
+    return { text: `Cache cold: ${c.leftMin}m left to reuse ${c.amount} tokens.`, tone: 'warning' }
+  }
+  // 5. Auto-compact is a few messages away: that compaction re-reads everything up to its threshold
+  if (at && avg > 0 && at > view.used) {
+    const msgs = Math.max(1, Math.ceil((at - view.used) / avg))
+    if (msgs <= 15) {
+      return { text: `Auto-compact in ≈${plural(msgs, 'message')} (${fmtK(at)}).`, tone: msgs <= 5 ? 'warning' : 'inactive' }
+    }
+  }
+  // 6. A 1M window that compacts near the top: the one setting worth changing
+  if (view.compactHint1M) return { text: `Auto-compact at ${fmtK(at)}. Try /autocompact 400k.`, tone: 'inactive' }
+  // 7. Idle compaction is armed but far: a quiet note for whoever steps away
+  if (iv.state === 'counting') return { text: `Idle compaction in ≈${iv.leftMin}m if you step away.`, tone: 'inactive' }
+  return null
+}
+
 function nextCard(view, avg) {
   const cold = view.cache.known && !view.cache.warm
   const next = view.nextMark, prev = view.prevMark
@@ -1723,7 +1763,8 @@ function drawContextPane(ui, view, o) {
   const under = term && sentLen <= cells ? row({}, sentence()) : null
   const msg = ctxMsg ? t(cap1(ctxMsg), 'inactive', { wrap: 'wrap' }) : null
   const explain = ex ? explainSection(ui, view, o, { row, col, t, grow, rule, cells }) : []
-  const hint1M = view.compactHint1M ? t(view.compactHint1M, 'inactive', { wrap: 'wrap' }) : null
+  const hintV = contextHint(view, avgGrowth())
+  const hint1M = hintV ? t(hintV.text, hintV.tone, { wrap: 'wrap' }) : null
   if (!expanded) return col({}, [title, frame([bar, hint1M]), term ? bottom : col({ marginTop: 1 }, [bottom]), under, msg, ...explain])
 
   // 4. Saved: the headline of the whole plugin
