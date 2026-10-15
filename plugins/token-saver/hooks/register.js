@@ -20,6 +20,8 @@ const SWITCH_CHEAP = 20_000              // a model switch under this many conte
 const BAND_TICK = 30 * 1000
 const KEEP_WARM_TICK = 15 * 1000
 const KEEP_WARM_LEAD = 75 * 1000          // the TTL runs from a request's start and a fork takes seconds: ping well before it lapses
+const IDLE_COMPACT_AT = 0.9             // Claude Code fires at 90% of the one-hour TTL (its default; tunable 50–95% on its side)
+const IDLE_COMPACT_MIN = 200_000         // its size floor; CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS moves it, never under 100k
 const IDLE_COMPACT_AFTER = 25 * MINUTE   // Claude Code's idle compaction fires at 50–95% of the one-hour TTL; an in-turn auto-compaction comes seconds after a step
 const KEEP_WARM_PROMPT ='Keep-alive ping from the token-saver plugin. Reply with a single period and nothing else.'
 
@@ -109,6 +111,60 @@ function ttlOfUsage(u) {
   return ''
 }
 let inTurn = false
+/** Claude Code's idle compaction as your settings configure it, and the last one seen this session. */
+const idleCfg = { off: '', minTokens: IDLE_COMPACT_MIN, minSet: false }
+let idleDone = null     // { at, before, after } until the next reply
+
+/** Read what Claude Code itself reads: idleCompaction and autoCompactEnabled, the size floor, the compaction kill switches. */
+async function loadIdleConfig($) {
+  let s = null
+  try { s = await $.settings.read() } catch { s = null }
+  const env = (s && s.env) || {}
+  let raw, kill
+  try { raw = await $.env.get('CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS') } catch { raw = undefined }
+  try { kill = (await $.env.get('DISABLE_COMPACT')) || (await $.env.get('DISABLE_AUTO_COMPACT')) } catch { kill = '' }
+  if (raw === undefined || raw === null || raw === '') raw = env.CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS
+  const n = raw === undefined || raw === null || raw === '' ? NaN : Number(raw)
+  idleCfg.minSet = Number.isFinite(n)
+  idleCfg.minTokens = idleCfg.minSet ? Math.max(100_000, n) : IDLE_COMPACT_MIN
+  idleCfg.off = s && s.idleCompaction === false ? 'setting'
+    : (s && s.autoCompactEnabled === false) || kill || env.DISABLE_COMPACT || env.DISABLE_AUTO_COMPACT ? 'auto-compact' : ''
+}
+
+/**
+ * The Idle compaction section: when Claude Code would compact this session while you are away, as your settings have it.
+ * It runs only on the one-hour cache, above the size floor, about 54 minutes after the last reply. Time is an estimate (≈):
+ * Claude Code may tune the moment, and it skips when the cache already lapsed or you are near a usage limit.
+ */
+function idleView(used, ttl, clock, autoCompactOn) {
+  const at = Math.round(IDLE_COMPACT_AT * TTL_LONG)
+  const atMin = Math.round(at / MINUTE)
+  const floor = `${fmtK(idleCfg.minTokens)} tokens${idleCfg.minSet ? ' (your setting)' : ''}`
+  const v = (accent, tone, fill, strong, foot, ink = 'inactive') => ({ accent, tone, bar: { fill, ink }, strong, foot })
+  if (idleCfg.off === 'setting') return v('Off', 'inactive', 0, 'Off in your settings', '"idleCompaction": false')
+  if (idleCfg.off === 'auto-compact' || autoCompactOn === false) return v('Off', 'inactive', 0, 'Off: auto-compact is off', 'It runs only while auto-compact is on')
+  if (idleDone) {
+    const sizes = Number.isFinite(idleDone.before) && Number.isFinite(idleDone.after) ? `${fmtK(idleDone.before)} → ${fmtK(idleDone.after)}` : 'Summarized'
+    return v('Done', 'success', 1, `Compacted ${sizes}`, "Claude Code's own work, not counted in Saved", 'success')
+  }
+  if (ttl !== TTL_LONG) {
+    return engineTtl.value === '5m'
+      ? v('Not here', 'inactive', 0, 'Needs the one-hour cache', 'This session caches for 5 minutes')
+      : v('Waiting', 'inactive', 0, 'Needs the one-hour cache', 'Learned from the next reply')
+  }
+  if (!clock || !clock.known) return v('Waiting', 'inactive', 0, 'Starts after the first reply', `Then ≈${atMin}m after each reply, from ${floor}`)
+  if (used < idleCfg.minTokens) {
+    return v('Too small', 'inactive', used / idleCfg.minTokens, `${fmtK(used)} of ${fmtK(idleCfg.minTokens)}`, `Runs from ${floor}`)
+  }
+  if (inTurn) return v('Paused', 'inactive', 0, 'Claude is working', `The clock restarts at the reply: ≈${atMin}m`)
+  const left = at - clock.idleMs
+  if (left > 0) {
+    const leftMin = Math.max(1, Math.ceil(left / MINUTE))
+    return v(`≈${leftMin}m`, WARM, clock.idleMs / at, `≈${leftMin}m left`, `${fmtK(used)} becomes a summary ≈${atMin}m after your last reply`, 'grad')
+  }
+  if (clock.warm) return v('Due', WARM, 1, 'Due now', 'Claude Code compacts in the last minutes of the cache', 'grad')
+  return v('Skipped', 'inactive', 0, 'Did not run this break', 'The cache lapsed first, or Claude Code has not turned it on for you')
+}
 // Progress rows above the prompt, driven by the `progress` tool the model calls.
 const PROGRESS_TOOL = 'mcp__token-saver__progress'
 const progressRows = new Map()  // id -> { id, label, stage, step, total, state, target, shown, note }
@@ -169,6 +225,7 @@ async function* spawnPython($, args, init) {
 }
 
 async function loadConfig($, cwd) {
+  await loadIdleConfig($)
   const home = await homeDir($)
   const dirs = []
   if (home) dirs.push(`${home}/.claude/token-saver`)
@@ -1490,7 +1547,8 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   return {
     hasData: !!usage, pct, used, window, measure, crossed, accent: ACC[crossed], marksAll, nextMark, prevMark, compactPct, compactHint1M, handoffPct, compactMarkPct,
     title: { used: window ? `${fmtK(used)} / ${fmtK(window)} (${pct}%)` : `${fmtK(used)} tokens` },
-    cache, savings, switchCost, five, memory: { rows, parts, title: window ? `${fmtK(used)} of ${fmtK(window)} tokens` : `${fmtK(used)} tokens` }, breakdown: b,
+    cache, savings, switchCost, five, idle: idleView(used, ttl, clock, b && typeof b.isAutoCompactEnabled === 'boolean' ? b.isAutoCompactEnabled : null),
+    memory: { rows, parts, title: window ? `${fmtK(used)} of ${fmtK(window)} tokens` : `${fmtK(used)} tokens` }, breakdown: b,
   }
 }
 
@@ -1711,6 +1769,15 @@ function drawContextPane(ui, view, o) {
     cardRows.push(row({ gap: gapN }, cardList.slice(i, i + perRow).map((cd, j) => card(cd, i + j))))
   }
 
+  // 5b. Idle compaction: a full-width countdown from the last reply to when Claude Code would compact, as your settings have it
+  const iv = view.idle
+  const idleSection = iv ? col({}, [
+    rule(),
+    row({}, [line('Idle compaction', 'text'), line(' · ', 'inactive'), line(iv.accent, iv.tone), grow(), t(' '), line(iv.strong, 'text')]),
+    cardBar(ui, 'idle-bar', geoOf(term, size, 10, 3), iv.bar, o.t, o.cardStyle),
+    t(iv.foot, 'inactive', { wrap: 'truncate' }),
+  ]) : null
+
   // 6. Claude's working memory, like /context: a bar by kind, then a row per kind (narrower figure columns when narrow)
   const numW = narrow ? 8 : 10, pctW = narrow ? 7 : 9
   const memory = col({}, [
@@ -1746,6 +1813,7 @@ function drawContextPane(ui, view, o) {
   })
 
   return col({}, [title, bar, hint1M, blank(), markRow(6, 'Saved this session'), saved, blank(), markRow(7, 'Cards: what is next, keep-warm, cache'), ...cardRows, blank(),
+    ...(idleSection ? [idleSection, blank()] : []),
     markRow(8, 'Claude’s working memory'), memory, ...(groups.length ? [blank(), markRow(9, 'What is inside each kind, with a button to trim it'), ...groups] : []),
     blank(), bottom, under, msg, ...explain])
 }
@@ -1980,6 +2048,7 @@ async function loadContext($, now, columns) {
       try { usage = await $.session.usage() } catch { usage = null }
     }
     if (agentTypes.size) agentWeeks = await loadAgentWeeks($, now)   // "lapsed N times this week", only once an agent has run
+    await loadIdleConfig($)                                           // a settings change shows on the next refresh
     ctxCache = { at: now, usage }
     return ctxCache
   })().finally(() => { ctxLoading = null })
@@ -2002,6 +2071,7 @@ function listText(view, o) {
   if (sv.agentLapses > 0) rows.push(['Agents', `${sv.agentLapses} re-read${sv.agentLapses === 1 ? '' : 's'} after a long wait · ${fmtK(sv.agentLapseTok)} tokens`, sv.agentLine ? low(sv.agentLine) : 'not a saving: an agent that waits over 5 minutes re-reads what it had'])
   rows.push(['Keep-warm', keepWarm.on ? 'on' : `off${keepWarm.stopped ? ` (${keepWarm.stopped})` : o.longTtl && keepWarm.want ? ' (one-hour cache)' : ''}`,
     keepWarm.on ? `${keepWarm.pings} ping${keepWarm.pings === 1 ? '' : 's'} · avoided ${fmt(keepWarm.savedTok)} · spent ${fmt(keepWarm.costTok)} tokens` : ''])
+  if (view.idle) rows.push(['Idle', view.idle.accent, `compaction: ${view.idle.strong.replace(/^[A-Z](?=[a-z])/, (ch) => ch.toLowerCase())} · ${view.idle.foot}`])
   if (sv.mode === 'subscription' && view.five) {
     const b = billCard(view, o.now, o.ttl, o.keepWarmMax, o.longTtl)
     rows.push(['5-hour window', dots(low(b.strong), low(b.rest)), low(b.foot)])
@@ -2566,6 +2636,7 @@ export function register(on, options = {}) {
       keepWarm.streak = 0
       lastUsage = result.usage
       lastStepAt = stepAt
+      idleDone = null
       totals.turns += 1
       totals.input += result.usage.input_tokens || 0
       totals.cacheRead += result.usage.cache_read_input_tokens || 0
@@ -2658,6 +2729,7 @@ export function register(on, options = {}) {
     const r = await next({ ...e, instructions })
     if (r && !r.skip) {
       keepWarm.streak = Infinity     // the cached prefix is gone: a ping now would only miss
+      idleDone = { at: now, before: r.tokensBefore, after: r.tokensAfter }
       noteEngineTtl('1h', 'idle compaction')     // Claude Code compacts idle sessions only on the one-hour cache
       const sizes = Number.isFinite(r.tokensBefore) && Number.isFinite(r.tokensAfter) ? ` ${fmtK(r.tokensBefore)} → ${fmtK(r.tokensAfter)} tokens` : ''
       ctxMsg = `Claude compacted while idle (${mins(now - lastStepAt)}m):${sizes}. Claude Code's own feature, not counted in Saved.`
