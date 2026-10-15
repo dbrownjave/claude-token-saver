@@ -911,7 +911,7 @@ const MEM = { messages: '#e07a52', mcp: '#f2a07b', skills: '#c6613f', system: '#
 const MEM_RANK = ['messages', 'mcp', 'skills', 'system', 'tools', 'memory', 'agents', 'other']
 const BAR_PAD = 8                   // desktop: px of air above and below the context bar, as design/m4.html's 10 px gaps
 const INNER_PAD = 5                 // desktop: the same air, smaller, for the Saved, card and memory bars inside the open pane
-const PX = 7.8                      // desktop px per body column (the band measured 523 pt over 66 columns: 7.9)
+const PX = 8.1                      // desktop px per pane body column: two screenshots measured 8.16 (800 px text over 98 columns); a hair under, so a bar never overflows
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
 /** 484000 → "484k", 1000000 → "1M", 1500000 → "1.5M". */
@@ -1656,14 +1656,13 @@ function drawContextPane(ui, view, o) {
   const fit = (child) => h(Box, { flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, child)
   const subtle = ui.hex('subtle')
   const cells = Math.max(30, term ? o.W - 2 : o.W - 1)                 // the body, in character cells
-  const px = Math.max(240, Math.min(1600, Math.round(cells * PX)))     // the desktop's bars, in px: the full width
+  const px = Math.max(120, Math.min(1600, Math.round(cells * PX)))     // the desktop's bars, in px: the full width
   const size = term ? cells : px
   // the desktop's rule is a 1 px line exactly as wide as the bars; a run of ─ would end in a truncation ellipsis
   const rule = () => term ? t('─'.repeat(cells), subtle, { wrap: 'truncate' })
     : h(ui.Svg, { source: `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="9" viewBox="0 0 ${px} 9"><rect y="4" width="${px}" height="1" fill="${subtle}"/></svg>`, alt: 'divider', width: px, height: 9 })
-  // desktop: the bars and their figures share the bars' width, so they end on one edge. The title and the action
-  // buttons stay outside it, at the pane's real width: `px` is a guess, and a guess too wide must never hide them
-  const frame = (children) => (term ? col({}, children) : col({ width: px }, children))
+  // Box widths count cells on every surface, never px: the pane keeps its natural width, and the bars are sized to it (PX)
+  const frame = (children) => col({}, children)
   const blank = () => t(' ')
   // Explain mode: small Claude-orange numbers on the parts it explains (superscripts on the terminal, one cell each)
   const ex = ctxExplain

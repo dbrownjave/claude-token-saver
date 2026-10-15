@@ -574,26 +574,28 @@ test('idle compaction section shows the compaction once it ran, until the next r
   expect(await ui.find({ text: /^≈53m left$/ })).toBeDefined()
 })
 
-test('desktop pane: text, dividers and bars share one right edge, and the idle card sits with the others', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+test('desktop pane: no box wider than the pane, bars and dividers one width, long lines wrap', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
   setup(on, () => USAGE, STEP_TTL('1h'))
   SETTINGS(on, {})
   await turn($)
-  const ui: any = await mount($, 'desktop', { ...PANE, bodyColumns: 50 })
-  await ui.press({ key: 'ctx-expand' })
-  const root: any = await ui.drawn()
-  const W = root.children.find((c: any) => c && c.props && c.props.width)?.props.width
-  expect(root.props.width).toBeUndefined()                                // the title and buttons keep the pane's real width
-  expect(W).toBeGreaterThan(0)
-  const svgs: any[] = []
-  const walk = (n: any) => { if (!n || typeof n !== 'object') return; if (n.type === 'Svg') svgs.push(n); (n.children || []).forEach(walk) }
-  walk(root)
-  const widths = svgs.map((s) => s.props.width).filter((w) => w > 100)
-  expect(widths.length).toBeGreaterThan(3)
-  for (const w of widths) expect(Math.abs(w - W)).toBeLessThanOrEqual(2)   // every full-width bar and divider ends where the text does
-  expect(svgs.some((s) => s.props.alt === 'divider')).toBe(true)
-  expect(svgs.some((s) => s.props.alt === 'card-idle')).toBe(true)
-  expect(await ui.find({ text: /^Idle compaction$/ })).toBeDefined()
-  expect(await ui.find({ text: /─{20}/ })).toBeUndefined()                 // no run of dashes to truncate
+  for (const cols of [36, 50, 98]) {
+    const ui: any = await mount($, 'desktop', { ...PANE, bodyColumns: cols })
+    if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })   // open stays open across mounts
+    const root: any = await ui.drawn()
+    const boxes: any[] = [], svgs: any[] = []
+    const walk = (n: any) => { if (!n || typeof n !== 'object') return; if (n.type === 'Box') boxes.push(n); if (n.type === 'Svg') svgs.push(n); (n.children || []).forEach(walk) }
+    walk(root)
+    for (const b of boxes) if (typeof b.props?.width === 'number') expect(b.props.width).toBeLessThanOrEqual(cols)   // Box widths are cells: a px figure here pushes rows off screen
+    const full = svgs.map((x) => x.props.width).filter((w) => w >= Math.max(120, (cols - 1) * 8.1) - 2)
+    expect(full.length).toBeGreaterThan(3)
+    expect(new Set(full).size).toBe(1)                                        // every full-width bar and divider ends on one edge
+    expect(svgs.some((x) => x.props.alt === 'divider')).toBe(true)
+    expect(svgs.some((x) => x.props.alt === 'card-idle')).toBe(true)
+    const hint = await ui.find({ type: 'Text', text: /^Auto-compact at/ })
+    expect(hint?.props.wrap).toBe('wrap')
+    expect(await ui.find({ text: /─{20}/ })).toBeUndefined()
+    await ui.unmount()
+  }
 })
 
 for (const cols of [24, 40, 50, 120]) {
@@ -635,4 +637,21 @@ test('the cache reads Very warm, Warm, Chill, Cold, then Frozen, with one square
   }
   expect(seen.length).toBe(5)
   expect(colors.size).toBe(5)                                                 // each word its own colour
+})
+
+test('mobile pane: one card per row, nothing wider than the screen, long lines wrap', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => USAGE, STEP_TTL('1h'))
+  SETTINGS(on, {})
+  await turn($)
+  const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'mobile', component: 'Pane', requestId: 'context', props: { ...PANE, bodyColumns: 44 } })
+  if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
+  const root: any = await ui.drawn()
+  const boxes: any[] = []
+  const walk = (n: any) => { if (!n || typeof n !== 'object') return; if (n.type === 'Box') boxes.push(n); (n.children || []).forEach(walk) }
+  walk(root)
+  for (const b of boxes) if (typeof b.props?.width === 'number') expect(b.props.width).toBeLessThanOrEqual(44)
+  expect((await ui.find({ type: 'Text', text: /^Auto-compact at/ }))?.props.wrap).toBe('wrap')
+  expect((await ui.find({ type: 'Text', text: /^Prompt cache read/ }))?.props.wrap).toBe('wrap')
+  for (const k of ['ctx-explain', 'ctx-clear', 'ctx-compact', 'ctx-later']) expect(await ui.find({ key: k })).toBeDefined()
+  expect(await ui.find({ text: /^Idle compaction$/ })).toBeDefined()
 })
