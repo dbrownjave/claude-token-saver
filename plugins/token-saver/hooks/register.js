@@ -1613,6 +1613,11 @@ function cacheCard(view) {
     foot2: c.known && view.switchCost ? view.switchCost.short : undefined }
 }
 
+function idleCard(view) {
+  const v = view.idle
+  return { title: 'Idle compaction', accent: v.accent, tone: v.tone, bar: v.bar, strong: v.strong, rest: '', foot: v.foot }
+}
+
 /** A long name cut to `n` cells: paths keep their tail, names their head. */
 function clip(s, n) {
   s = String(s)
@@ -1640,7 +1645,11 @@ function drawContextPane(ui, view, o) {
   const cells = Math.max(30, term ? o.W - 2 : o.W - 1)                 // the body, in character cells
   const px = Math.max(240, Math.min(1600, Math.round(cells * PX)))     // the desktop's bars, in px: the full width
   const size = term ? cells : px
-  const rule = () => t('─'.repeat(term ? cells : 200), subtle, { wrap: 'truncate' })
+  // the desktop's rule is a 1 px line exactly as wide as the bars; a run of ─ would end in a truncation ellipsis
+  const rule = () => term ? t('─'.repeat(cells), subtle, { wrap: 'truncate' })
+    : h(ui.Svg, { source: `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="9" viewBox="0 0 ${px} 9"><rect y="4" width="${px}" height="1" fill="${subtle}"/></svg>`, alt: 'divider', width: px, height: 9 })
+  // desktop: everything shares the bars' width, so figures, buttons and bars end on one edge
+  const frame = (children) => col(term ? {} : { width: px, overflow: 'hidden' }, children)
   const blank = () => t(' ')
   // Explain mode: small Claude-orange numbers on the parts it explains (superscripts on the terminal, one cell each)
   const ex = ctxExplain
@@ -1701,8 +1710,8 @@ function drawContextPane(ui, view, o) {
   const under = term && sentLen <= cells ? row({}, sentence()) : null
   const msg = ctxMsg ? t(cap1(ctxMsg), 'inactive', { wrap: 'wrap' }) : null
   const explain = ex ? explainSection(ui, view, o, { row, col, t, grow, rule, cells }) : []
-  const hint1M = view.compactHint1M ? t(view.compactHint1M, 'inactive', { wrap: term ? 'wrap' : 'truncate' }) : null
-  if (!expanded) return col({}, [title, bar, hint1M, bottom, under, msg, ...explain])
+  const hint1M = view.compactHint1M ? t(view.compactHint1M, 'inactive', { wrap: 'wrap' }) : null
+  if (!expanded) return frame([title, bar, hint1M, bottom, under, msg, ...explain])
 
   // 4. Saved: the headline of the whole plugin
   const sv = view.savings
@@ -1745,38 +1754,30 @@ function drawContextPane(ui, view, o) {
       num(r.tok, 'inactive', 8), sv.priced ? num(r.amount, r.amountRole, amtW + 1) : null])
   }
   const receipt = ctxReceipt ? col({}, [rule(), ...sv.receipt.map(receiptLine), t(sv.note, 'inactive')]) : null
-  const cacheLine = sv.cacheInfo && sv.cacheInfo.line ? t(sv.cacheInfo.line, 'inactive', { wrap: term ? 'wrap' : 'truncate' }) : null
-  const agentLine = sv.agentLine ? t(sv.agentLine, 'inactive', { wrap: term ? 'wrap' : 'truncate' }) : null
+  const cacheLine = sv.cacheInfo && sv.cacheInfo.line ? t(sv.cacheInfo.line, 'inactive', { wrap: 'wrap' }) : null
+  const agentLine = sv.agentLine ? t(sv.agentLine, 'inactive', { wrap: 'wrap' }) : null
   const saved = col({}, [savedHead, savedBar(ui, geoOf(term, size, 10, 3), parts, sv.share, o.t), keyRow, cacheLine, agentLine, receipt])
 
   // 5. Three cards: what is next, billing (keep-warm or the 5-hour window), the cache
-  const cardList = [nextCard(view, avgGrowth()), billCard(view, o.now, o.ttl, o.keepWarmMax, o.longTtl), cacheCard(view)]
-  const cardKeys = ['card-next', 'card-bill', 'card-cache']
+  const cardList = [nextCard(view, avgGrowth()), billCard(view, o.now, o.ttl, o.keepWarmMax, o.longTtl), cacheCard(view), view.idle ? idleCard(view) : null].filter(Boolean)
+  const cardKeys = ['card-next', 'card-bill', 'card-cache', 'card-idle']
   // desktop: three across from 110 cells, two from 72, one (full width) on a phone or a thin window
-  const perRow = term ? (o.W < 90 ? 2 : 3) : narrow ? 1 : cells < 110 ? 2 : 3
+  // four cards: four across when wide, else two by two, one per row on a phone or a thin window
+  const perRow = Math.min(cardList.length, term ? (o.W < 140 ? 2 : 4) : narrow ? 1 : cells < 140 ? 2 : 4)
   const gapN = term ? 4 : 3
   const cw = Math.max(16, Math.floor((cells - gapN * (perRow - 1)) / perRow))
   const card = (cd, i) => col(perRow === 1 ? { flexGrow: 1, flexShrink: 1, overflow: 'hidden' } : { width: cw, flexShrink: 0, overflow: 'hidden' }, [
     row({}, [line(cd.title, 'text'), cd.accent ? line(' · ', 'inactive') : null, cd.accent ? line(cd.accent, cd.tone) : null]),
     cardBar(ui, cardKeys[i], geoOf(term, term ? cw : Math.round(cw * PX), 10, 3), cd.bar, o.t, o.cardStyle),
     row({}, [line(cd.strong, 'text'), cd.rest ? line(cd.rest, 'inactive') : null]),
-    t(cd.foot, 'inactive', { wrap: 'truncate' }),
-    cd.foot2 ? t(cd.foot2, 'inactive', { wrap: 'truncate' }) : null,
+    t(cd.foot, 'inactive', { wrap: 'wrap' }),
+    cd.foot2 ? t(cd.foot2, 'inactive', { wrap: 'wrap' }) : null,
   ])
   const cardRows = []
   for (let i = 0; i < cardList.length; i += perRow) {
     if (i) cardRows.push(blank())
     cardRows.push(row({ gap: gapN }, cardList.slice(i, i + perRow).map((cd, j) => card(cd, i + j))))
   }
-
-  // 5b. Idle compaction: a full-width countdown from the last reply to when Claude Code would compact, as your settings have it
-  const iv = view.idle
-  const idleSection = iv ? col({}, [
-    rule(),
-    row({}, [line('Idle compaction', 'text'), line(' · ', 'inactive'), line(iv.accent, iv.tone), grow(), t(' '), line(iv.strong, 'text')]),
-    cardBar(ui, 'idle-bar', geoOf(term, size, 10, 3), iv.bar, o.t, o.cardStyle),
-    t(iv.foot, 'inactive', { wrap: 'truncate' }),
-  ]) : null
 
   // 6. Claude's working memory, like /context: a bar by kind, then a row per kind (narrower figure columns when narrow)
   const numW = narrow ? 8 : 10, pctW = narrow ? 7 : 9
@@ -1812,8 +1813,7 @@ function drawContextPane(ui, view, o) {
     ]
   })
 
-  return col({}, [title, bar, hint1M, blank(), markRow(6, 'Saved this session'), saved, blank(), markRow(7, 'Cards: what is next, keep-warm, cache'), ...cardRows, blank(),
-    ...(idleSection ? [idleSection, blank()] : []),
+  return frame([title, bar, hint1M, blank(), markRow(6, 'Saved this session'), saved, blank(), markRow(7, 'Cards: what is next, keep-warm, cache, idle compaction'), ...cardRows, blank(),
     markRow(8, 'Claude’s working memory'), memory, ...(groups.length ? [blank(), markRow(9, 'What is inside each kind, with a button to trim it'), ...groups] : []),
     blank(), bottom, under, msg, ...explain])
 }
@@ -1991,7 +1991,7 @@ function explainEntries(view, L, open) {
     entries.push(
       [6, 'Saved this session', 'Only what the plugin did: trimmed tool output, cold compactions it vetoed, and keep-warm pings net of their cost. Claude\'s own prompt cache is shown beside it, never added in.',
         `Trimmed ${L.keptOut} · Vetoed ${L.vetoTok} · Keep-warm ${L.warmNet} · Cache read ${L.cacheRead}, not counted.`, 'Press Receipt for the money, line by line.', 'cut'],
-      [7, 'The cards', 'What is coming (your next mark), what keeps the cache alive while you are away, and how long it stays warm.',
+      [7, 'The cards', 'What is coming (your next mark), what keeps the cache alive while you are away, how long it stays warm, and when Claude Code would compact while you are away.',
         `Runway ${runway ? runway[1] : 100}% · ${billing} · ${c.known && c.warm ? `${c.leftMin}m left` : 'Cold'}.`, '', 'keepwarm'],
       [8, 'Claude’s working memory', 'Everything Claude re-reads each time it replies or uses a tool, by kind.',
         used.length ? `Biggest: ${used[0].name} ${fmtK(used[0].tokens)} (${used[0].pct})${used[1] ? `, then ${used[1].name.toLowerCase()} ${fmtK(used[1].tokens)}` : ''}.` : '',

@@ -526,7 +526,7 @@ test('idle compaction section counts down from the last reply on the one-hour ca
   expect(await ui.find({ text: /^Idle compaction$/ })).toBeDefined()
   expect(await ui.find({ text: /^≈38m left$/ })).toBeDefined()
   expect(await ui.find({ text: /484k becomes a summary ≈54m after your last reply/ })).toBeDefined()
-  expect(await ui.find({ key: 'idle-bar' })).toBeDefined()
+  expect(await ui.find({ key: 'card-idle' })).toBeDefined()
 })
 
 test('idle compaction section follows your size floor', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
@@ -572,4 +572,25 @@ test('idle compaction section shows the compaction once it ran, until the next r
   await ui.redraw()
   expect(await ui.find({ text: /^Compacted 484k → 120k$/ })).toBeUndefined()
   expect(await ui.find({ text: /^≈53m left$/ })).toBeDefined()
+})
+
+test('desktop pane: text, dividers and bars share one right edge, and the idle card sits with the others', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => USAGE, STEP_TTL('1h'))
+  SETTINGS(on, {})
+  await turn($)
+  const ui: any = await mount($, 'desktop', { ...PANE, bodyColumns: 50 })
+  await ui.press({ key: 'ctx-expand' })
+  const root: any = await ui.drawn()
+  const W = root.props.width
+  expect(W).toBeGreaterThan(0)
+  const svgs: any[] = []
+  const walk = (n: any) => { if (!n || typeof n !== 'object') return; if (n.type === 'Svg') svgs.push(n); (n.children || []).forEach(walk) }
+  walk(root)
+  const widths = svgs.map((s) => s.props.width).filter((w) => w > 100)
+  expect(widths.length).toBeGreaterThan(3)
+  for (const w of widths) expect(Math.abs(w - W)).toBeLessThanOrEqual(2)   // every full-width bar and divider ends where the text does
+  expect(svgs.some((s) => s.props.alt === 'divider')).toBe(true)
+  expect(svgs.some((s) => s.props.alt === 'card-idle')).toBe(true)
+  expect(await ui.find({ text: /^Idle compaction$/ })).toBeDefined()
+  expect(await ui.find({ text: /─{20}/ })).toBeUndefined()                 // no run of dashes to truncate
 })
