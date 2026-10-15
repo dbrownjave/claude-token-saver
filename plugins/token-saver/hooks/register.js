@@ -20,7 +20,8 @@ const SWITCH_CHEAP = 20_000              // a model switch under this many conte
 const BAND_TICK = 30 * 1000
 const KEEP_WARM_TICK = 15 * 1000
 const KEEP_WARM_LEAD = 75 * 1000          // the TTL runs from a request's start and a fork takes seconds: ping well before it lapses
-const KEEP_WARM_PROMPT = 'Keep-alive ping from the token-saver plugin. Reply with a single period and nothing else.'
+const IDLE_COMPACT_AFTER = 25 * MINUTE   // Claude Code's idle compaction fires at 50–95% of the one-hour TTL; an in-turn auto-compaction comes seconds after a step
+const KEEP_WARM_PROMPT ='Keep-alive ping from the token-saver plugin. Reply with a single period and nothing else.'
 
 const DEFAULT_RULES = [
   { id: 'git-status', pattern: '^git\\s+status\\b', unless: ['-sb', '-s'], replace: 'git status -sb' },
@@ -2596,6 +2597,9 @@ export function register(on, options = {}) {
    *  - "/compact force" (or "/compact !") compacts anyway
    *  - auto, plugin and precompute triggers are never vetoed: refusing an
    *    auto-compaction would let the window overflow
+   *  - Claude Code's idle compaction (2.1.299+, one-hour cache) arrives as an auto
+   *    trigger long after the last reply: it is named in the pane as Claude's work,
+   *    never booked as saved, and keep-warm stops pinging the prefix it replaced
    *  - subagent transcripts are left alone
    */
   on('session.compact', async ($, e, next) => {
@@ -2619,7 +2623,17 @@ export function register(on, options = {}) {
         }
       }
     }
-    return next({ ...e, instructions })
+    const now = await $.clock.now()
+    if (e.trigger !== 'auto' || !lastStepAt || now - lastStepAt < IDLE_COMPACT_AFTER) return next({ ...e, instructions })
+    const r = await next({ ...e, instructions })
+    if (r && !r.skip) {
+      keepWarm.streak = Infinity     // the cached prefix is gone: a ping now would only miss
+      const sizes = Number.isFinite(r.tokensBefore) && Number.isFinite(r.tokensAfter) ? ` ${fmtK(r.tokensBefore)} → ${fmtK(r.tokensAfter)} tokens` : ''
+      ctxMsg = `Claude compacted while idle (${mins(now - lastStepAt)}m):${sizes}. Claude Code's own feature, not counted in Saved.`
+      ctxCache.at = 0
+      invalidate($)
+    }
+    return r
   })
 
   /**

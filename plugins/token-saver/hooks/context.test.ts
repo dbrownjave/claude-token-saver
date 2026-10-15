@@ -448,3 +448,24 @@ test('/tokens list is the pane as a table: context with a bar, cache, saved, kee
   expect(widths.size).toBe(1)                                        // every row is as wide as the frame
   expect(text).not.toMatch(/\btok\b/)
 })
+
+test('Claude Code idle compaction is named in the pane, gets the keep-list, and is never counted as saved', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  const { clock, log } = setup(on, () => USAGE)
+  await turn($)
+  await clock.advance(54 * 60_000)                          // 90% of the one-hour TTL, as Claude Code fires it
+  const r: any = await ($ as any).session.compact({ trigger: 'auto', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
+  expect(r.skip).toBeUndefined()
+  expect(String(log.compacts[0].instructions)).toContain('When compacting, keep')
+  const ui: any = await mount($, 'terminal')
+  expect(await ui.find({ text: /Claude compacted while idle \(54m\): 484k → 120k tokens\. Claude Code's own feature, not counted in Saved\./ })).toBeDefined()
+  expect(await ui.find({ text: /^0 saved$/ })).toBeDefined()
+})
+
+test('an auto-compaction right after a reply is not called idle', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  const { clock } = setup(on, () => USAGE)
+  await turn($)
+  await clock.advance(5_000)
+  await ($ as any).session.compact({ trigger: 'auto', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
+  const ui: any = await mount($, 'terminal')
+  expect(await ui.find({ text: /compacted while idle/ })).toBeUndefined()
+})

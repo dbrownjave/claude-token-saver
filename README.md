@@ -93,6 +93,7 @@ A settings hook can only add a note before `/compact`. The mod sits on the compa
 | `/compact`, cache cold | **Refused.** One line names the idle time and the tokens a compaction would re-send, and points at `/handoff` then `/clear`. |
 | `/compact force` | Runs anyway. Keep-list still appended. |
 | auto-compaction | Never refused. Keep-list appended. Blocking it would let the window overflow. |
+| idle compaction (Claude Code 2.1.299+) | Never refused. Keep-list appended. The pane names it as Claude Code's own work, with the before and after size, and never counts it in Saved. Keep-warm stops for that stretch, since the prefix it would re-read is gone. Claude Code runs it on the 1-hour cache, for sessions over 200k tokens (`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`, 100k floor), about 54 minutes after the last reply. Opt out with `"idleCompaction": false`. |
 | subagent transcripts | Left alone. |
 
 "Cold" means idle longer than the prompt-cache TTL since the last response. Default TTL is 5 minutes; turn on `longCacheTtl` if your sessions get the 1-hour cache. `/tokens` shows which state you are in.

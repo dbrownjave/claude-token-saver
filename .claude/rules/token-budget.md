@@ -11,6 +11,7 @@ Tokens compound. Every turn resends the whole session. Prefer a short, cache-sta
 - Set model and effort once at the start. Do not switch mid-session (busts the prompt-cache prefix).
 - Do not edit `CLAUDE.md` or `.claude/settings.json` mid-session.
 - Before a break: `/compact` while the cache is still warm. After a long idle, start a new session instead of compacting a cold history.
+- On the one-hour cache, Claude Code 2.1.299+ compacts an idle session over 200k tokens itself, just before the cache expires ("Compacted while idle"). Under 200k, or on the 5-minute cache, the line above still applies. Opt out: `"idleCompaction": false`.
 - To drop last turns only: `/rewind`, not `/compact`.
 - Prefer `@path/to/file` over a `Read` when the path is already known.
 
