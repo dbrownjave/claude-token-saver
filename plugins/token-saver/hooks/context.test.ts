@@ -581,7 +581,8 @@ test('desktop pane: text, dividers and bars share one right edge, and the idle c
   const ui: any = await mount($, 'desktop', { ...PANE, bodyColumns: 50 })
   await ui.press({ key: 'ctx-expand' })
   const root: any = await ui.drawn()
-  const W = root.props.width
+  const W = root.children.find((c: any) => c && c.props && c.props.width)?.props.width
+  expect(root.props.width).toBeUndefined()                                // the title and buttons keep the pane's real width
   expect(W).toBeGreaterThan(0)
   const svgs: any[] = []
   const walk = (n: any) => { if (!n || typeof n !== 'object') return; if (n.type === 'Svg') svgs.push(n); (n.children || []).forEach(walk) }
@@ -594,3 +595,22 @@ test('desktop pane: text, dividers and bars share one right edge, and the idle c
   expect(await ui.find({ text: /^Idle compaction$/ })).toBeDefined()
   expect(await ui.find({ text: /─{20}/ })).toBeUndefined()                 // no run of dashes to truncate
 })
+
+for (const cols of [24, 40, 50, 120]) {
+  test(`desktop pane at ${cols} columns keeps ?, More, ⤢ and Clear / Compact / Later outside the bars' width`, { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+    setup(on, () => USAGE, STEP_TTL('1h'))
+    SETTINGS(on, {})
+    await turn($)
+    const ui: any = await mount($, 'desktop', { ...PANE, bodyColumns: cols })
+    const root: any = await ui.drawn()
+    expect(root.props.width).toBeUndefined()
+    const inFrame = (key: string) => { let hit = false; const walk = (n: any, boxed: boolean) => { if (!n || typeof n !== 'object') return; const b = boxed || !!(n.props && n.props.width && n.type === 'Box'); if (n.props && n.props.key === key && b) hit = true; (n.children || []).forEach((c: any) => walk(c, b)) }; walk(root, false); return hit }
+    for (const k of ['ctx-explain', 'ctx-expand', 'ctx-clear', 'ctx-compact', 'ctx-later']) {
+      expect(await ui.find({ key: k })).toBeDefined()
+      expect(inFrame(k)).toBe(false)
+    }
+    await ui.press({ key: 'ctx-expand' })
+    expect((await ui.find({ key: 'ctx-expand' }))?.props.label).toBe('Less')
+    if (cols >= 72 && (await ui.find({ key: 'ctx-popout' }))) expect(inFrame('ctx-popout')).toBe(false)
+  })
+}

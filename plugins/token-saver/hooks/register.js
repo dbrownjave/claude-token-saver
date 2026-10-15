@@ -1648,8 +1648,9 @@ function drawContextPane(ui, view, o) {
   // the desktop's rule is a 1 px line exactly as wide as the bars; a run of ─ would end in a truncation ellipsis
   const rule = () => term ? t('─'.repeat(cells), subtle, { wrap: 'truncate' })
     : h(ui.Svg, { source: `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="9" viewBox="0 0 ${px} 9"><rect y="4" width="${px}" height="1" fill="${subtle}"/></svg>`, alt: 'divider', width: px, height: 9 })
-  // desktop: everything shares the bars' width, so figures, buttons and bars end on one edge
-  const frame = (children) => col(term ? {} : { width: px, overflow: 'hidden' }, children)
+  // desktop: the bars and their figures share the bars' width, so they end on one edge. The title and the action
+  // buttons stay outside it, at the pane's real width: `px` is a guess, and a guess too wide must never hide them
+  const frame = (children) => (term ? col({}, children) : col({ width: px }, children))
   const blank = () => t(' ')
   // Explain mode: small Claude-orange numbers on the parts it explains (superscripts on the terminal, one cell each)
   const ex = ctxExplain
@@ -1711,7 +1712,7 @@ function drawContextPane(ui, view, o) {
   const msg = ctxMsg ? t(cap1(ctxMsg), 'inactive', { wrap: 'wrap' }) : null
   const explain = ex ? explainSection(ui, view, o, { row, col, t, grow, rule, cells }) : []
   const hint1M = view.compactHint1M ? t(view.compactHint1M, 'inactive', { wrap: 'wrap' }) : null
-  if (!expanded) return frame([title, bar, hint1M, bottom, under, msg, ...explain])
+  if (!expanded) return col({}, [title, frame([bar, hint1M]), bottom, under, msg, ...explain])
 
   // 4. Saved: the headline of the whole plugin
   const sv = view.savings
@@ -1813,8 +1814,8 @@ function drawContextPane(ui, view, o) {
     ]
   })
 
-  return frame([title, bar, hint1M, blank(), markRow(6, 'Saved this session'), saved, blank(), markRow(7, 'Cards: what is next, keep-warm, cache, idle compaction'), ...cardRows, blank(),
-    markRow(8, 'Claude’s working memory'), memory, ...(groups.length ? [blank(), markRow(9, 'What is inside each kind, with a button to trim it'), ...groups] : []),
+  return col({}, [title, frame([bar, hint1M, blank(), markRow(6, 'Saved this session'), saved, blank(), markRow(7, 'Cards: what is next, keep-warm, cache, idle compaction'), ...cardRows, blank(),
+    markRow(8, 'Claude’s working memory'), memory, ...(groups.length ? [blank(), markRow(9, 'What is inside each kind, with a button to trim it'), ...groups] : [])]),
     blank(), bottom, under, msg, ...explain])
 }
 
