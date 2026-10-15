@@ -1754,6 +1754,7 @@ function drawContextPane(ui, view, o) {
     // desktop: native buttons, as design/m4.html and the app's banners draw them; the terminal keeps bare labels
     row({ gap: 1, flexShrink: 0 }, [                                   // spaced as Clear / Compact / Later are
       o.onPopOut && expanded && !narrow ? h(Button, { key: 'ctx-popout', label: '⤢', ...plainT, onPress: o.onPopOut }) : null,
+      o.onSettings && !narrow ? h(Button, { key: 'ctx-settings', label: '⚙', ...plainT, onPress: o.onSettings }) : null,
       h(Button, { key: 'ctx-explain', label: '?', ...plainT, onPress: o.onExplain }),
       o.onExpand ? h(Button, { key: 'ctx-expand', label: expanded ? 'Less' : 'More', ...plainT, onPress: o.onExpand }) : null,
     ]),
@@ -2174,7 +2175,7 @@ function listText(view, o) {
   const out = [line('┌', '┬', '┐')]
   for (const r of rows) out.push(`│${cell(r[0], w0)}│${cell(r[1], w1)}│${cell(r[2], w2)}│`)
   out.push(line('└', '┴', '┘'))
-  out.push(dots('/tokens opens the pane', '/tokens learn explains each row', '/tokens hide|show the band', 'marks: ~/.claude/token-saver/thresholds.json', o.compactGuard ? 'a vetoed /compact: /compact force' : '',
+  out.push(dots('/tokens opens the pane', '/tokens learn explains each row', '/tokens hide|show the band', '/tokens settings the options', 'marks: ~/.claude/token-saver/thresholds.json', o.compactGuard ? 'a vetoed /compact: /compact force' : '',
     view.compactHint1M ? low(view.compactHint1M) : ''))   // a 1M window compacting near the top: the one setting worth changing today
   return out.join('\n')
 }
@@ -2346,6 +2347,7 @@ const ttl = ttlNow(), longTtl = ttl === TTL_LONG
       onReceipt: () => { ctxReceipt = !ctxReceipt; invalidate($) },
       onGroup: (id) => { if (ctxGroups.has(id)) ctxGroups.delete(id); else ctxGroups.add(id); invalidate($) },
       onRun: (cmd) => runFromPane($, cmd),
+      onSettings: () => showSettings($, e.surface, e.viewport && e.viewport.isFullscreen),
       onClear: () => clearSession($),
       onCompact: () => compactNow($, ttl, compactGuard),
       onLater: inBand ? () => {
@@ -2361,6 +2363,162 @@ const ttl = ttlNow(), longTtl = ttl === TTL_LONG
 }
 
 
+
+/* ── Settings: the side panel ────────────────────────────────────────────────────────────────────────────────────
+   Every option of plugin.json, grouped, one control each. A change is $.config.set on `token-saver.<key>`, the same
+   row /config shows, so there is one source; Claude Code then reloads the module with the new options. The panel
+   shows the new value at once, and the palette and card bars switch before the reload. */
+const SETTINGS_PANE = 'settings'
+const SETTINGS = [
+  { group: 'Look', rows: [
+    { key: 'theme', label: 'Palette', kind: 'choice', options: ['auto', 'dark', 'light'], def: 'auto',
+      hint: "Auto follows the terminal's /config Theme. The desktop app does not tell a mod its appearance, so Auto is dark there: pick Light in light mode." },
+    { key: 'cardBars', label: 'Card bars', kind: 'choice', options: ['fire', 'ember'], def: 'fire', hint: 'Ember: a calm glow at each head, so only the context bar moves.' },
+    { key: 'cacheBand', label: 'Band above the prompt', kind: 'bool', def: true },
+    { key: 'compactHint', label: 'Cache-aware hint on the band', kind: 'bool', def: true },
+  ] },
+  { group: 'Cache', rows: [
+    { key: 'longCacheTtl', label: 'Prompt cache TTL is 1 hour', kind: 'bool', def: false, hint: 'Off: the TTL follows Claude Code.' },
+    { key: 'keepWarm', label: 'Keep the cache warm while idle', kind: 'bool', def: true, hint: 'API billing on the 5-minute cache only. One tiny request at about 0.1× input, before it lapses.' },
+    { key: 'keepWarmPings', label: 'Pings per idle stretch', kind: 'step', steps: [0, 1, 2, 3, 4, 5, 6, 8, 10, 15, 20], def: 5, hint: 'About 4 minutes apart. 0 turns keep-warm off.' },
+  ] },
+  { group: 'Guards', rows: [
+    { key: 'compactGuard', label: 'Veto /compact on a cold cache', kind: 'bool', def: true, hint: 'Override once with /compact force.' },
+    { key: 'modelGuard', label: 'Price a model switch', kind: 'bool', def: true },
+  ] },
+  { group: 'Output', rows: [
+    { key: 'quietBash', label: 'Rewrite noisy bash', kind: 'bool', def: true },
+    { key: 'trimOutput', label: 'Trim huge successful output', kind: 'bool', def: true, hint: 'Failures are left intact.' },
+    { key: 'suggestSkills', label: 'Suggest parked skills at start', kind: 'bool', def: true },
+  ] },
+  { group: 'Price', rows: [
+    { key: 'inputPricePerM', label: 'Input price, $ per million tokens', kind: 'step', steps: [0, 0.8, 1, 3, 5, 15], def: 0,
+      hint: "Puts dollars on the savings. 0 shows tokens only. Check your model's price." },
+  ] },
+]
+let OPTS = {}                       // the options as this load got them, with the panel's changes laid over
+let settingsMsg = ''
+const optOf = (r) => (OPTS[r.key] === undefined ? r.def : OPTS[r.key])
+
+async function setOption($, r, value) {
+  const was = OPTS[r.key]
+  const apply = (v) => {
+    OPTS[r.key] = v
+    if (r.key === 'theme') themeOption = v === 'light' || v === 'dark' ? v : 'auto'
+    if (r.key === 'cardBars') ENV = { ...ENV, cardBars: v === 'ember' ? 'ember' : 'fire' }
+  }
+  apply(value)
+  settingsMsg = ''
+  invalidate($)
+  try {
+    const res = await $.config.set({ key: `token-saver.${r.key}`, value })
+    if (res && res.deny) throw new Error(typeof res.deny === 'string' ? res.deny : res.deny.reason || 'refused')
+  } catch (err) {
+    apply(was)
+    settingsMsg = `${r.label} not saved: ${String(err && err.message ? err.message : err).replace(/^token-saver:\s*/, '')}`
+    invalidate($)
+  }
+}
+
+/** Open the Settings panel. False where it is not placed (the caller falls back). */
+async function openSettingsPane($) {
+  try {
+    const opened = await $.ui.open({ id: SETTINGS_PANE, title: 'Token-saver settings', focus: true, closeOnEscape: true, holdToasts: true })
+    if (!opened || opened.isPlaced !== false) return true
+    toast($, `token-saver: Settings not shown: ${opened.reason || 'the window is too narrow'}. /tokens settings lists them.`, 8000)
+  } catch (err) {
+    toast($, `token-saver: Settings could not open: ${err && err.message ? err.message : String(err)}`, 8000)
+  }
+  return false
+}
+
+/** Settings as text, for /tokens settings where no panel draws. */
+function settingsText() {
+  const out = ['token-saver settings (change them in /config, search token-saver, or in the Settings panel)']
+  for (const g of SETTINGS) {
+    out.push('', g.group)
+    for (const r of g.rows) {
+      const v = optOf(r)
+      out.push(`  ${r.label.padEnd(36)} ${r.kind === 'bool' ? (v ? 'On' : 'Off') : r.kind === 'choice' ? cap1(String(v)) : String(v)}`)
+    }
+  }
+  return out.join('\n')
+}
+
+/** The panel's tree. `o.onDone` closes it (the Pane, or the band on a desktop that places no panes). */
+function drawSettings(ui, o) {
+  const { Box, Text, Button, term } = ui
+  const cells = o.W
+  const narrow = cells < 60
+  const t = (s, color, extra) => h(Text, { ...(color ? { color: term ? color : ui.hex(color) } : {}), ...extra }, term ? s : nbsp(s))
+  const row = (props, kids) => h(Box, { flexDirection: 'row', ...props }, ...kids.filter(Boolean))
+  const col = (props, kids) => h(Box, { flexDirection: 'column', ...props }, ...kids.filter(Boolean))
+  const grow = () => h(Box, { flexGrow: 1 })
+  const btn = (key, label, on, onPress) => h(Button, { key, label, onPress, ...(on ? { variant: 'primary' } : { dimColor: true }) })
+  const control = (r) => {
+    const v = optOf(r)
+    if (r.kind === 'bool') return [h(Button, { key: `set-${r.key}`, label: v ? 'On' : 'Off', onPress: () => o.onSet(r, !v), ...(v ? { variant: 'primary' } : {}) })]
+    if (r.kind === 'choice') return r.options.map((x) => btn(`set-${r.key}:${x}`, cap1(x), x === v, () => { if (x !== v) o.onSet(r, x) }))
+    const steps = r.steps.includes(Number(v)) ? r.steps : [...r.steps, Number(v)].sort((a, b) => a - b)
+    const i = steps.indexOf(Number(v))
+    return [
+      h(Button, { key: `set-${r.key}:down`, label: '−', onPress: () => { if (i > 0) o.onSet(r, steps[i - 1]) }, ...(i > 0 ? {} : { dimColor: true }) }),
+      t(` ${String(v)} `, 'text'),
+      h(Button, { key: `set-${r.key}:up`, label: '+', onPress: () => { if (i < steps.length - 1) o.onSet(r, steps[i + 1]) }, ...(i < steps.length - 1 ? {} : { dimColor: true }) }),
+    ]
+  }
+  const kids = [
+    row({ alignItems: 'center' }, [
+      t('Settings', 'text', { wrap: 'truncate' }), grow(),
+      o.onDone ? h(Button, { key: 'settings-done', label: 'Done', ...(term ? { plain: true } : {}), onPress: o.onDone }) : null,
+    ]),
+  ]
+  for (const g of SETTINGS) {
+    kids.push(t(' '), t(g.group, 'claude'))
+    for (const r of g.rows) {
+      const ctl = row({ gap: 1, flexShrink: 0, alignItems: 'center' }, control(r))
+      const label = t(r.label, 'text', { wrap: 'truncate' })
+      kids.push(narrow
+        ? col({}, [label, ctl])
+        : row({ alignItems: 'center' }, [row({ flexShrink: 1, overflow: 'hidden' }, [label]), grow(), t(' '), ctl]))
+      if (r.hint) kids.push(t(r.hint, 'inactive', { wrap: 'wrap' }))
+    }
+  }
+  kids.push(t(' '), t(settingsMsg || 'Saved to /config as token-saver.<name>. A change reloads the mod.', settingsMsg ? 'error' : 'inactive', { wrap: 'wrap' }))
+  return col({ width: cells }, kids)
+}
+
+async function renderSettings($, e, inBand) {
+  try {
+    const el = $.ui.resolve(e)
+    const term = e.surface === 'terminal'
+    if (term && !themeRead) await readTheme($)
+    const ui = { Box: el.Box, Text: el.Text, Button: el.Button, term, hex: hexFor(term) }
+    const W = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
+    usePal(term)
+    return drawSettings(ui, {
+      W,
+      onSet: (r, v) => setOption($, r, v),
+      onDone: inBand
+        ? async () => { try { await $.store.set('settingsInBand', false) } catch { /* fine */ } invalidate($) }
+        : async () => { try { await $.ui.close({ id: SETTINGS_PANE }) } catch { /* closed */ } },
+    })
+  } catch (err) {
+    const { Text } = $.ui.resolve(e)
+    return h(Text, { color: '#e5484d' }, `token-saver: settings failed: ${err && err.stack ? err.stack.split('\n').slice(0, 2).join(' ') : String(err)}`)
+  }
+}
+
+/** Settings from a press or /tokens settings: the side panel, or the band where this desktop places no panes. */
+async function showSettings($, surface, isFullscreen) {
+  if (surface !== 'terminal' && isFullscreen !== true) {
+    try { await $.store.set('settingsInBand', true) } catch { /* fine */ }
+    invalidate($)
+    return 'band'
+  }
+  return (await openSettingsPane($)) ? 'pane' : null
+}
+
 export function register(on, options = {}) {
   const quietBash = options.quietBash !== false
   const trimOutput = options.trimOutput !== false
@@ -2374,6 +2532,8 @@ export function register(on, options = {}) {
   // Keep-warm pings only make sense against the 5-minute TTL; with the 1-hour TTL a lapse is already rare
   const keepWarmMax = Math.max(0, Math.round(Number(options.keepWarmPings ?? 5)))
   const cardBars = options.cardBars === 'ember' ? 'ember' : 'fire'
+  OPTS = { ...options }
+  settingsMsg = ''
   themeOption = options.theme === 'light' || options.theme === 'dark' ? options.theme : 'auto'
   ENV = { keepWarmMax, cardBars, compactGuard, inputPricePerM }
   keepWarm.want = options.keepWarm !== false && keepWarmMax > 0
@@ -2393,6 +2553,7 @@ export function register(on, options = {}) {
     await loadConfig($, e.cwd)
     await readTheme($)
     bandHidden = false
+    try { await $.store.set('settingsInBand', false) } catch { /* no store */ }
     announcedPct = 0
     try {
       // Once per machine: say what changed, so the first session after install is not a mystery.
@@ -2554,6 +2715,14 @@ export function register(on, options = {}) {
       view.groups = drillGroups(view.breakdown, homeCache)
       const L = liveNumbers(view, { ttl: ttlNow(), now, keepWarmMax, longTtl: ttlNow() === TTL_LONG, totals, rewrites, vetoes })
       return { text: learnText(L, (e.args || '').trim().slice(5)) }
+    }
+    if (arg === 'settings' || arg === 'config') {
+      // the side panel; a desktop that places no panes shows it in the band; text where nothing draws
+      const pres = e.presentation || {}
+      const where = await showSettings($, pres.isFullscreen !== true && bandSurface !== 'terminal' ? bandSurface : 'terminal', pres.isFullscreen)
+      if (where === 'pane') return { text: 'Settings opened. Esc closes it.' }
+      if (where === 'band') return { text: 'Settings are above the prompt. Done puts them away.' }
+      return { text: settingsText() }
     }
     if (arg === 'hide' || arg === 'show') {
       bandHidden = arg === 'hide'
@@ -2980,11 +3149,16 @@ export function register(on, options = {}) {
    */
   on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => renderContext($, e, false))
 
+  /** The Settings side panel: every option, grouped (drawSettings). */
+  on('ui.render', { component: 'Pane', requestId: SETTINGS_PANE }, async ($, e) => renderSettings($, e, false))
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props && e.props.hasSurvey) return next(e)
     bandSurface = e.surface
     const showTokens = cacheBand && lastUsage && !bandHidden
-    if (progressRows.size === 0 && !showTokens) return next(e)
+    let settingsHere = false                                  // desktop without panes: Settings draws in the band
+    if (e.surface !== 'terminal') { try { settingsHere = (await $.store.get('settingsInBand')) === true } catch { /* no store */ } }
+    if (progressRows.size === 0 && !showTokens && !settingsHere) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const Svg = $.ui.resolve(e).Svg
     const Raster = e.surface === 'terminal' ? $.ui.resolve(e).Raster : undefined
@@ -3009,6 +3183,10 @@ export function register(on, options = {}) {
         children.push(h(Box, { flexDirection: 'row' }, ...lead, ...progressTrackText(row, cells, h, Text, Raster), h(Text, { dimColor: true }, ` ${pct} `), close))
       }
       if (row.note) children.push(h(Text, { dimColor: true }, '    ' + row.note))
+    }
+    if (settingsHere) {
+      children.push(await renderSettings($, e, true))
+      return h(Box, { flexDirection: 'column' }, ...children)
     }
     if (showTokens && e.surface !== 'terminal') {
       // desktop: M4's closed frame (title, bar, cache · saved with Clear / Compact / Later); More opens it in place

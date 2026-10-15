@@ -666,6 +666,7 @@ const HEXC = /^#[0-9a-f]{6}$/i
 async function paints($: any, surface: 'terminal' | 'desktop') {
   const ui: any = await mount($, surface)
   if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
+  expect(await ui.find({ key: 'ctx-settings' })).toBeDefined()                // ⚙ opens the Settings panel
   const texts: string[] = [], tracks: string[] = []
   const walk = (n: any) => {
     if (!n || typeof n !== 'object') return
