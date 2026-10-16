@@ -16,7 +16,7 @@ The mod is one module, `plugins/token-saver/hooks/register.js`, plus `glossary.j
 ## Rules this repo has learned (each cost a bug)
 
 - **Desktop collapses plain spaces** between Text pieces: wrap strings in `nbsp()`. The terminal does not.
-- **Desktop theme colour names come out grey**: pass hex from `THEME_HEX`, the terminal keeps names (`ui.hex()` does both).
+- **Desktop theme colour names come out grey**: pass `ui.hex(key)`, the terminal keeps names. Every hex lives in `PALETTES` (dark, light) and is read as `PAL.X`; `usePal(term)` sets `PAL` after the render's last `await`, so never await between it and the tree. New colours go in both palettes.
 - **Desktop redraws every 140 ms lose clicks**: the band redraws on the desktop only on news. A bar animates there by itself: a SMIL loop inside the Svg (`cellBar`'s `anim` for the fire, `glint` for a sweep), never by invalidating.
 - **Pieces that may be squeezed get `wrap: 'truncate'`** (`one()` / `line()` in `drawContextPane`), or they wrap word by word.
 - **Narrow** is `!term && (o.mobile || cells < 72)`: long rows split, cards go one per row, ⤢ is hidden. Mobile is `e.surface === 'mobile'`.

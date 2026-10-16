@@ -160,9 +160,9 @@ function idleView(used, ttl, clock, autoCompactOn) {
   const left = at - clock.idleMs
   if (left > 0) {
     const leftMin = Math.max(1, Math.ceil(left / MINUTE))
-    return v(`≈${leftMin}m`, WARM, clock.idleMs / at, `≈${leftMin}m left`, `${fmtK(used)} becomes a summary ≈${atMin}m after your last reply`, 'grad', 'counting', leftMin)
+    return v(`≈${leftMin}m`, PAL.WARM, clock.idleMs / at, `≈${leftMin}m left`, `${fmtK(used)} becomes a summary ≈${atMin}m after your last reply`, 'grad', 'counting', leftMin)
   }
-  if (clock.warm) return v('Due', WARM, 1, 'Due now', 'Claude Code compacts in the last minutes of the cache', 'grad', 'due')
+  if (clock.warm) return v('Due', PAL.WARM, 1, 'Due now', 'Claude Code compacts in the last minutes of the cache', 'grad', 'due')
   return v('Skipped', 'inactive', 0, 'Did not run this break', 'The cache lapsed first, or Claude Code has not turned it on for you', 'inactive', 'skipped')
 }
 // Progress rows above the prompt, driven by the `progress` tool the model calls.
@@ -627,9 +627,6 @@ function dotHash(col, row, salt) {
   x = Math.imul(x ^ (x >>> 13), 1274126177)
   return (x ^ (x >>> 16)) >>> 0
 }
-const DOT_UNFILLED = '#3a3a40'
-const DOT_TRACK = '#242428'
-const THUMB_TEXT = '#1d1d21'
 let progressTick = 0            // advanced by the band ticker, 70 ms apiece; every frame is a pure function of it
 const TICK_S = 0.07
 const LOOP_DT = 2 * TICK_S       // desktop: a bar's own loop holds a frame this long (the desktop drew every other tick)
@@ -659,7 +656,6 @@ const INKS = {
   green:   { hot: [0.66, 0.90, 0.66], c0: [0.48, 0.78, 0.48], c1: [0.25, 0.50, 0.28] },
   yellow:  { hot: [0.98, 0.86, 0.45], c0: [0.86, 0.72, 0.28], c1: [0.60, 0.48, 0.14] },
 }
-const TRACK_RGB = [0.165, 0.165, 0.18]      // #2a2a2e
 const BAR_H = 14, BAR_ROWS = 3, BAR_RADIUS = 4
 
 function hash21(x, y) {
@@ -755,7 +751,7 @@ function shadeCell(row, cx, cy, cols, rows, t, bursts, seed, pitchPx, W) {
     const inkc = mixN(1, ink.hot[i], q)
     const bed = mixN(ink.c0[i], ink.c1[i], g)
     const col = inkc * alpha + bed * chargeA * (1 - alpha)
-    return Math.min(1, TRACK_RGB[i] * (1 - a * m) + col * m)
+    return Math.min(1, rgb01(PAL.PROG_TRACK)[i] * (1 - a * m) + col * m)
   })
 }
 
@@ -786,8 +782,8 @@ function progressSvg(row, width, marks = []) {
     `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
     `<defs><clipPath id="c${gid}"><rect width="${W}" height="${H}" rx="${BAR_RADIUS}"/></clipPath>` +
     `<linearGradient id="${gid}" x1="0" x2="1"><stop offset="0" stop-color="${toHex(ink.c0)}"/><stop offset="1" stop-color="${toHex(ink.c1)}"/></linearGradient></defs>` +
-    `<rect width="${W}" height="${H}" rx="${BAR_RADIUS}" fill="#2a2a2e"/>` +
-    `<g clip-path="url(#c${gid})">${squares.join('')}${marks.map((m) => `<rect x="${(m.frac * W - 0.5).toFixed(1)}" y="2" width="1" height="${H - 4}" fill="${m.color || '#d4d3cf'}" opacity="0.9"/>`).join('')}</g>` +
+    `<rect width="${W}" height="${H}" rx="${BAR_RADIUS}" fill="${PAL.PROG_TRACK}"/>` +
+    `<g clip-path="url(#c${gid})">${squares.join('')}${marks.map((m) => `<rect x="${(m.frac * W - 0.5).toFixed(1)}" y="2" width="1" height="${H - 4}" fill="${m.color || PAL.PROG_MARK}" opacity="0.9"/>`).join('')}</g>` +
     `<rect x="${px.toFixed(1)}" y="1" width="${pw}" height="${H - 2}" rx="${BAR_RADIUS}" fill="url(#${gid})"/>` +
     `<text x="${(px + pw / 2).toFixed(1)}" y="${H / 2 + 3.5}" text-anchor="middle" font-family="-apple-system, Inter, Segoe UI, sans-serif" font-size="10" font-weight="600" fill="#ffffff">${esc(label)}</text>` +
     `</svg>`
@@ -814,9 +810,9 @@ function rasterCells(columns, colorAt, offset = 0) {
   for (let c = 0; c < columns; c++) {
     const g = c + offset
     const col = colorAt(g)
-    if (col === -2) { words[i++] = 0x2502; words[i++] = 0x9a9aa0; words[i++] = DEFAULT }                     // │ a mark
+    if (col === -2) { words[i++] = 0x2502; words[i++] = parseInt(PAL.PROG_DIM.slice(1), 16); words[i++] = DEFAULT }                     // │ a mark
     else if (g % 2 === 1) { words[i++] = 0x20; words[i++] = DEFAULT; words[i++] = DEFAULT }                  // gap column
-    else { words[i++] = 0x2580; words[i++] = col === null ? 0x33333a : col; words[i++] = DEFAULT }            // ▀ square, dim on the bare track
+    else { words[i++] = 0x2580; words[i++] = col === null ? parseInt(PAL.PROG_BARE.slice(1), 16) : col; words[i++] = DEFAULT }            // ▀ square, dim on the bare track
   }
   return base64(new Uint8Array(words.buffer))
 }
@@ -854,7 +850,7 @@ function progressTrackText(row, cells, h, Text, Raster, marks = []) {
     if (x === pillX) { flush(); parts.push(thumb); x += pillW - 1; continue }
     const c = colorAt(x)
     const key = c === null ? 'u' : c === -2 ? 'm' : toHex([(c >> 16) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255])
-    const props = c === null ? { color: '#3a3a40' } : c === -2 ? { color: '#9a9aa0' } : { color: key }
+    const props = c === null ? { color: PAL.DOT_UNFILLED } : c === -2 ? { color: PAL.PROG_DIM } : { color: key }
     if (key !== runKey) { flush(); runKey = key; runProps = props }
     run += c === null ? '·' : c === -2 ? '│' : '▪'
   }
@@ -890,24 +886,97 @@ const GROWTH_KEEP = 5
 
 /** Threshold colour by marks crossed: calm blue, then amber, Claude orange, red. Theme keys for Text. */
 const ACC = ['permission', 'warning', 'claude', 'error']
-/** The same theme keys as hex, per surface (design/theme/claude-themes.json, dark), for the bars' ink. */
-const THEME_HEX = {
-  terminal: { permission: '#b1b9f9', warning: '#ffc107', claude: '#d77757', error: '#ff6b80', success: '#4eba65', text: '#ffffff', inactive: '#999999', subtle: '#505050' },
-  desktop: { permission: '#74abe2', warning: '#fab219', claude: '#d97757', error: '#dd5353', success: '#65bb30', text: '#faf9f5', inactive: '#9c9a92', subtle: '#4a4945' },
+/**
+ * Every hex the mod draws, per palette (design/theme/claude-themes.json: desktop.dark/light, cli.dark/light).
+ * `hex` is the theme keys per surface: the desktop paints theme names one grey, so its Text gets these; the
+ * terminal keeps names for Text and uses its row for the bars' ink. The rest are the bars' tracks, ticks and inks.
+ */
+const PALETTES = {
+  dark: {
+    hex: {
+      terminal: { permission: '#b1b9f9', warning: '#ffc107', claude: '#d77757', error: '#ff6b80', success: '#4eba65', text: '#ffffff', inactive: '#999999', subtle: '#505050' },
+      desktop: { permission: '#74abe2', warning: '#fab219', claude: '#d97757', error: '#dd5353', success: '#65bb30', text: '#faf9f5', inactive: '#9c9a92', subtle: '#4a4945' },
+    },
+    CACHE_GRAD: ['#629cde', '#a8a38c', '#da934b'],
+    CACHE_TRACK: '#2e2d29',
+    WARM: '#ce9466',
+    COLD: '#629cde',
+    BAR_TRACK: '#2a2a2e',
+    BUFFER_CELL: '#45454b',
+    // Desktop: the pane's ground lifted 7% toward the text, and the buffer 30% on toward faint, as design/m4.html draws them
+    DESK_TRACK: '#353533',
+    DESK_BUFFER: '#545350',
+    MARK_TICK: '#c2c0b6',
+    AUTO_TICK: '#7d7b75',
+    /** Claude's working memory: one family around Claude's orange, so it never reads as a signal colour. */
+    MEM: { messages: '#e07a52', mcp: '#f2a07b', skills: '#c6613f', system: '#f6c9a8', tools: '#9e9a97', memory: '#b98b72', agents: '#d9a888', other: '#a8968a', buffer: '#64635e', free: '#46453f' },
+    // progress rows: unfilled dots, the bar's ground, its marks, a dim mark cell
+    DOT_UNFILLED: '#3a3a40',
+    PROG_TRACK: '#2a2a2e',
+    PROG_MARK: '#d4d3cf',
+    PROG_DIM: '#9a9aa0',
+    PROG_BARE: '#33333a',
+  },
+  light: {
+    hex: {
+      terminal: { permission: '#5769f7', warning: '#966c1e', claude: '#d77757', error: '#ab2b3f', success: '#2c7a39', text: '#000000', inactive: '#666666', subtle: '#afafaf' },
+      desktop: { permission: '#1b67b2', warning: '#966c1e', claude: '#c6613f', error: '#b53333', success: '#2f7613', text: '#141413', inactive: '#73726c', subtle: '#b0aea6' },
+    },
+    CACHE_GRAD: ['#2f78c8', '#8c8672', '#c4711f'],
+    CACHE_TRACK: '#e6e4da',
+    WARM: '#b86a33',
+    COLD: '#2f78c8',
+    BAR_TRACK: '#e2e2e6',
+    BUFFER_CELL: '#c4c4ca',
+    // Desktop light: bg-400 for the ground, the buffer a step darker
+    DESK_TRACK: '#e8e6dc',
+    DESK_BUFFER: '#cfcdc3',
+    MARK_TICK: '#3d3d3a',
+    AUTO_TICK: '#8a8880',
+    MEM: { messages: '#d0643c', mcp: '#e08559', skills: '#b04f2c', system: '#e9a77c', tools: '#8a8682', memory: '#a1715a', agents: '#c78a63', other: '#94826f', buffer: '#c9c7be', free: '#e3e1d7' },
+    DOT_UNFILLED: '#d4d4da',
+    PROG_TRACK: '#e2e2e6',
+    PROG_MARK: '#3d3d3a',
+    PROG_DIM: '#8a8a90',
+    PROG_BARE: '#d0d0d6',
+  },
 }
-const CACHE_GRAD = ['#629cde', '#a8a38c', '#da934b']
-const CACHE_TRACK = '#2e2d29'
-const WARM = '#ce9466'
-const COLD = '#629cde'
-const BAR_TRACK = '#2a2a2e'
-const BUFFER_CELL = '#45454b'
-// Desktop: the pane's ground lifted 7% toward the text, and the buffer 30% on toward faint, as design/m4.html draws them
-const DESK_TRACK = '#353533'
-const DESK_BUFFER = '#545350'
-const MARK_TICK = '#c2c0b6'
-const AUTO_TICK = '#7d7b75'
-/** Claude's working memory: one family around Claude's orange, so it never reads as a signal colour. */
-const MEM = { messages: '#e07a52', mcp: '#f2a07b', skills: '#c6613f', system: '#f6c9a8', tools: '#9e9a97', memory: '#b98b72', agents: '#d9a888', other: '#a8968a', buffer: '#64635e', free: '#46453f' }
+/** The palette the drawing in progress reads. Set by usePal() right before each synchronous draw. */
+let PAL = PALETTES.dark
+let themeOption = 'auto'            // plugin option: auto | dark | light
+let cliTheme = null                 // the terminal's /config Theme row (dark, light, light-daltonized, auto, ...)
+let fgbgLight = null                // COLORFGBG says the terminal's ground is light (for Theme auto)
+/** dark or light for a surface. auto: the terminal follows its /config Theme; the desktop gives a mod no signal, so dark. */
+function themeMode(term) {
+  if (themeOption === 'dark' || themeOption === 'light') return themeOption
+  if (term && cliTheme) {
+    if (/^light/.test(cliTheme)) return 'light'
+    if (/^dark/.test(cliTheme)) return 'dark'
+    if (cliTheme === 'auto' && fgbgLight !== null) return fgbgLight ? 'light' : 'dark'
+  }
+  return 'dark'
+}
+function usePal(term) {
+  PAL = PALETTES[themeMode(term)]
+  return PAL
+}
+/** The ui.hex the drawing passes: a hex goes through, a theme key becomes this palette's hex for the surface. */
+const hexFor = (term) => { const pal = usePal(term).hex[term ? 'terminal' : 'desktop']; return (k) => (String(k).startsWith('#') ? k : pal[k] || pal.inactive) }
+/** COLORFGBG "fg;bg" (or "fg;x;bg"): bg 7 or 9-15 is a light ground. */
+function fgbgIsLight(v) {
+  const bg = Number(String(v || '').split(';').pop())
+  return Number.isFinite(bg) && String(v).includes(';') ? bg === 7 || (bg >= 9 && bg <= 15) : null
+}
+let themeRead = false
+async function readTheme($) {
+  themeRead = true
+  try {
+    const rows = await $.config.list()
+    const row = Array.isArray(rows) && rows.find((r) => r && (r.key ?? r.id) === 'theme')
+    if (row && typeof row.value === 'string') cliTheme = row.value.replace(/\s*\(.*\)$/, '')
+  } catch { /* no config here */ }
+  try { fgbgLight = fgbgIsLight(await $.env.get('COLORFGBG')) } catch { fgbgLight = null }
+}
 const MEM_RANK = ['messages', 'mcp', 'skills', 'system', 'tools', 'memory', 'agents', 'other']
 const BAR_PAD = 8                   // desktop: px of air above and below the context bar, as design/m4.html's 10 px gaps
 const INNER_PAD = 5                 // desktop: the same air, smaller, for the Saved, card and memory bars inside the open pane
@@ -933,7 +1002,7 @@ function pct100(x) {
 const cap1 = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s)
 const rgb01 = (hex) => hexRgb(hex).map((v) => v / 255)
 const mixHex = (a, b, t) => toHex(mix3(rgb01(a), rgb01(b), t))
-const gradAt = (f) => (f < 0.5 ? mixHex(CACHE_GRAD[0], CACHE_GRAD[1], f / 0.5) : mixHex(CACHE_GRAD[1], CACHE_GRAD[2], (f - 0.5) / 0.5))
+const gradAt = (f) => (f < 0.5 ? mixHex(PAL.CACHE_GRAD[0], PAL.CACHE_GRAD[1], f / 0.5) : mixHex(PAL.CACHE_GRAD[1], PAL.CACHE_GRAD[2], (f - 0.5) / 0.5))
 const avgGrowth = () => (growth.length ? growth.reduce((a, b) => a + b, 0) / growth.length : 0)
 function crossedAt(p) {
   return Math.min(3, levels.filter((l) => Number(l.pct) <= p).length)
@@ -1092,7 +1161,7 @@ function geoOf(term, size, H, rows) {
  * which froze and jumped the bar on every scroll tick.
  */
 function cellBar(ui, key, geo, colorAt, o = {}) {
-  const track = o.track || BAR_TRACK
+  const track = o.track || PAL.BAR_TRACK
   if (geo.term) {
     const trackN = parseInt(track.slice(1), 16)
     const num = (c) => (c ? parseInt(toHex(c).slice(1), 16) : trackN)
@@ -1210,10 +1279,10 @@ function cellBar(ui, key, geo, colorAt, o = {}) {
 
 /** The context bar: F1 in the threshold colour, ticks at the marks still ahead, the auto-compact buffer drawn still. */
 function contextBar(ui, geo, view, t, live, padY = 0) {
-  const track = geo.term ? BAR_TRACK : DESK_TRACK
+  const track = geo.term ? PAL.BAR_TRACK : PAL.DESK_TRACK
   const info = fireBar(geo, view.pct / 100, live, 31, inkOf(ui.hex(view.accent)), track)
   const autoX = view.compactPct === null ? Infinity : (view.compactPct / 100) * geo.W
-  const buf = rgb01(geo.term ? BUFFER_CELL : DESK_BUFFER)
+  const buf = rgb01(geo.term ? PAL.BUFFER_CELL : PAL.DESK_BUFFER)
   const at = (tt) => {
     const st = f1Frame(info, tt)
     const colorAt = (cx, cy) => {
@@ -1224,19 +1293,19 @@ function contextBar(ui, geo, view, t, live, padY = 0) {
     return { colorAt, glow: geo.term ? null : f1Glow(info, tt) }
   }
   const now = at(t)
-  const ticks = view.marksAll.filter((m) => m.pct > view.pct && m.pct < 100).map((m) => ({ frac: m.pct / 100, color: MARK_TICK, w: 1.5 }))
-  if (view.compactPct !== null) ticks.push({ frac: view.compactPct / 100, color: AUTO_TICK, w: 1 })
+  const ticks = view.marksAll.filter((m) => m.pct > view.pct && m.pct < 100).map((m) => ({ frac: m.pct / 100, color: PAL.MARK_TICK, w: 1.5 }))
+  if (view.compactPct !== null) ticks.push({ frac: view.compactPct / 100, color: PAL.AUTO_TICK, w: 1 })
   return cellBar(ui, 'ctx-bar', geo, now.colorAt, { track, ticks, padY, glow: now.glow, anim: geo.term ? null : { n: LOOP_N, dt: LOOP_DT, at }, alt: `Context ${view.pct}%` })
 }
 
 /** A card's bar: F1 live ('fire') or calm ('ember'); a dim run to where it is heading; a tick (the time in a window). */
 function cardBar(ui, key, geo, bar, t, style) {
   const grad = bar.ink === 'grad'
-  const inkHex = grad ? CACHE_GRAD[2] : ui.hex(bar.ink || 'inactive')
-  const ink = grad ? { hot: mix3(rgb01(CACHE_GRAD[2]), WHITE, 0.45), c0: rgb01(CACHE_GRAD[2]), c1: rgb01(CACHE_GRAD[0]) } : inkOf(inkHex)
+  const inkHex = grad ? PAL.CACHE_GRAD[2] : ui.hex(bar.ink || 'inactive')
+  const ink = grad ? { hot: mix3(rgb01(PAL.CACHE_GRAD[2]), WHITE, 0.45), c0: rgb01(PAL.CACHE_GRAD[2]), c1: rgb01(PAL.CACHE_GRAD[0]) } : inkOf(inkHex)
   const lit = bar.fill > 0
-  const info = fireBar(geo, bar.fill, style === 'fire', seedOf(key), ink, CACHE_TRACK)
-  const dim = bar.ext > bar.fill ? rgb01(mixHex(inkHex, CACHE_TRACK, 0.55)) : null
+  const info = fireBar(geo, bar.fill, style === 'fire', seedOf(key), ink, PAL.CACHE_TRACK)
+  const dim = bar.ext > bar.fill ? rgb01(mixHex(inkHex, PAL.CACHE_TRACK, 0.55)) : null
   const at = (tt) => {
     const st = lit ? f1Frame(info, tt) : null
     const colorAt = (cx, cy) => {
@@ -1249,7 +1318,7 @@ function cardBar(ui, key, geo, bar, t, style) {
   }
   const now = at(t), colorAt = now.colorAt
   const ticks = bar.tick === null || bar.tick === undefined ? [] : [{ frac: bar.tick, color: ui.hex('text'), w: 2 }]
-  return cellBar(ui, key, geo, colorAt, { track: CACHE_TRACK, ticks, glow: now.glow, anim: geo.term || !lit ? null : { n: LOOP_N, dt: LOOP_DT, at }, radius: 3, padY: geo.term ? 0 : INNER_PAD, alt: key })
+  return cellBar(ui, key, geo, colorAt, { track: PAL.CACHE_TRACK, ticks, glow: now.glow, anim: geo.term || !lit ? null : { n: LOOP_N, dt: LOOP_DT, at }, radius: 3, padY: geo.term ? 0 : INNER_PAD, alt: key })
 }
 
 /** The Saved bar: three greens, one per source; a soft white glint sweeps across the fill every 3.2 s. */
@@ -1270,7 +1339,7 @@ function savedBar(ui, geo, parts, share, t) {
     return k > 0.01 ? mix3(b, WHITE, k) : b
   } : base
   const glint = geo.term ? null : { from: -60, to: fillW + 60, dur: 3.2, sigma: 22, peak: 0.55, end: fillW }
-  return cellBar(ui, 'saved-bar', geo, colorAt, { track: CACHE_TRACK, radius: 3, padY: geo.term ? 0 : INNER_PAD, glint, alt: `Saved, ${Math.round(share * 100)}% of input` })
+  return cellBar(ui, 'saved-bar', geo, colorAt, { track: PAL.CACHE_TRACK, radius: 3, padY: geo.term ? 0 : INNER_PAD, glint, alt: `Saved, ${Math.round(share * 100)}% of input` })
 }
 
 /** Working memory: a cell per slice of the window by kind; a light wave runs through the used part every 2.8 s. */
@@ -1300,7 +1369,7 @@ function memoryBar(ui, geo, parts, t) {
 
 /** One small square for the closed pane and the band, in the colour of the cache's word (Frozen … Very warm). */
 function cacheMini(ui, cache) {
-  const c = cache.color || CACHE_TRACK
+  const c = cache.color || PAL.CACHE_TRACK
   if (ui.term || typeof ui.Svg !== 'function') return [h(ui.Text, { key: 'mini', color: c }, '■')]
   return [h(ui.Svg, { source: `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10"><rect x="1" y="1" width="8" height="8" rx="2" fill="${c}"/></svg>`, alt: `Cache ${cache.accent}`, width: 10, height: 10 })]
 }
@@ -1401,8 +1470,8 @@ function drillGroups(b, home) {
  * minutes: the last third of a short TTL, the last five of a long one), Chill, Warm, Very warm (just written).
  */
 function warmthLevel(clock, ttl) {
-  if (!clock || !clock.known) return { word: 'Not yet', color: CACHE_TRACK }
-  if (!clock.warm) return { word: 'Frozen', color: mixHex(COLD, CACHE_TRACK, 0.45) }
+  if (!clock || !clock.known) return { word: 'Not yet', color: PAL.CACHE_TRACK }
+  if (!clock.warm) return { word: 'Frozen', color: mixHex(PAL.COLD, PAL.CACHE_TRACK, 0.45) }
   const f = clock.leftMs / ttl
   if (clock.leftMs <= Math.min(5 * MINUTE, ttl / 3)) return { word: 'Cold', color: gradAt(0.05) }
   if (f <= 0.55) return { word: 'Chill', color: gradAt(0.4) }
@@ -1547,10 +1616,10 @@ function contextView(usage, ttl, usageLast, clock, stats) {
     const deferred = all.filter((x) => x.deferred && (Number(x.c.tokens) || 0) > 0)
     rows = [...usedRows, ...tail, ...deferred].map((x) => ({
       key: x.key, name: x.deferred && !/deferred/i.test(x.c.name) ? `${x.c.name} (deferred)` : String(x.c.name), tokens: Number(x.c.tokens) || 0,
-      deferred: x.deferred, color: x.deferred ? MEM.buffer : MEM[x.key] || MEM.other,
+      deferred: x.deferred, color: x.deferred ? PAL.MEM.buffer : PAL.MEM[x.key] || PAL.MEM.other,
     }))
   } else {
-    rows = [{ key: 'messages', name: 'Used', tokens: used, deferred: false, color: MEM.messages }, ...(window ? [{ key: 'free', name: 'Free space', tokens: Math.max(0, window - used), deferred: false, color: MEM.free }] : [])]
+    rows = [{ key: 'messages', name: 'Used', tokens: used, deferred: false, color: PAL.MEM.messages }, ...(window ? [{ key: 'free', name: 'Free space', tokens: Math.max(0, window - used), deferred: false, color: PAL.MEM.free }] : [])]
   }
   for (const r of rows) r.pct = r.deferred ? '—' : `${((100 * r.tokens) / measure).toFixed(1)}%`
   const live = rows.filter((r) => !r.deferred)
@@ -1652,7 +1721,7 @@ function billCard(view, now, ttl, keepWarmMax, longTtl) {
     const missed = !Number.isFinite(keepWarm.streak)
     const usedPings = missed ? keepWarmMax : Math.min(keepWarm.streak, keepWarmMax)
     const every = Math.max(1, Math.round((ttl - KEEP_WARM_LEAD) / MINUTE))
-    return { title: 'Keep-warm', accent: 'On', tone: WARM, bar: { fill: usedPings / keepWarmMax, ink: WARM }, strong: `Pings ${usedPings} of ${keepWarmMax}`, rest: ' · 0.1× each',
+    return { title: 'Keep-warm', accent: 'On', tone: PAL.WARM, bar: { fill: usedPings / keepWarmMax, ink: PAL.WARM }, strong: `Pings ${usedPings} of ${keepWarmMax}`, rest: ' · 0.1× each',
       foot: missed ? 'Stopped: the cache had already gone' : `Warm ${(keepWarmMax - usedPings) * every}m more if away` }
   }
   const why = keepWarm.stopped ? cap1(keepWarm.stopped) : longTtl ? 'One-hour cache' : 'Turned off'
@@ -1725,6 +1794,7 @@ function drawContextPane(ui, view, o) {
     // desktop: native buttons, as design/m4.html and the app's banners draw them; the terminal keeps bare labels
     row({ gap: 1, flexShrink: 0 }, [                                   // spaced as Clear / Compact / Later are
       o.onPopOut && expanded && !narrow ? h(Button, { key: 'ctx-popout', label: '⤢', ...plainT, onPress: o.onPopOut }) : null,
+      o.onSettings && !narrow ? h(Button, { key: 'ctx-settings', label: '⚙', ...plainT, onPress: o.onSettings }) : null,
       h(Button, { key: 'ctx-explain', label: '?', ...plainT, onPress: o.onExplain }),
       o.onExpand ? h(Button, { key: 'ctx-expand', label: expanded ? 'Less' : 'More', ...plainT, onPress: o.onExpand }) : null,
     ]),
@@ -1770,7 +1840,7 @@ function drawContextPane(ui, view, o) {
   // 4. Saved: the headline of the whole plugin
   const sv = view.savings
   const ok = ui.hex('success')
-  const shades = [ok, mixHex(ok, ui.hex('text'), 0.4), mixHex(ok, CACHE_TRACK, 0.5), mixHex(ok, CACHE_TRACK, 0.75)]
+  const shades = [ok, mixHex(ok, ui.hex('text'), 0.4), mixHex(ok, PAL.CACHE_TRACK, 0.5), mixHex(ok, PAL.CACHE_TRACK, 0.75)]
   const srcSum = sv.sources.reduce((n, s) => n + s.tok, 0) || 1
   const parts = sv.sources.map((s, i) => ({ f: (sv.share * s.tok) / srcSum, color: shades[i] }))
   const cut = `Cut ${Math.round(sv.share * 100)}% of input`
@@ -2146,7 +2216,7 @@ function listText(view, o) {
   const out = [line('┌', '┬', '┐')]
   for (const r of rows) out.push(`│${cell(r[0], w0)}│${cell(r[1], w1)}│${cell(r[2], w2)}│`)
   out.push(line('└', '┴', '┘'))
-  out.push(dots('/tokens opens the pane', '/tokens learn explains each row', '/tokens hide|show the band', 'marks: ~/.claude/token-saver/thresholds.json', o.compactGuard ? 'a vetoed /compact: /compact force' : '',
+  out.push(dots('/tokens opens the pane', '/tokens learn explains each row', '/tokens hide|show the band', '/tokens settings the options', 'marks: ~/.claude/token-saver/thresholds.json', o.compactGuard ? 'a vetoed /compact: /compact force' : '',
     view.compactHint1M ? low(view.compactHint1M) : ''))   // a 1M window compacting near the top: the one setting worth changing today
   return out.join('\n')
 }
@@ -2290,16 +2360,17 @@ const ttl = ttlNow(), longTtl = ttl === TTL_LONG
   try {
     const el = $.ui.resolve(e)
     const term = e.surface === 'terminal'
-    const pal = THEME_HEX[term ? 'terminal' : 'desktop']
+    if (term && !themeRead) await readTheme($)
     const ui = {
       Box: el.Box, Text: el.Text, Button: el.Button, Svg: term ? undefined : el.Svg, Raster: term ? el.Raster : undefined, term,
-      hex: (k) => (String(k).startsWith('#') ? k : pal[k] || pal.inactive),
+      hex: hexFor(term),
     }
     const popped = !inBand && ctxPopped                             // the Pane ⤢ opened: always open, its own frame
     const W = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
     const now = await $.clock.now()
     const data = await loadContext($, now, W)
     if (homeCache === null) { try { homeCache = await homeDir($) } catch { homeCache = '' } }
+    usePal(term)                                                    // no await from here to the tree: PAL is this surface's
     const clock = cacheClock(now, ttl)
     const view = contextView(data.usage, ttl, lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
     view.groups = drillGroups(view.breakdown, homeCache)
@@ -2317,6 +2388,7 @@ const ttl = ttlNow(), longTtl = ttl === TTL_LONG
       onReceipt: () => { ctxReceipt = !ctxReceipt; invalidate($) },
       onGroup: (id) => { if (ctxGroups.has(id)) ctxGroups.delete(id); else ctxGroups.add(id); invalidate($) },
       onRun: (cmd) => runFromPane($, cmd),
+      onSettings: () => showSettings($, e.surface, e.viewport && e.viewport.isFullscreen),
       onClear: () => clearSession($),
       onCompact: () => compactNow($, ttl, compactGuard),
       onLater: inBand ? () => {
@@ -2332,6 +2404,162 @@ const ttl = ttlNow(), longTtl = ttl === TTL_LONG
 }
 
 
+
+/* ── Settings: the side panel ────────────────────────────────────────────────────────────────────────────────────
+   Every option of plugin.json, grouped, one control each. A change is $.config.set on `token-saver.<key>`, the same
+   row /config shows, so there is one source; Claude Code then reloads the module with the new options. The panel
+   shows the new value at once, and the palette and card bars switch before the reload. */
+const SETTINGS_PANE = 'settings'
+const SETTINGS = [
+  { group: 'Look', rows: [
+    { key: 'theme', label: 'Palette', kind: 'choice', options: ['auto', 'dark', 'light'], def: 'auto',
+      hint: "Auto follows the terminal's /config Theme. The desktop app does not tell a mod its appearance, so Auto is dark there: pick Light in light mode." },
+    { key: 'cardBars', label: 'Card bars', kind: 'choice', options: ['fire', 'ember'], def: 'fire', hint: 'Ember: a calm glow at each head, so only the context bar moves.' },
+    { key: 'cacheBand', label: 'Band above the prompt', kind: 'bool', def: true },
+    { key: 'compactHint', label: 'Cache-aware hint on the band', kind: 'bool', def: true },
+  ] },
+  { group: 'Cache', rows: [
+    { key: 'longCacheTtl', label: 'Prompt cache TTL is 1 hour', kind: 'bool', def: false, hint: 'Off: the TTL follows Claude Code.' },
+    { key: 'keepWarm', label: 'Keep the cache warm while idle', kind: 'bool', def: true, hint: 'API billing on the 5-minute cache only. One tiny request at about 0.1× input, before it lapses.' },
+    { key: 'keepWarmPings', label: 'Pings per idle stretch', kind: 'step', steps: [0, 1, 2, 3, 4, 5, 6, 8, 10, 15, 20], def: 5, hint: 'About 4 minutes apart. 0 turns keep-warm off.' },
+  ] },
+  { group: 'Guards', rows: [
+    { key: 'compactGuard', label: 'Veto /compact on a cold cache', kind: 'bool', def: true, hint: 'Override once with /compact force.' },
+    { key: 'modelGuard', label: 'Price a model switch', kind: 'bool', def: true },
+  ] },
+  { group: 'Output', rows: [
+    { key: 'quietBash', label: 'Rewrite noisy bash', kind: 'bool', def: true },
+    { key: 'trimOutput', label: 'Trim huge successful output', kind: 'bool', def: true, hint: 'Failures are left intact.' },
+    { key: 'suggestSkills', label: 'Suggest parked skills at start', kind: 'bool', def: true },
+  ] },
+  { group: 'Price', rows: [
+    { key: 'inputPricePerM', label: 'Input price, $ per million tokens', kind: 'step', steps: [0, 0.8, 1, 3, 5, 15], def: 0,
+      hint: "Puts dollars on the savings. 0 shows tokens only. Check your model's price." },
+  ] },
+]
+let OPTS = {}                       // the options as this load got them, with the panel's changes laid over
+let settingsMsg = ''
+const optOf = (r) => (OPTS[r.key] === undefined ? r.def : OPTS[r.key])
+
+async function setOption($, r, value) {
+  const was = OPTS[r.key]
+  const apply = (v) => {
+    OPTS[r.key] = v
+    if (r.key === 'theme') themeOption = v === 'light' || v === 'dark' ? v : 'auto'
+    if (r.key === 'cardBars') ENV = { ...ENV, cardBars: v === 'ember' ? 'ember' : 'fire' }
+  }
+  apply(value)
+  settingsMsg = ''
+  invalidate($)
+  try {
+    const res = await $.config.set({ key: `token-saver.${r.key}`, value })
+    if (res && res.deny) throw new Error(typeof res.deny === 'string' ? res.deny : res.deny.reason || 'refused')
+  } catch (err) {
+    apply(was)
+    settingsMsg = `${r.label} not saved: ${String(err && err.message ? err.message : err).replace(/^token-saver:\s*/, '')}`
+    invalidate($)
+  }
+}
+
+/** Open the Settings panel. False where it is not placed (the caller falls back). */
+async function openSettingsPane($) {
+  try {
+    const opened = await $.ui.open({ id: SETTINGS_PANE, title: 'Token-saver settings', focus: true, closeOnEscape: true, holdToasts: true })
+    if (!opened || opened.isPlaced !== false) return true
+    toast($, `token-saver: Settings not shown: ${opened.reason || 'the window is too narrow'}. /tokens settings lists them.`, 8000)
+  } catch (err) {
+    toast($, `token-saver: Settings could not open: ${err && err.message ? err.message : String(err)}`, 8000)
+  }
+  return false
+}
+
+/** Settings as text, for /tokens settings where no panel draws. */
+function settingsText() {
+  const out = ['token-saver settings (change them in /config, search token-saver, or in the Settings panel)']
+  for (const g of SETTINGS) {
+    out.push('', g.group)
+    for (const r of g.rows) {
+      const v = optOf(r)
+      out.push(`  ${r.label.padEnd(36)} ${r.kind === 'bool' ? (v ? 'On' : 'Off') : r.kind === 'choice' ? cap1(String(v)) : String(v)}`)
+    }
+  }
+  return out.join('\n')
+}
+
+/** The panel's tree. `o.onDone` closes it (the Pane, or the band on a desktop that places no panes). */
+function drawSettings(ui, o) {
+  const { Box, Text, Button, term } = ui
+  const cells = o.W
+  const narrow = cells < 60
+  const t = (s, color, extra) => h(Text, { ...(color ? { color: term ? color : ui.hex(color) } : {}), ...extra }, term ? s : nbsp(s))
+  const row = (props, kids) => h(Box, { flexDirection: 'row', ...props }, ...kids.filter(Boolean))
+  const col = (props, kids) => h(Box, { flexDirection: 'column', ...props }, ...kids.filter(Boolean))
+  const grow = () => h(Box, { flexGrow: 1 })
+  const btn = (key, label, on, onPress) => h(Button, { key, label, onPress, ...(on ? { variant: 'primary' } : { dimColor: true }) })
+  const control = (r) => {
+    const v = optOf(r)
+    if (r.kind === 'bool') return [h(Button, { key: `set-${r.key}`, label: v ? 'On' : 'Off', onPress: () => o.onSet(r, !v), ...(v ? { variant: 'primary' } : {}) })]
+    if (r.kind === 'choice') return r.options.map((x) => btn(`set-${r.key}:${x}`, cap1(x), x === v, () => { if (x !== v) o.onSet(r, x) }))
+    const steps = r.steps.includes(Number(v)) ? r.steps : [...r.steps, Number(v)].sort((a, b) => a - b)
+    const i = steps.indexOf(Number(v))
+    return [
+      h(Button, { key: `set-${r.key}:down`, label: '−', onPress: () => { if (i > 0) o.onSet(r, steps[i - 1]) }, ...(i > 0 ? {} : { dimColor: true }) }),
+      t(` ${String(v)} `, 'text'),
+      h(Button, { key: `set-${r.key}:up`, label: '+', onPress: () => { if (i < steps.length - 1) o.onSet(r, steps[i + 1]) }, ...(i < steps.length - 1 ? {} : { dimColor: true }) }),
+    ]
+  }
+  const kids = [
+    row({ alignItems: 'center' }, [
+      t('Settings', 'text', { wrap: 'truncate' }), grow(),
+      o.onDone ? h(Button, { key: 'settings-done', label: 'Done', ...(term ? { plain: true } : {}), onPress: o.onDone }) : null,
+    ]),
+  ]
+  for (const g of SETTINGS) {
+    kids.push(t(' '), t(g.group, 'claude'))
+    for (const r of g.rows) {
+      const ctl = row({ gap: 1, flexShrink: 0, alignItems: 'center' }, control(r))
+      const label = t(r.label, 'text', { wrap: 'truncate' })
+      kids.push(narrow
+        ? col({}, [label, ctl])
+        : row({ alignItems: 'center' }, [row({ flexShrink: 1, overflow: 'hidden' }, [label]), grow(), t(' '), ctl]))
+      if (r.hint) kids.push(t(r.hint, 'inactive', { wrap: 'wrap' }))
+    }
+  }
+  kids.push(t(' '), t(settingsMsg || 'Saved to /config as token-saver.<name>. A change reloads the mod.', settingsMsg ? 'error' : 'inactive', { wrap: 'wrap' }))
+  return col({ width: cells }, kids)
+}
+
+async function renderSettings($, e, inBand) {
+  try {
+    const el = $.ui.resolve(e)
+    const term = e.surface === 'terminal'
+    if (term && !themeRead) await readTheme($)
+    const ui = { Box: el.Box, Text: el.Text, Button: el.Button, term, hex: hexFor(term) }
+    const W = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
+    usePal(term)
+    return drawSettings(ui, {
+      W,
+      onSet: (r, v) => setOption($, r, v),
+      onDone: inBand
+        ? async () => { try { await $.store.set('settingsInBand', false) } catch { /* fine */ } invalidate($) }
+        : async () => { try { await $.ui.close({ id: SETTINGS_PANE }) } catch { /* closed */ } },
+    })
+  } catch (err) {
+    const { Text } = $.ui.resolve(e)
+    return h(Text, { color: '#e5484d' }, `token-saver: settings failed: ${err && err.stack ? err.stack.split('\n').slice(0, 2).join(' ') : String(err)}`)
+  }
+}
+
+/** Settings from a press or /tokens settings: the side panel, or the band where this desktop places no panes. */
+async function showSettings($, surface, isFullscreen) {
+  if (surface !== 'terminal' && isFullscreen !== true) {
+    try { await $.store.set('settingsInBand', true) } catch { /* fine */ }
+    invalidate($)
+    return 'band'
+  }
+  return (await openSettingsPane($)) ? 'pane' : null
+}
+
 export function register(on, options = {}) {
   const quietBash = options.quietBash !== false
   const trimOutput = options.trimOutput !== false
@@ -2345,13 +2573,28 @@ export function register(on, options = {}) {
   // Keep-warm pings only make sense against the 5-minute TTL; with the 1-hour TTL a lapse is already rare
   const keepWarmMax = Math.max(0, Math.round(Number(options.keepWarmPings ?? 5)))
   const cardBars = options.cardBars === 'ember' ? 'ember' : 'fire'
+  OPTS = { ...options }
+  settingsMsg = ''
+  themeOption = options.theme === 'light' || options.theme === 'dark' ? options.theme : 'auto'
   ENV = { keepWarmMax, cardBars, compactGuard, inputPricePerM }
   keepWarm.want = options.keepWarm !== false && keepWarmMax > 0
   keepWarm.on = keepWarm.want && ttlNow() !== TTL_LONG
 
+  // /theme and /config Theme: the terminal's palette follows the new row once it is saved
+  on('config.set', async ($, e, next) => {
+    const r = await next(e)
+    if (e && e.key === 'theme' && !(r && r.deny)) {
+      const v = r && typeof r.value === 'string' ? r.value : e.value
+      if (typeof v === 'string') { cliTheme = v.replace(/\s*\(.*\)$/, ''); invalidate($) }
+    }
+    return r
+  })
+
   on('session.start', async ($, e, next) => {
     await loadConfig($, e.cwd)
+    await readTheme($)
     bandHidden = false
+    try { await $.store.set('settingsInBand', false) } catch { /* no store */ }
     announcedPct = 0
     try {
       // Once per machine: say what changed, so the first session after install is not a mystery.
@@ -2513,6 +2756,14 @@ export function register(on, options = {}) {
       view.groups = drillGroups(view.breakdown, homeCache)
       const L = liveNumbers(view, { ttl: ttlNow(), now, keepWarmMax, longTtl: ttlNow() === TTL_LONG, totals, rewrites, vetoes })
       return { text: learnText(L, (e.args || '').trim().slice(5)) }
+    }
+    if (arg === 'settings' || arg === 'config') {
+      // the side panel; a desktop that places no panes shows it in the band; text where nothing draws
+      const pres = e.presentation || {}
+      const where = await showSettings($, pres.isFullscreen !== true && bandSurface !== 'terminal' ? bandSurface : 'terminal', pres.isFullscreen)
+      if (where === 'pane') return { text: 'Settings opened. Esc closes it.' }
+      if (where === 'band') return { text: 'Settings are above the prompt. Done puts them away.' }
+      return { text: settingsText() }
     }
     if (arg === 'hide' || arg === 'show') {
       bandHidden = arg === 'hide'
@@ -2939,16 +3190,22 @@ export function register(on, options = {}) {
    */
   on('ui.render', { component: 'Pane', requestId: CONTEXT_PANE }, async ($, e) => renderContext($, e, false))
 
+  /** The Settings side panel: every option, grouped (drawSettings). */
+  on('ui.render', { component: 'Pane', requestId: SETTINGS_PANE }, async ($, e) => renderSettings($, e, false))
+
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props && e.props.hasSurvey) return next(e)
     bandSurface = e.surface
     const showTokens = cacheBand && lastUsage && !bandHidden
-    if (progressRows.size === 0 && !showTokens) return next(e)
+    let settingsHere = false                                  // desktop without panes: Settings draws in the band
+    if (e.surface !== 'terminal') { try { settingsHere = (await $.store.get('settingsInBand')) === true } catch { /* no store */ } }
+    if (progressRows.size === 0 && !showTokens && !settingsHere) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
     const Svg = $.ui.resolve(e).Svg
     const Raster = e.surface === 'terminal' ? $.ui.resolve(e).Raster : undefined
     const width = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
     const children = []
+    usePal(e.surface === 'terminal')
     for (const row of progressRows.values()) {
       const pct = `${Math.round(row.shown * 100)}%`.padStart(4)
       const labelW = Math.min(28, Math.max(10, row.label.length))
@@ -2968,6 +3225,10 @@ export function register(on, options = {}) {
       }
       if (row.note) children.push(h(Text, { dimColor: true }, '    ' + row.note))
     }
+    if (settingsHere) {
+      children.push(await renderSettings($, e, true))
+      return h(Box, { flexDirection: 'column' }, ...children)
+    }
     if (showTokens && e.surface !== 'terminal') {
       // desktop: M4's closed frame (title, bar, cache · saved with Clear / Compact / Later); More opens it in place
       children.push(await renderContext($, e, true))
@@ -2977,12 +3238,14 @@ export function register(on, options = {}) {
       try {
         // the terminal: M4's closed pane in one row: a short fire bar, the percent, the cache cells and words, what was saved, Open ×
         const term = true
-        const pal = THEME_HEX[term ? 'terminal' : 'desktop']
+        if (!themeRead) await readTheme($)
         const el = $.ui.resolve(e)
-        const ui = { Box, Text, Button, Svg: term ? undefined : el.Svg, Raster: term ? el.Raster : undefined, term, hex: (k) => (String(k).startsWith('#') ? k : pal[k] || pal.inactive) }
+        const ui = { Box, Text, Button, Svg: term ? undefined : el.Svg, Raster: term ? el.Raster : undefined, term, hex: hexFor(term) }
         const now = await $.clock.now()
+        const usage = await bandUsage($, now)
+        usePal(term)                                             // no await from here to the tree
         const clock = cacheClock(now, ttlNow())
-        const view = contextView(await bandUsage($, now), ttlNow(), lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
+        const view = contextView(usage, ttlNow(), lastUsage, clock, { rewrites, savedChars, vetoes, totals, rate: inputPricePerM, limitBase, month: monthSaved, keepWarm, agents: { types: agentTypes, weeks: agentWeeks } })
         view.compactPct = null                                   // no breakdown here: marks only
         const c = view.cache
         const t = (str, color) => h(Text, color ? { color:term ? color : ui.hex(color) } : null, term ? str : nbsp(str))
