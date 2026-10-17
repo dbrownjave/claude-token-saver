@@ -2,16 +2,23 @@
 """SessionStart auditor. Prints a short budget line to Claude context.
 
 Keep this output tiny. SessionStart stdout is injected into context.
+
+The startup figure is measured, never estimated: scripts/token-audit.py reads the first assistant turn of this
+project's recent transcripts (input + cache write + cache read). No token-count API call happens here.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import statistics
 import sys
 from pathlib import Path
 
 MAX_CONTEXT_CHARS = 700
-WARN_CLAUDE_MD = 4000  # ~1k tokens
+SESSIONS = 10
+MAX_DUPLICATES = 2
+WARN_CLAUDE_MD = 4000  # bytes
 WARN_RULES = 8000
 WARN_SETTINGS = 6000
 
@@ -24,25 +31,11 @@ def count_chars(path: Path) -> int:
 
 
 def collect(root: Path) -> dict:
-    claude_md = root / "CLAUDE.md"
-    settings = root / ".claude" / "settings.json"
+    """File sizes for the warnings. Sizes in bytes, never turned into tokens."""
     rules_dir = root / ".claude" / "rules"
-    skills_dir = root / ".claude" / "skills"
     mcp = root / ".mcp.json"
 
-    rules = 0
-    rule_files = 0
-    if rules_dir.is_dir():
-        for p in rules_dir.rglob("*.md"):
-            rules += count_chars(p)
-            rule_files += 1
-
-    skills = 0
-    skill_files = 0
-    if skills_dir.is_dir():
-        for p in skills_dir.rglob("SKILL.md"):
-            skills += count_chars(p)
-            skill_files += 1
+    rules = sum(count_chars(p) for p in rules_dir.rglob("*.md")) if rules_dir.is_dir() else 0
 
     mcp_servers = 0
     if mcp.is_file():
@@ -53,18 +46,60 @@ def collect(root: Path) -> dict:
             mcp_servers = -1
 
     return {
-        "claude_md": count_chars(claude_md),
-        "settings": count_chars(settings),
+        "claude_md": count_chars(root / "CLAUDE.md"),
         "rules": rules,
-        "rule_files": rule_files,
-        "skills": skills,
-        "skill_files": skill_files,
         "mcp_servers": mcp_servers,
     }
 
 
-def tok(n: int) -> int:
-    return max(0, n // 4)
+def kb(n: int) -> str:
+    return f"{n / 1024:.1f} KB"
+
+
+def load_audit():
+    """scripts/token-audit.py as a module, from the installed layout or the pack repo. None if missing or broken."""
+    here = Path(__file__).resolve().parent
+    candidates = [
+        here.parent / "scripts" / "token-audit.py",         # installed: ~/.claude/token-saver/{hooks,scripts}
+        here.parent.parent / "scripts" / "token-audit.py",  # in the pack repo: .claude/hooks -> scripts
+    ]
+    script = next((c for c in candidates if c.is_file()), None)
+    if not script:
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("token_audit", script)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception:
+        return None
+
+
+def startup_lines(root: Path, audit) -> list[str]:
+    """Measured startup of the last session and the median, plus rules that load twice. Never fails the hook."""
+    if audit is None:
+        return []
+    out = []
+    try:
+        totals = [t["total"] for t in audit.measured(root, SESSIONS)]
+    except Exception:
+        totals = []
+    if totals:
+        line = f"Startup (measured): last session {totals[-1]:,} tokens"
+        if len(totals) > 1:
+            line += f", median {int(statistics.median(totals)):,} over {len(totals)} sessions"
+        out.append(line + ".")
+    try:
+        _, files, _ = audit.on_disk(root)
+        dups = audit.duplicates(files)
+    except Exception:
+        dups = []
+    if dups:
+        here = str(root)
+        pairs = [f"{audit.rel(d['a'], here)} + {audit.rel(d['b'], here)}" for d in dups[:MAX_DUPLICATES]]
+        more = f" (+{len(dups) - MAX_DUPLICATES} more)" if len(dups) > MAX_DUPLICATES else ""
+        out.append("Loaded twice: " + "; ".join(pairs) + more + ". Keep one copy.")
+    return out
 
 
 def skills_hint(root: Path) -> str:
@@ -90,11 +125,9 @@ def skills_hint(root: Path) -> str:
 
 def main() -> int:
     raw = sys.stdin.read()
-    source = "startup"
     cache_expired = None
     try:
         payload = json.loads(raw) if raw.strip() else {}
-        source = payload.get("source") or source
         cache_expired = payload.get("prompt_cache_likely_expired")
     except Exception:
         payload = {}
@@ -103,22 +136,14 @@ def main() -> int:
     stats = collect(root)
     warns = []
     if stats["claude_md"] > WARN_CLAUDE_MD:
-        warns.append(f"CLAUDE.md ~{tok(stats['claude_md'])} tok (trim under 1k)")
+        warns.append(f"CLAUDE.md is {kb(stats['claude_md'])} (trim under {kb(WARN_CLAUDE_MD)})")
     if stats["rules"] > WARN_RULES:
-        warns.append(f"rules ~{tok(stats['rules'])} tok")
+        warns.append(f"project rules are {kb(stats['rules'])}")
     if stats["mcp_servers"] and stats["mcp_servers"] > 3:
         warns.append(f"{stats['mcp_servers']} MCP servers load every turn — disable unused in /mcp")
 
-    lines = [
-        "Token budget active. One task per session. /clear on topic change.",
-        (
-            f"startup {source}: CLAUDE.md ~{tok(stats['claude_md'])} tok, "
-            f"rules {stats['rule_files']} files ~{tok(stats['rules'])} tok, "
-            f"skills {stats['skill_files']} ~{tok(stats['skills'])} tok"
-            + (f", mcp {stats['mcp_servers']}" if stats["mcp_servers"] else "")
-            + "."
-        ),
-    ]
+    lines = ["Token budget active. One task per session. /clear on topic change."]
+    lines += startup_lines(root, load_audit())
     if cache_expired is True:
         lines.append("Prompt cache likely expired. Prefer /clear over compacting a cold history.")
     if warns:
