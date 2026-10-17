@@ -1,6 +1,11 @@
 {
   "name": "token-saver",
-  "owner": { "name": "token-saver" },
+  "owner": {
+    "name": "token-saver"
+  },
+  "metadata": {
+    "description": "Token Saver for Claude Code: quiet bash, trim huge output, cache band, /tokens. No network."
+  },
   "plugins": [
     {
       "name": "token-saver",

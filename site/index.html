@@ -40,33 +40,15 @@
   .install button:hover { color: var(--text); background: #353430; }
   .sub { color: var(--faint); font-size: 14px; margin-top: 12px; }
   .sub a { color: var(--dim); }
-
-  /* The pane, as the desktop draws it */
-  .pane { min-width: 0; background: #2b2a27; border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; font-size: 14px; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
-  .row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .row > * { white-space: nowrap; flex-shrink: 0; }
-  .row > .ell { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* A real screenshot of the pane */
+  .shot { margin: 0; min-width: 0; }
+  .shot img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+  .shot figcaption { color: var(--faint); font-size: 13px; margin-top: 10px; }
   .grow { flex: 1; }
   .k { color: var(--dim); }
   .v { color: var(--text); }
   .ok { color: var(--ok); }
   .warn { color: var(--warn); }
-  .btn { border: 1px solid var(--line); border-radius: 7px; padding: 3px 10px; color: var(--dim); font-size: 13px; background: #353430; }
-  .btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
-  .bar { height: 14px; border-radius: 7px; background: var(--track); overflow: hidden; margin: 10px 0 14px; position: relative; }
-  .bar > i { position: absolute; inset: 0; width: var(--w); background: repeating-linear-gradient(90deg, #f3efe7 0 4px, #c9c4b8 4px 5px, transparent 5px 7px); opacity: .95; border-radius: 7px; }
-  .bar .mark { position: absolute; top: 2px; bottom: 2px; width: 1px; background: #d4d3cf; opacity: .8; }
-  .cells { display: inline-flex; gap: 2px; }
-  .cells i { width: 5px; height: 5px; border-radius: 1px; background: var(--track); }
-  .cells i.on { background: var(--warm); }
-  .cells i.on.c1 { background: #629cde; } .cells i.on.c2 { background: #86a0b5; } .cells i.on.c3 { background: #a8a38c; } .cells i.on.c4 { background: #c0996b; }
-  .savebar { height: 10px; border-radius: 5px; background: var(--track); overflow: hidden; margin: 8px 0 10px; display: flex; }
-  .savebar i { display: block; height: 100%; }
-  .rule { height: 1px; background: var(--line); margin: 12px 0; }
-  .receipt .row { padding: 2px 0; }
-  .dots { flex: 1 1 8px; border-bottom: 1px dotted var(--line); margin: 0 8px; height: 0; align-self: center; transform: translateY(-4px); }
-  .num { font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
-  .amt { font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
   .note { color: var(--faint); font-size: 13px; margin-top: 8px; }
 
   section { padding: 56px 0; border-top: 1px solid var(--line); }
@@ -97,11 +79,6 @@
     nav a { margin-left: 12px; font-size: 14px; }
     .brand .k { display: none; }
     header.top { flex-wrap: wrap; gap: 8px; }
-    .pane { font-size: 13px; padding: 14px; }
-  }
-  @media (prefers-reduced-motion: no-preference) {
-    .bar > i { animation: shimmer 2.6s linear infinite; background-size: 28px 100%; }
-    @keyframes shimmer { to { background-position: 28px 0; } }
   }
 </style>
 </head>
@@ -122,35 +99,32 @@
       <h1>Fewer tokens per turn.<br>A Context pane that <em>tells the truth</em>.</h1>
       <p class="lede">A Claude Code mod that quiets noisy commands, trims huge output, refuses a <code style="font-family:var(--mono)">/compact</code> that would re-send a cold cache, keeps the cache warm while you think, and shows you a receipt it can stand behind.</p>
       <div class="install">
+        <code><span class="p">$</span> claude plugin marketplace add dbrownjave/claude-token-saver<br><span class="p">$</span> claude plugin install token-saver@token-saver</code>
+        <button type="button" data-copy="claude plugin marketplace add dbrownjave/claude-token-saver
+claude plugin install token-saver@token-saver">Copy</button>
+      </div>
+      <p class="sub">Or the full pack, with the Python modules and the settings preflight:</p>
+      <div class="install">
         <code><span class="p">$</span> git clone https://github.com/dbrownjave/claude-token-saver &amp;&amp; cd claude-token-saver &amp;&amp; ./install.sh</code>
         <button type="button" data-copy="git clone https://github.com/dbrownjave/claude-token-saver && cd claude-token-saver && ./install.sh">Copy</button>
       </div>
       <p class="sub">Local Claude Code CLI or desktop app · Python 3 (stdlib only) · MIT · <a href="#install">what install changes</a></p>
     </div>
 
-    <div class="pane" aria-label="The Context pane, open">
-      <div class="row"><span class="k">Context</span><span class="v">66.6k / 1M tok</span><span class="ok">(7%)</span><span class="grow"></span><span class="btn">⤢</span><span class="btn">?</span><span class="btn">Less</span></div>
-      <div class="bar"><i style="--w:7%"></i><span class="mark" style="left:40%"></span><span class="mark" style="left:60%"></span><span class="mark" style="left:75%"></span></div>
-
-      <div class="row"><span class="v">Saved</span><span class="ok">23.4k tok</span><span class="k">this session</span></div>
-      <div class="row"><span class="v">Cut 14% of input</span><span class="grow"></span><span class="ok">≈ $0.07</span><span class="k">· Spent $0.41</span></div>
-      <div class="savebar"><i style="width:9%;background:var(--ok)"></i><i style="width:4%;background:#8fb56a"></i><i style="width:1%;background:#6f8f55"></i></div>
-      <div class="receipt">
-        <div class="row"><span class="k">Trimmed output</span><span class="dots"></span><span class="num k">15.1k</span><span class="amt ok">≈ $0.05</span></div>
-        <div class="row"><span class="k">Compactions vetoed</span><span class="dots"></span><span class="num k">7.2k</span><span class="amt ok">≈ $0.02</span></div>
-        <div class="row"><span class="k">Keep-warm</span><span class="dots"></span><span class="num k">1.1k</span><span class="amt ok">≈ $0.00</span></div>
-        <div class="row"><span class="k ell">Prompt cache, Claude's own (not counted)</span><span class="dots"></span><span class="num k">200.1k</span><span class="amt"></span></div>
-        <div class="rule"></div>
-        <div class="row"><span class="v">Total saved</span><span class="dots"></span><span class="num v">23.4k</span><span class="amt ok">≈ $0.07</span></div>
-        <div class="row"><span class="k">You paid</span><span class="dots"></span><span class="num"></span><span class="amt v">$0.41</span></div>
-        <div class="row"><span class="k">Without token-saver</span><span class="dots"></span><span class="num"></span><span class="amt k">≈ $0.48</span></div>
-      </div>
-      <div class="rule"></div>
-      <div class="row"><span class="cells"><i class="on c1"></i><i class="on c2"></i><i class="on c3"></i><i class="on c4"></i><i></i></span><span class="k ell">Cache warm: next message reuses 66.6k from cache · 3m left</span></div>
-      <div class="row" style="margin-top:12px"><span class="grow"></span><span class="btn">Clear</span><span class="btn primary">Compact</span><span class="btn">Later</span></div>
-      <p class="note">Illustrative session. Dollars appear only on API billing with a known rate; never on a subscription.</p>
-    </div>
+    <figure class="shot">
+      <img src="img/pane-terminal-dark.png" width="720" height="206" alt="The Context pane in the Claude Code terminal after /tokens: context fill against the 1M window, the auto-compact mark, cache warmth, and Clear, Compact and Later buttons.">
+      <figcaption>Real screenshot: <code>/tokens</code> in the terminal. More screenshots under <a href="#look">Light and dark</a>.</figcaption>
+    </figure>
   </div>
+
+  <section id="look">
+    <h2>Light and dark</h2>
+    <p class="h2sub">The pane follows your terminal's <code style="font-family:var(--mono)">/config</code> Theme. The desktop app tells a mod nothing about its appearance, so pick the palette in <code style="font-family:var(--mono)">/tokens settings</code>.</p>
+    <div class="two">
+      <figure class="shot"><img src="img/pane-terminal-dark.png" width="720" height="206" loading="lazy" alt="The Context pane in a dark terminal."><figcaption>Terminal, dark</figcaption></figure>
+      <figure class="shot"><img src="img/pane-terminal-light.png" width="720" height="206" loading="lazy" alt="The Context pane in a light terminal."><figcaption>Terminal, light</figcaption></figure>
+    </div>
+  </section>
 
   <section id="what">
     <h2>What it does</h2>
@@ -206,7 +180,11 @@ const cacheInfo = { read: T.cacheRead, line:
     <h2>Install</h2>
     <p class="h2sub">One command. No questions. Nothing of yours is edited or reordered; overlaps with hooks you already have are printed as one line each.</p>
     <div class="two">
-      <pre>git clone https://github.com/dbrownjave/claude-token-saver
+      <pre><span class="c"># the mod, from a terminal, at user scope</span>
+claude plugin marketplace add dbrownjave/claude-token-saver
+claude plugin install token-saver@token-saver
+<span class="c"># or the full pack</span>
+git clone https://github.com/dbrownjave/claude-token-saver
 cd claude-token-saver
 ./install.sh            <span class="c"># or: ./install.sh --dry-run</span>
 <span class="c"># open a new session, then:</span>

@@ -13,11 +13,11 @@ claude plugin install token-saver@token-saver
 
 `install.sh` is only for the Python modules and the settings preflight. `/plugin install` does not run inside the desktop app's Code tab; install once from a terminal at user scope and the desktop picks it up.
 
-- [ ] Put the two-line install above the git-clone line in README and `site/index.html`.
-- [ ] Submit to the community directory: clau.de/plugin-directory-submission (paid claude.ai plan needed; `anthropics/claude-plugins-community` is a read-only mirror, PRs auto-close). Run `claude plugin validate ./plugins/token-saver --strict` first. Listing text comes from `plugin.json` + README. The name `token-saver` is now fixed: renaming breaks installs.
+- [x] Put the two-line install above the git-clone line in README and `site/index.html`.
+- [ ] Submit to the community directory: clau.de/plugin-directory-submission (paid claude.ai plan needed; `anthropics/claude-plugins-community` is a read-only mirror, PRs auto-close). Run `claude plugin validate ./plugins/token-saver --strict` first (passes as of 0.3.36; the marketplace manifest passes `--strict` too since it got a description). Listing text comes from `plugin.json` + README. The name `token-saver` is now fixed: renaming breaks installs.
 - [ ] Official marketplace (`anthropics/claude-plugins-official`) is curated by Anthropic via partner contacts, not a form. Path there is traction on the community listing.
-- [ ] GitHub Pages for `site/`: Pages serves `/` or `/docs` only, so add `.github/workflows/pages.yml` that publishes `site/` on push to `main`, then enable Pages in repo settings.
-- [ ] Real screenshot of the pane (terminal + desktop) in README and site, replacing the mock.
+- [x] GitHub Pages for `site/`: Pages serves `/` or `/docs` only, so add `.github/workflows/pages.yml` that publishes `site/` on push to `main`, then enable Pages in repo settings. Workflow added 2026-10-16; Settings → Pages → Source: GitHub Actions is still the owner's step.
+- [ ] Real screenshot of the pane (terminal + desktop) in README and site, replacing the mock. Terminal dark and light done 2026-10-16 (`site/img/`); desktop dark and light still to capture.
 
 ## Money (to review)
 
