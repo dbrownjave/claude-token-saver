@@ -241,6 +241,45 @@ test('Compact from inside a command.run hook drafts /compact in the box and says
   expect(log.toasts.some((t) => /press Enter/.test(t))).toBe(true)
 })
 
+test('Compact while a turn runs waits for it instead of showing the engine error; a second press cancels', async () => {
+  const { $, log } = noCompactHost()
+  const compacts: any[] = []
+  $.session = {
+    usage: async () => USAGE,
+    compact: async (e: any) => { compacts.push(e); throw new Error('$.session.compact: a turn is running (sess_01JD8Z4Q7XK2)') },
+  }
+  await compactNow($, 5 * MIN, false)
+  expect(compacts.length).toBe(1)
+  expect(log.commands).toEqual([])                                 // no /compact into a running turn either
+  expect(log.toasts.at(-1)).toBe('token-saver: compact queued: it runs when Claude finishes this reply (484k tokens now)')
+  for (const t of log.toasts) expect(t).not.toMatch(/session\.compact|sess_|turn is running|\btok\b/)
+  await compactNow($, 5 * MIN, false)                              // pressed again: cancelled, the engine is not asked
+  expect(compacts.length).toBe(1)
+  expect(log.toasts.at(-1)).toBe('token-saver: compact cancelled: no tokens freed')
+})
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`Compact pressed mid-turn on ${surface} reads Queued and runs at turn.complete`, { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+    const { log } = setup(on, () => USAGE)
+    await turn($)                                                  // a warm cache, so the guard lets it through
+    await ($ as any).turn.start({ text: 'long one', turnId: 't2' })
+    const ui: any = await mount($, surface)
+    await ui.press({ key: 'ctx-compact' })
+    expect(log.compacts.length).toBe(0)
+    expect(log.commands).toEqual([])
+    expect((await ui.find({ key: 'ctx-compact' }))?.props.label).toBe('Queued')
+    expect(await ui.find({ text: /^Compact[ \u00a0]queued:[ \u00a0]it[ \u00a0]runs[ \u00a0]when[ \u00a0]Claude[ \u00a0]finishes[ \u00a0]this[ \u00a0]reply[ \u00a0]\(484k[ \u00a0]tokens[ \u00a0]now\)$/ })).toBeDefined()
+    expect(await ui.find({ text: /session\.compact|\btok\b/ })).toBeUndefined()
+
+    await ($ as any).turn.complete({ turnId: 't2', reason: 'answer', answer: 'ok', text: 'ok' })
+    for (let i = 0; i < 50 && !log.compacts.length; i++) await new Promise((r) => setTimeout(r, 10))
+    expect(log.compacts.length).toBe(1)
+    for (let i = 0; i < 50 && (await ui.find({ key: 'ctx-compact' }))?.props.label !== 'Compact'; i++) await new Promise((r) => setTimeout(r, 10))
+    expect((await ui.find({ key: 'ctx-compact' }))?.props.label).toBe('Compact')
+    expect(await ui.find({ text: /^Compacted[ \u00a0]484k[ \u00a0]→[ \u00a0]120k$/ })).toBeDefined()
+  })
+}
+
 test('context pane counts context growth per message and says how many messages to the next mark', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
   const ctx = { tokens: 100_000, window: 200_000, percent: 50 }
   const { clock } = setup(on, () => ({ context: { ...ctx }, rateLimits: [], cost: { usd: 0.5 } }))
