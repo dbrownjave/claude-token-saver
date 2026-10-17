@@ -873,6 +873,7 @@ let ctxCache = { at: 0, usage: null }
 let ctxLoading = null
 let ctxBusy = false
 let ctxMsg = ''
+let compactQueued = false        // Compact pressed while a turn ran: it runs at that turn's turn.complete
 let ctxPaneOpen = false
 let ctxExpanded = false
 let ctxReceipt = false
@@ -1811,7 +1812,7 @@ function drawContextPane(ui, view, o) {
   })
   const buttons = row({ gap: 1, flexShrink: 0 }, [
     btn('clear', 'Clear', o.onClear),
-    btn('compact', ctxBusy ? 'Compacting…' : 'Compact', o.onCompact),
+    btn('compact', ctxBusy ? 'Compacting…' : compactQueued ? 'Queued' : 'Compact', o.onCompact),
     btn('later', 'Later', o.onLater, { role: 'dismiss' }),
   ])
   const c = view.cache
@@ -2306,9 +2307,29 @@ async function submitCommand($, command, { inCommandHook = false } = {}) {
   return 'filled'
 }
 
+/** Compact pressed while a turn runs ($.session.compact rejects then): wait for turn.complete; a second press cancels. */
+async function queueCompact($) {
+  compactQueued = true
+  let now = ''
+  try {
+    const c = await contextOf($)
+    if (Number.isFinite(c.tokens) && c.tokens > 0) now = ` (${fmtK(c.tokens)} tokens now)`
+  } catch { /* no usage API */ }
+  ctxMsg = `compact queued: it runs when Claude finishes this reply${now}`
+}
+
 /** Compact from the pane: the mod's own guard (cold cache → veto, keep-list) applies as it does to a typed /compact. */
 export async function compactNow($, ttl, compactGuard, { inCommandHook = false } = {}) {
   if (ctxBusy) return
+  if (compactQueued || inTurn) {
+    if (compactQueued) {
+      compactQueued = false
+      ctxMsg = 'compact cancelled: no tokens freed'
+    } else await queueCompact($)
+    toast($, `token-saver: ${ctxMsg}`, 8000)
+    invalidate($)
+    return
+  }
   ctxBusy = true
   ctxMsg = 'compacting…'
   invalidate($)
@@ -2334,7 +2355,9 @@ export async function compactNow($, ttl, compactGuard, { inCommandHook = false }
       else ctxMsg = 'compacted'
     }
   } catch (err) {
-    ctxMsg = `compact failed: ${String(err && err.message ? err.message : err).replace(/^token-saver:\s*/, '')} — type /compact`
+    // The engine's own words name the session: never show them. A turn the mod missed (hot reload) waits as above.
+    if (/turn is running/i.test(String(err && err.message))) await queueCompact($)
+    else ctxMsg = `compact failed: ${String(err && err.message ? err.message : err).replace(/^token-saver:\s*/, '')} — type /compact`
   }
   ctxBusy = false
   ctxCache.at = 0
@@ -2885,6 +2908,10 @@ export function register(on, options = {}) {
       return await next(e)
     } finally {
       inTurn = false
+      if (compactQueued && !e.agentId) {                 // Compact pressed mid-turn: the turn has ended, run it now
+        compactQueued = false
+        compactNow($, ttlNow(), compactGuard).catch(() => { /* compactNow reports its own failures */ })
+      }
       if (e.agentId && agents.has(e.agentId)) {          // a subagent's answer: fold its run into its type's sums
         const rec = agents.get(e.agentId)
         agents.delete(e.agentId)
