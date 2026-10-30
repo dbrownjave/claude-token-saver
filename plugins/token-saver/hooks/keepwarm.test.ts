@@ -6,7 +6,7 @@ const PREFIX = 100_000
 const HIT = { input_tokens: 40, cache_read_input_tokens: PREFIX, cache_creation_input_tokens: 0, output_tokens: 2 }
 const MISS = { input_tokens: 40, cache_read_input_tokens: 0, cache_creation_input_tokens: PREFIX, output_tokens: 2 }
 const API = { context: { tokens: PREFIX, window: 200_000, percent: 50 }, rateLimits: [], cost: { usd: 3.1 } }
-const SUBSCRIPTION = { context: { tokens: PREFIX, window: 200_000, percent: 50 }, rateLimits: [{ kind: 'five_hour', percentUsed: 12 }] }
+const SUBSCRIPTION = { context: { tokens: PREFIX, window: 200_000, percent: 50 }, rateLimits: [{ kind: 'five_hour', percentUsed: 12 }, { kind: 'seven_day', percentUsed: 14 }], cost: { usd: 0.004 } }
 const OPTIONS = { suggestSkills: false, cacheBand: false }
 // A main-thread write as the API reports it, split by TTL bucket
 const WRITE = (ttl: '5m' | '1h') => ({ ...HIT, cache_creation_input_tokens: 500, cache_creation: { ephemeral_5m_input_tokens: ttl === '5m' ? 500 : 0, ephemeral_1h_input_tokens: ttl === '1h' ? 500 : 0 } })
@@ -244,3 +244,70 @@ for (const [model, usd, cc, rate] of [
     expect(await ui.find({ text: `At ≈${rate}/M input, derived from this session's bill` })).toBeDefined()
   })
 }
+
+// The real engine as of 2.1.314: turn.step usage has no cache-write buckets, and a subscription's usage carries a dollar estimate.
+test('a real subscription: an hour of cache from its first step, no pings, however long the idle', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home' })
+  const forks: any[] = []
+  wire(on, SUBSCRIPTION, forks)
+  await ($ as any).session.start({ cwd: '/tmp/x', surface: null, isInteractive: true })
+  await turn($)
+  await idle(clock, 30 * MIN)
+  expect(forks.length).toBe(0)
+  const text = await tokensText($)
+  expect(text).toContain('off (not API billing)')
+  expect(text).not.toContain('Cold')
+  expect(text).not.toContain('needs the one-hour cache')
+  expect(text).not.toContain('$')                           // savings are window headroom, never dollars
+})
+
+test('past the window a subscription pays by the token: 5-minute cache, and keep-warm comes back', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home' })
+  const forks: any[] = []
+  let usage: any = SUBSCRIPTION
+  wire(on, { get context() { return usage.context }, get rateLimits() { return usage.rateLimits }, get cost() { return usage.cost } }, forks)
+  await ($ as any).session.start({ cwd: '/tmp/x', surface: null, isInteractive: true })
+  await turn($)
+  await idle(clock, 6 * MIN)
+  expect(forks.length).toBe(0)
+  usage = { ...SUBSCRIPTION, rateLimits: [{ kind: 'five_hour', percentUsed: 100 }, { kind: 'seven_day', percentUsed: 40 }] }
+  await turn($)
+  await idle(clock, 4 * MIN)
+  expect(forks.length).toBe(1)
+})
+
+for (const [label, settings, env] of [
+  ['promptCacheTtl', { promptCacheTtl: '1h' }, {}],
+  ['CLAUDE_CODE_PROMPT_CACHE_TTL', {}, { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' }],
+  ['ENABLE_PROMPT_CACHING_1H', {}, { ENABLE_PROMPT_CACHING_1H: '1' }],
+] as const) {
+  test(`an API key on one hour through ${label}: no pings`, { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    mock.store(on)
+    mock.env(on, { HOME: '/nonexistent-home', ...env })
+    on('settings.read' as any, () => ({ value: settings }))
+    const forks: any[] = []
+    wire(on, API, forks)
+    await ($ as any).session.start({ cwd: '/tmp/x', surface: null, isInteractive: true })
+    await turn($)
+    await idle(clock, 6 * MIN)
+    expect(forks.length).toBe(0)
+  })
+}
+
+test('FORCE_PROMPT_CACHING_5M beats promptCacheTtl: pings go out on an API key', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home', FORCE_PROMPT_CACHING_5M: '1' })
+  on('settings.read' as any, () => ({ value: { promptCacheTtl: '1h' } }))
+  const forks: any[] = []
+  wire(on, API, forks)
+  await ($ as any).session.start({ cwd: '/tmp/x', surface: null, isInteractive: true })
+  await turn($)
+  await idle(clock, 4 * MIN)
+  expect(forks.length).toBe(1)
+})

@@ -144,6 +144,14 @@ test('on usage credits the lapse is still measured but the 1-hour recommendation
   expect(await ui.find({ text: /^The Explore agent/ })).toBeUndefined()
 })
 
+test('inside a subscription, with its dollar estimate, the 1-hour recommendation is made', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const h = setup(on, () => ({ ...CREDITS, rateLimits: [{ kind: 'five_hour', percentUsed: 14 }, { kind: 'seven_day', percentUsed: 14 }] }))
+  await mainTurn($, h.step)
+  await agentRun($, h, 'a1', 'Explore', 6, WRITE(50_000))
+  const ui = await openReceipt($)
+  expect(await ui.find({ text: /^The Explore agent/ })).toBeDefined()
+})
+
 test('a small lapse after many warm writes: the 1-hour cache would not pay, and the line says so', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
   const h = setup(on, () => API)
   await mainTurn($, h.step)

@@ -96,14 +96,23 @@ let announcedPct = 0            // highest threshold already toasted this sessio
  */
 const keepWarm = { on: false, want: false, streak: 0, pings: 0, misses: 0, costTok: 0, savedTok: 0, busy: false, refreshedAt: 0, stopped: '' }
 /**
- * The engine's prompt-cache TTL. The mod API has no read for it, so it is learned: a main-thread step's usage may carry
- * the write buckets (cache_creation.ephemeral_1h / _5m_input_tokens), a model switch carries cache_ttl, and Claude
- * Code's idle compaction runs only on the one-hour cache (weakest: never overrides the other two). Until one is seen
- * the TTL is 5 minutes. `longCacheTtl` forces one hour. On one hour, keep-warm turns itself off.
+ * The engine's prompt-cache TTL. The mod API has no read for it, so it is worked out, strongest first:
+ *  - what the engine reports: a model switch carries cache_ttl; a step's usage would carry the write buckets
+ *    (cache_creation.ephemeral_1h / _5m_input_tokens), though real turn.step usage has none as of 2.1.314; Claude Code's
+ *    idle compaction runs only on the one-hour cache (weakest of the three: never overrides the other two)
+ *  - the settings Claude Code obeys (configTtl)
+ *  - the plan (planTtl): an hour inside a subscription, 5 minutes on an API key or usage credits
+ * `longCacheTtl` forces one hour. On one hour, keep-warm turns itself off.
  */
 const engineTtl = { value: '', via: '' }     // '1h' | '5m' | '' (not seen yet)
 let longTtlOption = false
-function ttlNow() { return longTtlOption || engineTtl.value === '1h' ? TTL_LONG : TTL_SHORT }
+let configTtl = ''      // '1h' | '5m' from the environment or promptCacheTtl, '' when nothing chooses
+let planTtl = ''        // '1h' | '5m' from the rate-limit windows, '' until usage is seen
+let planSeen = false    // a five-hour window has been seen this session: this is a subscription
+function ttlNow() {
+  const value = engineTtl.value || configTtl || planTtl
+  return longTtlOption || value === '1h' ? TTL_LONG : TTL_SHORT
+}
 /** What re-writing the main thread's cache costs against fresh input, on the TTL in force. */
 function writeRate() { return ttlNow() === TTL_LONG ? WRITE_LONG : WRITE_SHORT }
 /** Record a TTL the engine reported. Returns true when the TTL in force changed. */
@@ -113,6 +122,24 @@ function noteEngineTtl(value, via) {
   const before = ttlNow()
   engineTtl.value = value
   engineTtl.via = via
+  keepWarm.on = keepWarm.want && !keepWarm.stopped && ttlNow() !== TTL_LONG
+  return ttlNow() !== before
+}
+/**
+ * Learn the plan from usage. Inside a subscription the main thread caches for an hour and a keep-warm ping would spend
+ * quota; past its window it draws on usage credits, where Claude Code drops to 5 minutes and pays by the token, like an
+ * API key. Returns true when the TTL in force changed.
+ */
+function noteBilling(usage) {
+  if (!usage || !Array.isArray(usage.rateLimits)) return false
+  const before = ttlNow()
+  if (fiveHour(usage)) planSeen = true
+  const inPlan = planSeen && !onCredits(usage)
+  const next = inPlan ? '1h' : '5m'
+  if (planTtl && next !== planTtl) { engineTtl.value = ''; engineTtl.via = '' }   // crossed the limit: an older reading no longer holds
+  planTtl = next
+  if (inPlan) keepWarm.stopped = 'not API billing'
+  else if (keepWarm.stopped === 'not API billing') keepWarm.stopped = ''
   keepWarm.on = keepWarm.want && !keepWarm.stopped && ttlNow() !== TTL_LONG
   return ttlNow() !== before
 }
@@ -129,7 +156,7 @@ let inTurn = false
 const idleCfg = { off: '', minTokens: IDLE_COMPACT_MIN, minSet: false }
 let idleDone = null     // { at, before, after } until the next reply
 
-/** Read what Claude Code itself reads: idleCompaction and autoCompactEnabled, the size floor, the compaction kill switches. */
+/** Read what Claude Code itself reads: idleCompaction and autoCompactEnabled, the size floor, the compaction kill switches, the TTL controls. */
 async function loadIdleConfig($) {
   let s = null
   try { s = await $.settings.read() } catch { s = null }
@@ -143,6 +170,16 @@ async function loadIdleConfig($) {
   idleCfg.minTokens = idleCfg.minSet ? Math.max(100_000, n) : IDLE_COMPACT_MIN
   idleCfg.off = s && s.idleCompaction === false ? 'setting'
     : (s && s.autoCompactEnabled === false) || kill || env.DISABLE_COMPACT || env.DISABLE_AUTO_COMPACT ? 'auto-compact' : ''
+  // Claude Code's own order: force 5 minutes, the variable, the setting, ask for one hour. Any other value is ignored.
+  let force, ttlEnv, askLong
+  try { force = await $.env.get('FORCE_PROMPT_CACHING_5M') } catch { force = undefined }
+  try { ttlEnv = await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL') } catch { ttlEnv = undefined }
+  try { askLong = await $.env.get('ENABLE_PROMPT_CACHING_1H') } catch { askLong = undefined }
+  const isSet = (v) => !!v && v !== '0' && v !== 'false'
+  const ttlValue = (v) => (v === '1h' || v === '5m' ? v : '')
+  configTtl = isSet(force || env.FORCE_PROMPT_CACHING_5M) ? '5m'
+    : ttlValue(ttlEnv || env.CLAUDE_CODE_PROMPT_CACHE_TTL) || ttlValue(s && s.promptCacheTtl) || (isSet(askLong || env.ENABLE_PROMPT_CACHING_1H) ? '1h' : '')
+  keepWarm.on = keepWarm.want && !keepWarm.stopped && ttlNow() !== TTL_LONG
 }
 
 /**
@@ -307,22 +344,30 @@ function modelName(id) {
 async function billing($) {
   let u = null
   try { u = await $.session.usage() } catch { /* no usage API */ }
-  const priced = !!(u && u.cost && Number.isFinite(u.cost.usd))
-  const five = (u && u.rateLimits || []).find((r) => r.kind === 'five_hour') || null
+  const priced = paysByToken(u)
+  const five = fiveHour(u)
   const inputAll = totals.input + totals.cacheRead + totals.cacheWrite
   const tokPerPct = limitBase && five && five.percentUsed - limitBase.pct >= 1 ? (inputAll - limitBase.tokens) / (five.percentUsed - limitBase.pct) : 0
   return { priced, tokPerPct }
 }
 
+/** The window that marks a subscription; an API key has none. A dollar cost marks nothing: Claude Code estimates one on every plan. */
+function fiveHour(usage) {
+  return (usage && usage.rateLimits || []).find((r) => r.kind === 'five_hour') || null
+}
+
 /**
- * A subscription on usage credits: a five-hour window exists and is either spent (100%) or billed beside (a dollar
- * cost next to a window). A plain API key has no five-hour window. The engine ignores a 1-hour subagent cacheTtl
- * while on credits, so the recommendation is not made there; the measurements still are.
+ * A subscription on usage credits: its five-hour or weekly window is spent. The engine ignores a 1-hour subagent
+ * cacheTtl while on credits, so the recommendation is not made there; the measurements still are.
  */
 function onCredits(usage) {
-  const five = (usage && usage.rateLimits || []).find((r) => r.kind === 'five_hour') || null
-  if (!five) return false
-  return Number(five.percentUsed) >= 100 || !!(usage.cost && Number.isFinite(usage.cost.usd))
+  return (usage && usage.rateLimits || []).some((r) => (r.kind === 'five_hour' || r.kind === 'seven_day') && Number(r.percentUsed) >= 100)
+}
+
+/** Paid in dollars for each token: an API key, or a subscription past its window. */
+function paysByToken(usage) {
+  if (!(usage && usage.cost && Number.isFinite(usage.cost.usd))) return false
+  return !(fiveHour(usage) || planSeen) || onCredits(usage)
 }
 
 /** ISO week key, UTC: 2026-W41. */
@@ -450,7 +495,8 @@ async function tickKeepWarm($, ttl, maxPings) {
     // API billing only: a subscription already caches the main thread for an hour, and a ping would spend plan quota
     let u = null
     try { u = await $.session.usage() } catch { /* no usage API */ }
-    if (!(u && u.cost && Number.isFinite(u.cost.usd))) { keepWarm.stopped = 'not API billing'; keepWarm.on = false; return }
+    noteBilling(u)
+    if (!paysByToken(u)) { keepWarm.stopped = 'not API billing'; keepWarm.on = false; return }
     const r = await $.model.fork({ prompt: KEEP_WARM_PROMPT })
     if (r.usage) keepWarm.costTok += billedTok(r.usage, lastModel)
     if (!r.isAnswered && r.reason === 'nothing-to-fork') return
@@ -1549,7 +1595,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const limits = (usage && usage.rateLimits) || []
   const five = limits.find((r) => r.kind === 'five_hour') || null
   const hasCost = !!(usage && usage.cost && Number.isFinite(usage.cost.usd))
-  const mode = hasCost ? 'api' : five ? 'subscription' : 'unknown'
+  const mode = paysByToken(usage) ? 'api' : five ? 'subscription' : 'unknown'
   const inputAll = T.input + T.cacheRead + T.cacheWrite
   // spend in fresh-input-token equivalents, booked step by step at each step's own model and TTL (billedTok)
   const billedUnits = Number.isFinite(T.billed) ? T.billed : T.input + WRITE_SHORT * T.cacheWrite + 0.1 * T.cacheRead + 5 * T.output
@@ -3001,6 +3047,9 @@ export function register(on, options = {}) {
     }
     if (!e.agentId && result && result.usage) {
       const stepAt = await $.clock.now()
+      let stepUsage = null
+      try { stepUsage = await $.session.usage() } catch { /* no usage API */ }
+      noteBilling(stepUsage)
       noteEngineTtl(ttlOfUsage(result.usage), 'step')     // before the keep-warm booking: an hour-long TTL lapses nothing in minutes
       // Kept warm through an idle stretch that would have lapsed, and this request hit: the re-write was avoided
       if (keepWarm.streak > 0 && lastStepAt && stepAt - lastStepAt >= ttlNow() && stepAt - keepWarm.refreshedAt < ttlNow() && hitPct(result.usage) >= 80) {
@@ -3018,11 +3067,8 @@ export function register(on, options = {}) {
       totals.cacheWrite += result.usage.cache_creation_input_tokens || 0
       totals.output += result.usage.output_tokens || 0
       totals.keptOut += Math.round(savedChars / 4)          // every trimmed token would have been resent this turn
-      try {
-        const u = await $.session.usage()
-        const five = (u && u.rateLimits || []).find((r) => r.kind === 'five_hour')
-        if (five && !limitBase) limitBase = { pct: five.percentUsed, tokens: totals.input + totals.cacheRead + totals.cacheWrite }
-      } catch { /* no usage API */ }
+      const five = fiveHour(stepUsage)
+      if (five && !limitBase) limitBase = { pct: five.percentUsed, tokens: totals.input + totals.cacheRead + totals.cacheWrite }
       if (totals.turns % 10 === 0) await rollMonth($)
       try {
         $.ui.invalidate('ui.render')

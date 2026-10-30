@@ -121,7 +121,7 @@ test('Switch: allowed, and the receipt lists the cold re-read as paid, never as 
 
 test('subscription: the dialog prices the switch as window headroom and never shows a dollar', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
   let pct = 10
-  const usage = () => ({ context: { tokens: USED, window: 1_000_000, percent: 14 }, rateLimits: [{ kind: 'five_hour', percentUsed: pct }] })
+  const usage = () => ({ context: { tokens: USED, window: 1_000_000, percent: 14 }, rateLimits: [{ kind: 'five_hour', percentUsed: pct }], cost: { usd: 0.4 } })
   const { log } = setup(on, () => usage(), () => 'Stay')
   await turn($)                                                      // limitBase at 10%
   pct = 12

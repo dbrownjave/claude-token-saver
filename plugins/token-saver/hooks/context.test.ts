@@ -292,6 +292,17 @@ test('a subagent finishing mid-turn does not end the turn: Compact still queues'
   expect((await ui.find({ key: 'ctx-compact' }))?.props.label).toBe('Queued')
 })
 
+test('a subscription caches for the hour: Compact runs ten idle minutes on, no veto', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const { log, clock } = setup(on, () => ({ ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }, { kind: 'seven_day', percentUsed: 10 }] }))
+  await turn($)
+  await clock.advance(10 * MIN)
+  const ui: any = await mount($, 'terminal')
+  await ui.press({ key: 'ctx-compact' })
+  for (let i = 0; i < 50 && !log.compacts.length; i++) await new Promise((r) => setTimeout(r, 10))
+  expect(log.compacts.length).toBe(1)
+  expect(await ui.find({ text: /^Compact vetoed/ })).toBeUndefined()
+})
+
 test('context pane counts context growth per message and says how many messages to the next mark', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
   const ctx = { tokens: 100_000, window: 200_000, percent: 50 }
   const { clock } = setup(on, () => ({ context: { ...ctx }, rateLimits: [], cost: { usd: 0.5 } }))
@@ -324,7 +335,7 @@ test('context pane without a breakdown falls back to one Used row and no groups'
 })
 
 test('context pane on a subscription: the five-hour window card, and never a dollar', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
-  setup(on, () => ({ startedAt: NOW, context: { tokens: 300_000, window: 1_000_000, percent: 30 }, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(NOW + 3600_000).toISOString() }] }))
+  setup(on, () => ({ startedAt: NOW, context: { tokens: 300_000, window: 1_000_000, percent: 30 }, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(NOW + 3600_000).toISOString() }], cost: { usd: 0.5 } }))
   const ui: any = await mount($, 'desktop')
   await ui.press({ key: 'ctx-expand' })
   expect(await ui.find({ text: /^Current session$/ })).toBeDefined()
@@ -389,7 +400,7 @@ test('/tokens learn prints the glossary; a term prints just that term with its l
 })
 
 test('the glossary on a subscription never shows a dollar', { options: { ...OPTIONS, inputPricePerM: 3 }, timeoutMs: SLOW }, async ($, on) => {
-  setup(on, () => ({ ...USAGE, cost: undefined, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(NOW + 3600_000).toISOString() }] }))
+  setup(on, () => ({ ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(NOW + 3600_000).toISOString() }] }))
   await turn($)
   const all = String((await ($ as any).command.run({ command: 'tokens', args: 'learn' })).text)
   expect(all).not.toContain('$')

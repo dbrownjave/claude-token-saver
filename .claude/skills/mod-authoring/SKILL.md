@@ -24,6 +24,7 @@ The mod is one module, `plugins/token-saver/hooks/register.js`, plus `glossary.j
 - **VS Code is `e.surface === 'vscode'`**: Svg like the desktop, never Raster or Client; it always places panes, so branch on `placesPanes(surface, isFullscreen)`, not on `isFullscreen` alone. `no-surface` (nothing attached) gets text, not a toast.
 - **No `options` in `plugin.json` `userConfig`**: older CLIs (VS Code's bundled 2.1.263) refuse the whole plugin over it. Validate choices in `register()`.
 - **Panes may not be placed**: check `opened.isPlaced !== false` and toast the reason; never a button that does nothing.
+- **A dollar cost is not API billing.** `$.session.usage().cost` exists on every plan; a subscription is the `five_hour` entry in `rateLimits`. Real `turn.step` usage has no cache-write buckets, so the TTL comes from the plan and settings (`ttlNow`). Mocks that left these out hid this for months: keep them to the real shape.
 - **Numbers must be true.** The pane claims only what the plugin itself did (trimmed output, compactions vetoed, keep-warm net). Claude's own prompt cache is shown beside it and never added in. Any new figure needs: what it measures, the counterfactual it assumes, and a `≈` if estimated.
 - No `bold` in the pane; colour carries hierarchy (`text`, `inactive`, `success`, threshold colour).
 
