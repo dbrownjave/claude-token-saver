@@ -280,6 +280,18 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
+test('a subagent finishing mid-turn does not end the turn: Compact still queues', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const { log } = setup(on, () => USAGE)
+  await turn($)
+  await ($ as any).turn.start({ text: 'long one', turnId: 't2' })
+  await ($ as any).turn.start({ text: 'sub', turnId: 'a1', agentId: 'a1' })
+  await ($ as any).turn.complete({ turnId: 'a1', agentId: 'a1', reason: 'answer', answer: 'ok', text: 'ok' })
+  const ui: any = await mount($, 'terminal')
+  await ui.press({ key: 'ctx-compact' })
+  expect(log.compacts.length).toBe(0)
+  expect((await ui.find({ key: 'ctx-compact' }))?.props.label).toBe('Queued')
+})
+
 test('context pane counts context growth per message and says how many messages to the next mark', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
   const ctx = { tokens: 100_000, window: 200_000, percent: 50 }
   const { clock } = setup(on, () => ({ context: { ...ctx }, rateLimits: [], cost: { usd: 0.5 } }))
