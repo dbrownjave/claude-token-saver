@@ -1,0 +1,905 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>token-saver · Settings panel · design canvas</title>
+<style>
+:root { --bg:#141413; --board:#1f1e1d; --line:rgba(222,220,209,.15); --fg:#c2c0b6; --dim:#9c9a92; --ink:#faf9f5; --brand:#d97757; --amber:#e8a55a; --rust:#b0532f; --track:#30302e; --bad:#dd5353 }
+* { box-sizing:border-box }
+body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif }
+.canvas { padding:40px 48px 120px; width:max-content; min-width:100% }
+header.top, .page, .rec, .cal, ol.exposed, .dirs { max-width:min(1180px,calc(100vw - 96px)) }
+h1 { font-size:24px; font-weight:500; color:var(--ink); margin:0 0 6px; letter-spacing:-.01em }
+h2 { font-size:15px; font-weight:500; color:var(--ink); margin:0 0 4px }
+h3 { font-size:11px; font-weight:500; color:var(--dim); margin:0 0 10px; letter-spacing:.06em; text-transform:uppercase }
+p { margin:0 0 8px }
+code { font:12px ui-monospace,Menlo,monospace; color:var(--ink) }
+.lede { color:var(--dim); max-width:900px }
+.rec { margin:18px 0 26px; padding:16px 20px; border-left:2px solid var(--brand); background:#1b1a19 }
+.rec b { color:var(--ink); font-weight:500 }
+.rec p:last-child { margin-bottom:0 }
+
+table.m { border-collapse:collapse; font-variant-numeric:tabular-nums; margin:0 0 8px }
+table.m th { text-align:right; font-weight:400; color:var(--dim); padding:6px 12px; border-bottom:1px solid var(--line); font-size:11px; vertical-align:bottom; white-space:nowrap }
+table.m td { text-align:right; padding:5px 12px; border-bottom:1px solid rgba(222,220,209,.07); white-space:nowrap }
+table.m th:first-child, table.m td:first-child { text-align:left; color:var(--ink) }
+table.m td.base { color:var(--dim) }
+table.m td .d { color:var(--dim); margin-left:6px; font-size:11px }
+table.m td.fit { color:var(--amber) } table.m td.nofit { color:var(--dim) }
+table.m tr.pick td:first-child { color:var(--brand) }
+table.m td.txt { text-align:left; white-space:normal; min-width:210px; max-width:300px; color:var(--fg) }
+.cal { color:var(--dim); font-size:12px; margin:0 0 26px }
+
+ol.exposed { margin:0 0 26px; padding-left:20px; display:grid; gap:7px }
+ol.exposed b { color:var(--ink); font-weight:500 }
+
+.dirs { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:14px; margin:0 0 26px }
+.dir { border:1px solid var(--line); border-radius:8px; padding:12px 14px }
+.dir h2 { display:flex; gap:8px; align-items:baseline }
+.dir .id { color:var(--brand) }
+.dir p { color:var(--fg); margin:4px 0 0 }
+
+.bar { position:sticky; top:0; left:0; z-index:5; width:calc(100vw - 96px); display:flex; flex-wrap:wrap; gap:8px 20px; align-items:center; padding:10px 14px; margin:0 0 22px; background:#1b1a19; border:1px solid var(--line); border-radius:8px }
+.grp { display:flex; align-items:center; gap:4px; color:var(--dim); font-size:12px }
+.grp > span { margin-right:4px }
+.bar button { font:inherit; font-size:12px; color:var(--dim); background:none; border:1px solid transparent; border-radius:5px; padding:2px 8px; cursor:pointer }
+.bar button:hover { color:var(--ink) }
+.bar button.on { color:var(--ink); background:rgba(222,220,209,.13) }
+.bar button.reset { border-color:var(--line) }
+
+section.board { background:var(--board); border:1px solid var(--line); border-radius:12px; padding:20px 24px 24px; margin-bottom:26px; width:max-content }
+section.board > .sub { color:var(--dim); margin:0 0 14px }
+.modeRow { display:flex; gap:28px; align-items:flex-start; margin-top:18px }
+.frame { display:flex; flex-direction:column; gap:8px; flex:none }
+.fhead { display:flex; align-items:baseline; gap:10px; font-size:12px; color:var(--dim); white-space:nowrap }
+.fhead b { color:var(--ink); font-weight:500; font-size:13px }
+.fhead .id { color:var(--brand) }
+.fhead .meas { margin-left:auto; font-variant-numeric:tabular-nums }
+.fhead .fit { color:var(--amber) }
+
+/* ---------- desktop: the engine's own CSS (Claude.app code cache) with the app's tokens. One size, one weight. ---------- */
+.dpane { position:relative; border-radius:10px; padding:14px 18px 16px; font-size:13px; line-height:19.5px; font-weight:400; font-family:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif; color:var(--t-text) }
+.dpane * { font-weight:400 }
+.dbody { position:relative }
+.dbox { display:flex; min-width:0 }
+.dtext { display:block; white-space:pre; max-width:100% }
+.dtext.wrap { white-space:pre-wrap; overflow-wrap:anywhere }
+.dtext.trunc { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0 }
+.dbtn { appearance:none; display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; gap:.375rem; box-sizing:border-box; width:fit-content; max-width:100%; min-width:0; margin:0; border:0; padding:0 8px; height:19px; border-radius:4px; background:var(--t-fill); color:var(--t-text); font:inherit; line-height:1; text-align:center; white-space:nowrap; cursor:pointer; user-select:none }
+.dbtn:hover { background:var(--t-fill2) }
+.dbtn.primary { background:var(--t-prim); color:var(--t-onprim) }
+.dbtn.dim { color:var(--t-faint) }
+.dbtn.plain { min-height:19.5px; height:auto; padding:0 3px; border-radius:2px; background:none; color:var(--t-text) }
+.dbtn.plain.dim { color:var(--t-faint) }
+.dbtn.plain:hover { background:var(--t-fill); color:var(--t-text) }
+.dbtn .cue { display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; width:calc(1em + 6px); height:calc(1em + 6px); border:1px solid color-mix(in srgb,currentColor 20%,transparent); border-radius:4px; font-size:11px; line-height:1; color:var(--t-faint); text-transform:uppercase }
+.dbtn .caret { width:.875rem; height:.875rem; color:var(--t-faint); flex-shrink:0 }
+.foldline { position:absolute; left:-18px; right:-18px; height:0; border-top:1px dashed var(--brand); pointer-events:none }
+.foldline span { position:absolute; right:4px; top:-16px; font-size:10px; color:var(--brand); background:var(--t-ground); padding:0 4px }
+
+/* ---------- terminal: a character grid, drawn cell by cell by tLayout below ---------- */
+.tpane { font:13px/17.5px "SF Mono",Menlo,Monaco,ui-monospace,monospace; padding:10px 12px; border-radius:8px; width:max-content; font-variant-ligatures:none }
+.trow { white-space:pre; height:17.5px }
+.trow span[data-act] { cursor:pointer }
+.trow span[data-act]:hover { text-decoration:underline }
+.trow.past { opacity:.3 }
+.tfold { color:var(--brand); font:11px/17.5px -apple-system,sans-serif; height:17.5px; white-space:pre }
+.err { color:var(--bad); max-width:420px; white-space:pre-wrap }
+#measure { position:absolute; left:-99999px; top:0; visibility:hidden }
+</style>
+</head>
+<body>
+<div class="canvas">
+<header class="top">
+  <h1>Settings panel: the current design and five directions</h1>
+  <p class="lede">Read from <code>88efe87</code> (0.3.40). Every frame below is a real <code>h(Box/Text/Button…)</code> tree: a checker holds it to each surface's element and prop table from <code>docs/claude-mods.md</code> and prints an error in the frame if the surface could not draw it. A's tree and <code>SETTINGS</code> are pasted verbatim from <code>register.js</code>. Press anything: values change in every frame.</p>
+</header>
+
+<div class="rec" id="rec"></div>
+
+<h3>Measured</h3>
+<div class="page" id="table"></div>
+<p class="cal" id="cal"></p>
+
+<h3>What each direction costs</h3>
+<div class="dirs" id="dirs"></div>
+
+<h3>What this exposed, whichever direction wins</h3>
+<ol class="exposed">
+  <li><b>The terminal shows 40% of the panel, or a narrow layout.</b> Measured on the real CLI, opened as Settings opens it: under 110 columns the pane sits inline at a third of the height (76 × 6 on an 80 × 24 terminal, 96 × 14 on 100 × 50). From 110 columns it docks at 54 columns however wide the terminal is, even at 220, and <code>narrow = cells &lt; 60</code> gives every docked terminal the label-above-control layout. Asking <code>rows: 17, columns: 72</code> in <code>$.ui.open</code> changed nothing, so a direction has to fit these, not ask for more.</li>
+  <li><b>A refused save is off screen.</b> <code>settingsMsg</code> draws on the last row. Press a row near the top of the 14-row inline pane and the save goes back with no word in view. Try "Refused save" in the bar: A's message lands on row 35, with 14 in view.</li>
+  <li><b>Since 0.3.40 the panel contradicts the pane on a subscription.</b> "Prompt cache TTL is 1 hour" reads Off while the cache really is one hour. Keep-warm reads On while the pane says off (not API billing). Pings and Input price change nothing on a plan. B to F say what is true for the plan and relabel the row "Treat the cache as 1 hour" (the <code>plugin.json</code> title would follow); A is left as it ships.</li>
+  <li><b>The terminal's <code>primary</code> Button is bold periwinkle, and every bracketed Button is bold.</b> Captured: <code>#b1b9f9</code> dark, <code>#5769f7</code> light. A Button takes no colour prop, so "no bold, no blue" cannot hold with <code>[ label ]</code> at all. <code>plain</code> Buttons are regular weight, and <code>Text</code> can be orange. C to F draw the active value as Text and the others as plain dim Buttons; the real CLI drew that correctly with no bold and no blue.</li>
+  <li><b>Tab into a Select opens it in place on the terminal.</b> Closed it is one row, <code>Auto ▾</code>. Focused, its options take a row each and push the rows below down; Pings would add 11 rows to a 14-row pane. The 0.3.37 attempt kept −/+ on the terminal, and this is why that was right.</li>
+  <li><b>An overfull terminal row breaks words a letter at a time.</b> Buttons wider than the row wrapped as <code>Pl / ai / nD</code> in the capture. Any new control row has to be measured at 40.</li>
+  <li><b>A Settings redesign already exists, unmerged:</b> <code>claude/sad-lewin-9851f3</code> (<code>1106e19</code>, <code>be5354c</code>) carries a different 0.3.37 with cards and a More button. Direction B is its layout, without the bold. It never reached 0.3.40.</li>
+</ol>
+
+<div class="bar" id="bar"></div>
+<div id="boards"></div>
+<div id="measure"></div>
+</div>
+
+<script>
+/* ---------- the options, verbatim: register.js 88efe87 lines 2501-2527 ---------- */
+const SETTINGS = [
+  { group: 'Look', rows: [
+    { key: 'theme', label: 'Palette', kind: 'choice', options: ['auto', 'dark', 'light'], def: 'auto',
+      hint: "Auto follows the terminal's /config Theme. The desktop app and VS Code do not tell a mod their appearance, so Auto is dark there: pick Light in light mode." },
+    { key: 'cardBars', label: 'Card bars', kind: 'choice', options: ['fire', 'ember'], def: 'fire', hint: 'Ember: a calm glow at each head, so only the context bar moves.' },
+    { key: 'cacheBand', label: 'Band above the prompt', kind: 'bool', def: true },
+    { key: 'compactHint', label: 'Cache-aware hint on the band', kind: 'bool', def: true },
+  ] },
+  { group: 'Cache', rows: [
+    { key: 'longCacheTtl', label: 'Prompt cache TTL is 1 hour', kind: 'bool', def: false, hint: 'Off: the TTL follows Claude Code.' },
+    { key: 'keepWarm', label: 'Keep the cache warm while idle', kind: 'bool', def: true, hint: 'API billing on the 5-minute cache only. One tiny request at about 0.1× input, before it lapses.' },
+    { key: 'keepWarmPings', label: 'Pings per idle stretch', kind: 'step', steps: [0, 1, 2, 3, 4, 5, 6, 8, 10, 15, 20], def: 5, hint: 'About 4 minutes apart. 0 turns keep-warm off.' },
+  ] },
+  { group: 'Guards', rows: [
+    { key: 'compactGuard', label: 'Veto /compact on a cold cache', kind: 'bool', def: true, hint: 'Override once with /compact force.' },
+    { key: 'modelGuard', label: 'Price a model switch', kind: 'bool', def: true },
+  ] },
+  { group: 'Output', rows: [
+    { key: 'quietBash', label: 'Rewrite noisy bash', kind: 'bool', def: true },
+    { key: 'trimOutput', label: 'Trim huge successful output', kind: 'bool', def: true, hint: 'Failures are left intact.' },
+    { key: 'suggestSkills', label: 'Suggest parked skills at start', kind: 'bool', def: true },
+  ] },
+  { group: 'Price', rows: [
+    { key: 'inputPricePerM', label: 'Input price, $ per million tokens', kind: 'step', steps: [0, 0.8, 1, 3, 5, 15], def: 0,
+      hint: "Puts dollars on the savings. 0 shows tokens only. Check your model's price." },
+  ] },
+]
+const ALL_ROWS = SETTINGS.flatMap((g) => g.rows)
+
+/* register.js PALETTES.*.hex, verbatim; the rest are the tokens each surface resolves to */
+const HEX = {
+  dark: {
+    terminal: { permission: '#b1b9f9', warning: '#ffc107', claude: '#d77757', error: '#ff6b80', success: '#4eba65', text: '#ffffff', inactive: '#999999', subtle: '#505050' },
+    desktop: { permission: '#74abe2', warning: '#fab219', claude: '#d97757', error: '#dd5353', success: '#65bb30', text: '#faf9f5', inactive: '#9c9a92', subtle: '#4a4945' },
+  },
+  light: {
+    terminal: { permission: '#5769f7', warning: '#966c1e', claude: '#d77757', error: '#ab2b3f', success: '#2c7a39', text: '#000000', inactive: '#666666', subtle: '#afafaf' },
+    desktop: { permission: '#1b67b2', warning: '#966c1e', claude: '#c6613f', error: '#b53333', success: '#2f7613', text: '#141413', inactive: '#73726c', subtle: '#b0aea6' },
+  },
+}
+const DESK = {   // bg-100, the band's fill at 13/8 % (design/mid-session.js APP_BTN), --cds-fill-primary from the app's code cache
+  dark: { ground: '#262624', text: '#faf9f5', faint: '#9c9a92', fill: 'rgba(222,220,209,.13)', fill2: 'rgba(222,220,209,.24)', prim: '#efefef', onprim: '#141413', frame: 'rgba(222,220,209,.15)' },
+  light: { ground: '#faf9f5', text: '#141413', faint: '#73726c', fill: 'rgba(31,30,29,.08)', fill2: 'rgba(31,30,29,.16)', prim: '#191919', onprim: '#faf9f5', frame: 'rgba(31,30,29,.15)' },
+}
+const TERM = {   // captured: the dock's fill (#262626 / #f5f5f5, composerSidebarBackground); the terminal's own ground is the person's
+  dark: { ground: '#151515', dock: '#262626', border: '#c8c8c8' },
+  light: { ground: '#ffffff', dock: '#f5f5f5', border: '#6a6a6a' },
+}
+
+/* ---------- elements: the same factory shape as a mod's h(), and the checker ---------- */
+const Box = 'Box', Text = 'Text', Button = 'Button', Select = 'Select', Svg = 'Svg'
+const h = (type, props, ...kids) => ({ type, props: props || {}, kids: kids.flat(9).filter((k) => k !== null && k !== undefined && k !== false) })
+const ELEMENTS = { terminal: [Box, Text, Button, Select], desktop: [Box, Text, Button, Select, Svg] }
+const PROPS = {
+  Box: 'key hover position top left right bottom flexDirection flexGrow flexShrink flexWrap alignItems alignSelf justifyContent gap columnGap rowGap width height minWidth minHeight margin marginX marginY marginTop marginBottom marginLeft marginRight padding paddingX paddingY paddingTop paddingBottom paddingLeft paddingRight borderStyle borderColor borderDimColor backgroundColor overflow display',
+  Text: 'hover color backgroundColor dimColor bold italic underline strikethrough inverse wrap key',
+  Button: 'key label hotkey action plain dimColor variant role autoFocus hover onPress',
+  Select: 'key label options value autoFocus onSelect',
+  Svg: 'key source alt width height isInteractive',
+}
+const LEAF = new Set([Button, Select, Svg])
+function check(n, surface, errs) {
+  if (typeof n === 'string') return
+  if (!ELEMENTS[surface].includes(n.type)) errs.push(`${surface} has no ${n.type}`)
+  const ok = new Set((PROPS[n.type] || '').split(' '))
+  for (const k of Object.keys(n.props)) if (!ok.has(k)) errs.push(`${n.type} takes no ${k}`)
+  if (LEAF.has(n.type) && n.kids.length) errs.push(`${n.type} is a leaf`)
+  if (n.type === Text && n.props.bold) errs.push('bold in the pane')
+  n.kids.forEach((k) => check(k, surface, errs))
+}
+
+/* ---------- the state each frame draws ---------- */
+const DEFAULTS = Object.fromEntries(ALL_ROWS.map((r) => [r.key, r.def]))
+const S = { opts: { ...DEFAULTS }, plan: 'sub', refused: false, focus: 'theme', open: 'Look', more: new Set(), allRows: false }
+const nbsp = (s) => (typeof s === 'string' ? s.replace(/^ +| +$/g, (m) => ' '.repeat(m.length)) : s)
+const cap1 = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s)
+const optOf = (r) => (S.opts[r.key] === undefined ? r.def : S.opts[r.key])
+let settingsMsg = ''
+
+/* ---------- A · current: drawSettings verbatim, register.js 88efe87 lines 2579-2619 ---------- */
+function drawSettings(ui, o) {
+  const { Box, Text, Button, term } = ui
+  const cells = o.W
+  const narrow = cells < 60
+  const t = (s, color, extra) => h(Text, { ...(color ? { color: term ? color : ui.hex(color) } : {}), ...extra }, term ? s : nbsp(s))
+  const row = (props, kids) => h(Box, { flexDirection: 'row', ...props }, ...kids.filter(Boolean))
+  const col = (props, kids) => h(Box, { flexDirection: 'column', ...props }, ...kids.filter(Boolean))
+  const grow = () => h(Box, { flexGrow: 1 })
+  const btn = (key, label, on, onPress) => h(Button, { key, label, onPress, ...(on ? { variant: 'primary' } : { dimColor: true }) })
+  const control = (r) => {
+    const v = optOf(r)
+    if (r.kind === 'bool') return [h(Button, { key: `set-${r.key}`, label: v ? 'On' : 'Off', onPress: () => o.onSet(r, !v), ...(v ? { variant: 'primary' } : {}) })]
+    if (r.kind === 'choice') return r.options.map((x) => btn(`set-${r.key}:${x}`, cap1(x), x === v, () => { if (x !== v) o.onSet(r, x) }))
+    const steps = r.steps.includes(Number(v)) ? r.steps : [...r.steps, Number(v)].sort((a, b) => a - b)
+    const i = steps.indexOf(Number(v))
+    return [
+      h(Button, { key: `set-${r.key}:down`, label: '−', onPress: () => { if (i > 0) o.onSet(r, steps[i - 1]) }, ...(i > 0 ? {} : { dimColor: true }) }),
+      t(` ${String(v)} `, 'text'),
+      h(Button, { key: `set-${r.key}:up`, label: '+', onPress: () => { if (i < steps.length - 1) o.onSet(r, steps[i + 1]) }, ...(i < steps.length - 1 ? {} : { dimColor: true }) }),
+    ]
+  }
+  const kids = [
+    row({ alignItems: 'center' }, [
+      t('Settings', 'text', { wrap: 'truncate' }), grow(),
+      o.onDone ? h(Button, { key: 'settings-done', label: 'Done', ...(term ? { plain: true } : {}), onPress: o.onDone }) : null,
+    ]),
+  ]
+  for (const g of SETTINGS) {
+    kids.push(t(' '), t(g.group, 'claude'))
+    for (const r of g.rows) {
+      const ctl = row({ gap: 1, flexShrink: 0, alignItems: 'center' }, control(r))
+      const label = t(r.label, 'text', { wrap: 'truncate' })
+      kids.push(narrow
+        ? col({}, [label, ctl])
+        : row({ alignItems: 'center' }, [row({ flexShrink: 1, overflow: 'hidden' }, [label]), grow(), t(' '), ctl]))
+      if (r.hint) kids.push(t(r.hint, 'inactive', { wrap: 'wrap' }))
+    }
+  }
+  kids.push(t(' '), t(settingsMsg || 'Saved to /config as token-saver.<name>. A change reloads the mod.', settingsMsg ? 'error' : 'inactive', { wrap: 'wrap' }))
+  return col({ width: cells }, kids)
+}
+
+/* ---------- what 0.3.40 knows, as the plan selector sets it (ttlNow, noteBilling, keepWarm.stopped) ---------- */
+function facts() {
+  const o = S.opts, sub = S.plan === 'sub', known = S.plan !== 'unknown', long = !!o.longCacheTtl
+  const hour = long || sub
+  const keepWhy = !o.keepWarm ? 'off' : sub ? 'off (not API billing)' : long ? 'off (on the 1-hour cache)' : Number(o.keepWarmPings) === 0 ? 'off (0 pings)' : ''
+  return { sub, known, long, hour, keepOff: !!keepWhy, keepWhy, price: Number(o.inputPricePerM) || 0 }
+}
+/* Rows that change nothing right now. A row stays pressable; it reads dim and says why. */
+function inert(r, f) {
+  if (r.key === 'longCacheTtl') return f.sub
+  if (r.key === 'keepWarm') return f.sub || f.long
+  if (r.key === 'keepWarmPings') return f.keepOff
+  if (r.key === 'inputPricePerM') return f.sub
+  return false
+}
+const labelOf = (r) => (r.key === 'longCacheTtl' ? 'Treat the cache as 1 hour' : r.label)
+/* One line, for the middle column and the help row. */
+function shortHint(r, f) {
+  switch (r.key) {
+    case 'theme': return 'Auto is dark on desktop and VS Code'
+    case 'cardBars': return 'Ember: only the context bar moves'
+    case 'longCacheTtl': return f.long ? 'On: always 1 hour' : f.sub ? 'Off: now 1 hour, from your plan' : f.known ? 'Off: now 5 minutes, from Claude Code' : 'Off: follows Claude Code'
+    case 'keepWarm': return f.keepOff && f.keepWhy !== 'off' ? f.keepWhy : f.keepWhy === 'off' ? 'API billing on the 5-minute cache' : 'One tiny request before it lapses'
+    case 'keepWarmPings': return f.keepOff ? 'Not used: keep-warm is off' : 'About 4 minutes apart. 0 is off'
+    case 'compactGuard': return 'Override once: /compact force'
+    case 'trimOutput': return 'Failures are left intact'
+    case 'inputPricePerM': return f.sub ? 'Not used: no dollars on a plan' : '0 shows tokens only'
+    default: return ''
+  }
+}
+/* A's hints, with the keep-warm, one-hour and price sentences made true for this plan. */
+function fullHint(r, f) {
+  if (r.key === 'longCacheTtl') return f.long ? 'On: always 1 hour.' : f.sub ? 'Off: the TTL follows Claude Code, now 1 hour from your plan.' : f.known ? 'Off: the TTL follows Claude Code, now 5 minutes.' : r.hint
+  if (r.key === 'keepWarm') return f.sub ? 'Off (not API billing): a subscription caches for an hour already.' : f.long ? 'Off on the 1-hour cache.' : r.hint
+  if (r.key === 'keepWarmPings') return f.keepOff ? 'About 4 minutes apart. Not used while keep-warm is off.' : r.hint
+  if (r.key === 'inputPricePerM') return f.sub ? 'Not used on a subscription: savings show in tokens and % of the 5-hour window.' : r.hint
+  return r.hint
+}
+
+/* Helpers the new directions share. The active value is Text, because only Text can be orange and pressing it does nothing; the rest are plain Buttons. */
+function kit(ui, o) {
+  const { term } = ui
+  const t = (s, color, extra) => h(Text, { ...(color ? { color: term ? color : ui.hex(color) } : {}), ...extra }, term ? s : nbsp(s))
+  const row = (props, kids) => h(Box, { flexDirection: 'row', ...props }, ...kids.filter(Boolean))
+  const col = (props, kids) => h(Box, { flexDirection: 'column', ...props }, ...kids.filter(Boolean))
+  const grow = () => h(Box, { flexGrow: 1 })
+  const pick = (r, list, v) => row({ gap: 1, flexShrink: 0, alignItems: 'center' }, list.map(([val, lab]) => val === v
+    ? t(lab, inert(r, facts()) ? 'text' : 'claude')           // orange means in force; a stored value that does nothing here stays plain
+    : h(Button, { key: `set-${r.key}:${val}`, label: lab, plain: true, dimColor: true, onPress: () => o.onSet(r, val) })))
+  const stepper = (r) => {
+    const v = Number(optOf(r))
+    const steps = r.steps.includes(v) ? r.steps : [...r.steps, v].sort((a, b) => a - b)
+    const i = steps.indexOf(v)
+    const money = r.key === 'inputPricePerM'
+    return row({ gap: 1, flexShrink: 0, alignItems: 'center' }, [
+      h(Button, { key: `set-${r.key}:down`, label: '−', plain: true, ...(i > 0 ? {} : { dimColor: true }), onPress: () => { if (i > 0) o.onSet(r, steps[i - 1]) } }),
+      t(money ? `$${v}` : String(v), 'text'),
+      h(Button, { key: `set-${r.key}:up`, label: '+', plain: true, ...(i < steps.length - 1 ? {} : { dimColor: true }), onPress: () => { if (i < steps.length - 1) o.onSet(r, steps[i + 1]) } }),
+    ])
+  }
+  const control = (r) => {
+    const v = optOf(r)
+    if (r.kind === 'bool') return pick(r, [[true, 'On'], [false, 'Off']], !!v)
+    if (r.kind === 'choice') return pick(r, r.options.map((x) => [x, cap1(x)]), v)
+    return stepper(r)
+  }
+  const done = () => h(Button, { key: 'settings-done', label: 'Done', ...(term ? { plain: true } : {}), onPress: o.onDone })
+  return { t, row, col, grow, pick, stepper, control, done }
+}
+const SAVED = 'Saved to /config as token-saver.<name>. A change reloads the mod.'
+
+/* ---------- B · cards: the unmerged 0.3.37 layout (claude/sad-lewin-9851f3, be5354c), no bold, this plan's copy ---------- */
+function drawB(ui, o) {
+  const { term } = ui
+  const { t, row, col, grow, done } = kit(ui, o)
+  const f = facts(), cells = o.W, narrow = cells < 60
+  const subtle = ui.hex('subtle')
+  const padX = term || narrow ? 1 : 2
+  const inner = Math.max(16, cells - 2 - 2 * padX)
+  const px = Math.max(120, Math.min(1600, Math.round(inner * 8.1)))
+  const rule = (key) => term
+    ? t('─'.repeat(inner), 'subtle', { wrap: 'truncate' })
+    : h(Svg, { key, source: `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="17" viewBox="0 0 ${px} 17"><rect y="8" width="${px}" height="1" fill="${subtle}"/></svg>`, alt: 'divider', width: px, height: 17 })
+  const seg = (key, label, on, onPress) => h(Button, { key, label, onPress, ...(on ? { variant: 'primary' } : { dimColor: true }) })
+  const control = (r) => {
+    const v = optOf(r)
+    if (r.kind === 'bool') return [h(Button, { key: `set-${r.key}`, label: v ? 'On' : 'Off', onPress: () => o.onSet(r, !v), ...(v ? { variant: 'primary' } : { dimColor: true }) })]
+    if (r.kind === 'choice') return r.options.map((x) => seg(`set-${r.key}:${x}`, cap1(x), x === v, () => { if (x !== v) o.onSet(r, x) }))
+    const n = Number(v), steps = r.steps.includes(n) ? r.steps : [...r.steps, n].sort((a, b) => a - b)
+    const lab = (x) => (r.key === 'inputPricePerM' ? `$${x}` : String(x))
+    if (!term) return [h(Select, { key: `set-${r.key}`, value: String(n), options: steps.map((x) => ({ value: String(x), label: lab(x) })), onSelect: (x) => o.onSet(r, Number(x)) })]
+    const i = steps.indexOf(n)
+    return [
+      h(Button, { key: `set-${r.key}:down`, label: '−', onPress: () => { if (i > 0) o.onSet(r, steps[i - 1]) }, ...(i > 0 ? {} : { dimColor: true }) }),
+      t(` ${lab(n)} `, 'text'),
+      h(Button, { key: `set-${r.key}:up`, label: '+', onPress: () => { if (i < steps.length - 1) o.onSet(r, steps[i + 1]) }, ...(i < steps.length - 1 ? {} : { dimColor: true }) }),
+    ]
+  }
+  const optionRow = (r) => {
+    const ctl = row({ gap: 1, flexShrink: 0, alignItems: 'center' }, control(r))
+    const full = fullHint(r, f) || ''
+    const m = full.match(/^.*?\.(?=\s)/)
+    const short = m && m[0].length < full.length ? m[0] : full
+    const hasMore = short !== full
+    const open = hasMore && S.more.has(r.key)
+    const more = hasMore ? h(Button, { key: `more-${r.key}`, label: open ? 'Less' : 'More', dimColor: true, ...(term ? { plain: true } : {}), onPress: () => { S.more.has(r.key) ? S.more.delete(r.key) : S.more.add(r.key); renderAll() } }) : null
+    const words = col({ flexGrow: 1, flexShrink: 1 }, [
+      row({ gap: 1 }, [row({ flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, [t(labelOf(r), inert(r, f) ? 'inactive' : 'text', { wrap: 'truncate' })]), more]),
+      short ? t(open ? full : short, 'inactive', { wrap: 'wrap' }) : null,
+    ])
+    return narrow ? col({ key: `row-${r.key}`, gap: term ? 0 : 1 }, [words, ctl]) : row({ key: `row-${r.key}`, alignItems: 'center', gap: 2 }, [words, ctl])
+  }
+  const kids = [row({ alignItems: 'center' }, [t('Settings', 'text', { wrap: 'truncate' }), grow(), done()])]
+  if (o.msg) kids.push(t(o.msg, 'error', { wrap: 'wrap' }))
+  for (const g of SETTINGS) {
+    const rows = []
+    g.rows.forEach((r, i) => { if (i) rows.push(rule(`rule-${r.key}`)); rows.push(optionRow(r)) })
+    kids.push(t(' '), t(g.group, 'claude', { wrap: 'truncate' }), col({ key: `card-${g.group}`, borderStyle: 'round', borderColor: subtle, paddingX: padX, paddingY: term ? 0 : 1 }, rows))
+  }
+  return col({ width: cells }, kids)
+}
+
+/* ---------- C · ledger: one row per option. Wide: group · label · hint · value. Narrow: a heading per group and one help row. ---------- */
+function drawC(ui, o) {
+  const { t, row, col, grow, control, done } = kit(ui, o)
+  const f = facts(), cells = o.W, wide = cells >= 72
+  const kids = [row({ alignItems: 'center', gap: 1 }, [
+    t('Settings', 'text'),
+    wide ? row({ flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, [t(o.msg || SAVED, o.msg ? 'error' : 'inactive', { wrap: 'truncate' })]) : grow(),
+    done(),
+  ])]
+  if (!wide && o.msg) kids.push(t(o.msg, 'error', { wrap: 'wrap' }))
+  for (const g of SETTINGS) {
+    if (!wide) kids.push(t(g.group, 'claude'))
+    g.rows.forEach((r, i) => {
+      const label = t(labelOf(r), inert(r, f) ? 'inactive' : 'text', { wrap: 'truncate' })
+      const hint = shortHint(r, f)
+      kids.push(wide
+        ? row({ key: `row-${r.key}`, alignItems: 'center' }, [
+            h(Box, { width: 8, flexShrink: 0 }, i === 0 ? t(g.group, 'claude') : null),
+            h(Box, { width: 35, flexShrink: 0, overflow: 'hidden' }, label),
+            row({ flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, [hint ? t(hint, 'inactive', { wrap: 'truncate' }) : null]),
+            t(' '), control(r),
+          ])
+        : row({ key: `row-${r.key}`, alignItems: 'center' }, [row({ flexShrink: 1, overflow: 'hidden' }, [label]), grow(), t(' '), control(r)]))
+    })
+  }
+  if (!wide) {
+    const r = ALL_ROWS.find((x) => x.key === S.focus) || ALL_ROWS[0]
+    const say = shortHint(r, f) || labelOf(r)
+    kids.push(t(' '), t(say, 'inactive', { wrap: 'wrap' }))
+  }
+  return col({ width: cells }, kids)
+}
+
+/* ---------- D · accordion: five rows with what each group holds, one open ---------- */
+function drawD(ui, o) {
+  const { t, row, col, grow, control, done } = kit(ui, o)
+  const f = facts(), cells = o.W, v = S.opts
+  const on = (x) => (x ? 'on' : 'off')
+  const summary = {
+    Look: `${cap1(v.theme)}, ${cap1(v.cardBars)}, band ${on(v.cacheBand)}, hint ${on(v.compactHint)}`,
+    Cache: !f.known ? 'Not known until the first reply' : `${f.hour ? '1 hour' : '5 minutes'}${f.sub && !f.long ? ' from your plan' : ''}, keep-warm ${f.keepOff ? f.keepWhy : `on, ${v.keepWarmPings} pings`}`,
+    Guards: `Veto ${on(v.compactGuard)}, model price ${on(v.modelGuard)}`,
+    Output: `Bash ${on(v.quietBash)}, trim ${on(v.trimOutput)}, suggest ${on(v.suggestSkills)}`,
+    Price: f.sub ? 'Not used on a subscription' : f.price ? `$${f.price} per million tokens` : 'Tokens only',
+  }
+  const kids = [row({ alignItems: 'center' }, [t('Settings', 'text'), grow(), done()])]
+  if (o.msg) kids.push(t(o.msg, 'error', { wrap: 'wrap' }))
+  SETTINGS.forEach((g, n) => {
+    const open = S.open === g.group
+    kids.push(row({ key: `head-${g.group}`, alignItems: 'center', gap: 1 }, [
+      t(open ? '▾' : '▸', open ? 'claude' : 'inactive'),
+      h(Box, { width: 10, flexShrink: 0 }, h(Button, { key: `group-${g.group}`, label: g.group, hotkey: String(n + 1), plain: true, onPress: () => { S.open = g.group; renderAll() } })),
+      row({ flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, [open ? null : t(summary[g.group], 'inactive', { wrap: 'truncate' })]),
+    ]))
+    if (!open) return
+    const rows = []
+    for (const r of g.rows) {
+      rows.push(row({ key: `row-${r.key}`, alignItems: 'center' }, [row({ flexShrink: 1, overflow: 'hidden' }, [t(labelOf(r), inert(r, f) ? 'inactive' : 'text', { wrap: 'truncate' })]), grow(), t(' '), control(r)]))
+      const hint = fullHint(r, f)
+      if (hint) rows.push(t(hint, 'inactive', { wrap: 'wrap' }))
+    }
+    kids.push(col({ paddingLeft: 2 }, rows))
+  })
+  return col({ width: cells }, kids)
+}
+
+/* ---------- E · in force: what is actually happening on this plan first, then what you can change, then what does nothing here ---------- */
+function drawE(ui, o) {
+  const { t, row, col, grow, control, done } = kit(ui, o)
+  const f = facts(), cells = o.W, wide = cells >= 72, v = S.opts
+  const head = !f.known ? 'Plan not known until the first reply' : f.sub ? 'On a subscription' : 'Paying by the token'
+  const status = !f.known
+    ? [['Cache', '5 minutes until a reply shows more'], ['Keep-warm', 'waits for the first reply'], ['Savings', 'in tokens']]
+    : f.sub
+      ? [['Cache', f.long ? '1 hour, as you set it' : '1 hour, from your plan'], ['Keep-warm', f.keepWhy || 'on'], ['Savings', 'tokens and % of the 5-hour window']]
+      : [['Cache', f.long ? '1 hour, as you set it' : '5 minutes'], ['Keep-warm', f.keepOff ? f.keepWhy : `on, up to ${v.keepWarmPings} pings about 4 minutes apart`], ['Savings', f.price ? `dollars at $${f.price} per million tokens` : 'tokens only: set a price below']]
+  const kids = [row({ alignItems: 'center' }, [t('Settings', 'text'), grow(), done()])]
+  if (o.msg) kids.push(t(o.msg, 'error', { wrap: 'wrap' }))
+  kids.push(t(head, 'claude', { wrap: 'truncate' }))
+  for (const [k, val] of status) kids.push(row({ alignItems: 'flex-start' }, [h(Box, { width: 11, flexShrink: 0 }, t(k, 'inactive')), row({ flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, [t(val, 'text', { wrap: narrowWrap(cells) })])]))
+  const line = (r) => {
+    const hint = shortHint(r, f)
+    return wide
+      ? row({ key: `row-${r.key}`, alignItems: 'center' }, [h(Box, { width: 35, flexShrink: 0, overflow: 'hidden' }, t(labelOf(r), inert(r, f) ? 'inactive' : 'text', { wrap: 'truncate' })), row({ flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, [hint ? t(hint, 'inactive', { wrap: 'truncate' }) : null]), t(' '), control(r)])
+      : row({ key: `row-${r.key}`, alignItems: 'center' }, [row({ flexShrink: 1, overflow: 'hidden' }, [t(labelOf(r), inert(r, f) ? 'inactive' : 'text', { wrap: 'truncate' })]), grow(), t(' '), control(r)])
+  }
+  const live = ALL_ROWS.filter((r) => !inert(r, f)), idle = ALL_ROWS.filter((r) => inert(r, f))
+  kids.push(t(' '), t('You can change', 'claude'), ...live.map(line))
+  if (idle.length) kids.push(t(' '), t(f.sub ? 'Not used on a subscription' : 'Not used right now', 'inactive'), ...idle.map(line))
+  return col({ width: cells }, kids)
+}
+const narrowWrap = (cells) => (cells < 60 ? 'wrap' : 'truncate')
+
+/* ---------- F · essentials: the few people change, the rest behind one press, and a count of any changed there ---------- */
+function drawF(ui, o) {
+  const { t, row, col, grow, control, done } = kit(ui, o)
+  const f = facts(), cells = o.W, wide = cells >= 72
+  const firstKeys = ['theme', 'cacheBand', ...(f.sub ? [] : ['keepWarm']), 'compactGuard', 'modelGuard', 'quietBash']
+  const first = firstKeys.map((k) => ALL_ROWS.find((r) => r.key === k)), rest = ALL_ROWS.filter((r) => !firstKeys.includes(r.key))
+  const line = (r) => {
+    const hint = shortHint(r, f)
+    return wide
+      ? row({ key: `row-${r.key}`, alignItems: 'center' }, [h(Box, { width: 35, flexShrink: 0, overflow: 'hidden' }, t(labelOf(r), inert(r, f) ? 'inactive' : 'text', { wrap: 'truncate' })), row({ flexGrow: 1, flexShrink: 1, overflow: 'hidden' }, [hint ? t(hint, 'inactive', { wrap: 'truncate' }) : null]), t(' '), control(r)])
+      : row({ key: `row-${r.key}`, alignItems: 'center' }, [row({ flexShrink: 1, overflow: 'hidden' }, [t(labelOf(r), inert(r, f) ? 'inactive' : 'text', { wrap: 'truncate' })]), grow(), t(' '), control(r)])
+  }
+  const changed = rest.filter((r) => optOf(r) !== r.def).length
+  const kids = [row({ alignItems: 'center' }, [t('Settings', 'text'), grow(), done()])]
+  if (o.msg) kids.push(t(o.msg, 'error', { wrap: 'wrap' }))
+  kids.push(...first.map(line))
+  if (S.allRows) kids.push(t(' '), ...rest.map(line))
+  kids.push(row({ alignItems: 'center', gap: 1 }, [
+    h(Button, { key: 'settings-all', label: S.allRows ? 'Fewer options' : `All ${ALL_ROWS.length} options`, plain: true, onPress: () => { S.allRows = !S.allRows; renderAll() } }),
+    changed ? t(`${changed} changed`, 'claude') : null,
+  ]))
+  return col({ width: cells }, kids)
+}
+
+/* ---------- terminal: flex in whole cells, the way Ink lays it out. Diffed line for line against the real CLI for every direction at every width. ---------- */
+const tColor = (c, pal) => (!c ? null : c[0] === '#' ? c : pal[c] || c)
+function wrapCells(cells, W) {
+  if (W <= 0) return [[]]
+  if (cells.length <= W) return [cells]
+  const lines = []
+  let line = [], word = [], room = W        // the space after a full line opens the next one and is trimmed later, so that line has a cell less
+  const trim = () => { while (line.length && line[line.length - 1].c === ' ') line.pop() }
+  const flush = () => {
+    if (!word.length) return
+    if (line.length && line.length + word.length > room) { trim(); room = line.length === room ? W - 1 : W; lines.push(line); line = [] }
+    while (word.length > W) { lines.push(word.slice(0, W)); word = word.slice(W) }
+    line = line.concat(word); word = []
+  }
+  for (const c of cells) { if (c.c === ' ') { flush(); if (line.length) line.push(c) } else word.push(c) }
+  flush(); trim()
+  lines.push(line)
+  return lines
+}
+function padRow(cells, w) { const r = cells.slice(0, w); while (r.length < w) r.push({ c: ' ' }); return r }
+function tLeaf(cells, avail, fixed, wrapMode) {
+  let lines
+  if (String(wrapMode || 'wrap').startsWith('truncate')) lines = [cells.length > avail ? [...cells.slice(0, Math.max(0, avail - 1)), { ...(cells[0] || {}), c: '…' }] : cells]
+  else lines = wrapCells(cells, avail)
+  const w = fixed !== null ? fixed : Math.min(avail, Math.max(0, ...lines.map((l) => l.length)))
+  return { w, h: lines.length, rows: lines.map((l) => padRow(l, w)) }
+}
+const run = (s, st) => [...String(s)].map((c) => ({ c: c === ' ' ? ' ' : c, ...st }))
+function tLayout(n, avail, ctx, fixed = null) {
+  const pal = ctx.pal
+  if (typeof n === 'string') return tLeaf(run(n, { fg: pal.text }), avail, fixed)
+  if (n.type === Text) {
+    const cells = []
+    const walk = (x, st) => {
+      if (typeof x === 'string') { cells.push(...run(x, st)); return }
+      const s = { ...st }
+      if (x.props.color) s.fg = tColor(x.props.color, pal)
+      if (x.props.backgroundColor) s.bg = tColor(x.props.backgroundColor, pal)
+      x.kids.forEach((k) => walk(k, s))
+    }
+    walk(n, { fg: pal.text })
+    return tLeaf(cells, avail, fixed, n.props.wrap)
+  }
+  if (n.type === Button) {
+    const p = n.props
+    const act = ctx.act(p.onPress, p.key)
+    const fg = p.dimColor ? pal.inactive : p.variant === 'primary' ? pal.permission : pal.text
+    const lab = p.plain ? (p.hotkey ? `${p.hotkey}: ${p.label}` : p.label) : `[ ${p.label} ]`
+    return tLeaf(run(lab, { fg, bold: !p.plain, act, key: p.key }), avail, fixed)
+  }
+  if (n.type === Select) {
+    const p = n.props
+    const opt = p.options.find((o) => o.value === p.value) || p.options[0]
+    const i = p.options.indexOf(opt), next = p.options[(i + 1) % p.options.length]
+    const act = ctx.act(() => p.onSelect(next.value), p.key)
+    return tLeaf([...run(opt.label || opt.value, { fg: pal.text, act, key: p.key }), ...run(' ▾', { fg: pal.inactive, act, key: p.key })], avail, fixed)
+  }
+  // Box
+  const p = n.props
+  if (p.display === 'none') return { w: 0, h: 0, rows: [] }
+  const bw = p.borderStyle ? 1 : 0
+  const pick = (...xs) => xs.find((x) => x !== undefined) || 0
+  const pl = pick(p.paddingLeft, p.paddingX, p.padding), pr = pick(p.paddingRight, p.paddingX, p.padding)
+  const pt = pick(p.paddingTop, p.paddingY, p.padding), pb = pick(p.paddingBottom, p.paddingY, p.padding)
+  const outer = p.width !== undefined ? p.width : fixed
+  const innerAvail = Math.max(0, (outer !== null ? outer : avail) - 2 * bw - pl - pr)
+  const dir = p.flexDirection || 'row'
+  const gap = dir === 'row' ? pick(p.columnGap, p.gap) : pick(p.rowGap, p.gap)
+  const kids = n.kids.filter((k) => !(k.props && k.props.display === 'none'))
+  const placed = []
+  let innerW = 0, innerH = 0
+  if (dir === 'column') {
+    const stretch = outer !== null
+    const measured = kids.map((k) => tLayout(k, innerAvail, ctx, stretch ? innerAvail : null))
+    innerW = stretch ? innerAvail : Math.max(0, ...measured.map((m) => m.w))
+    const final = stretch ? measured : kids.map((k) => tLayout(k, innerW, ctx, innerW))
+    let y = 0
+    final.forEach((m, i) => { placed.push({ x: 0, y, m }); y += m.h + (i < final.length - 1 ? gap : 0) })
+    innerH = y
+  } else {
+    const spacer = (k) => k.type === Box && !k.kids.length
+    const natural = kids.map((k) => (spacer(k) ? k.props.width || 0 : tLayout(k, innerAvail, ctx, null).w))
+    const gaps = gap * Math.max(0, kids.length - 1)
+    const sum = natural.reduce((a, b) => a + b, 0) + gaps
+    const target = outer !== null ? innerAvail : Math.min(innerAvail, sum)
+    const widths = natural.slice()
+    let free = target - sum
+    if (free > 0) {
+      const growers = kids.map((k, i) => [k, i]).filter(([k]) => k.type === Box && k.props.flexGrow)
+      growers.forEach(([k, i], gi) => { const share = gi === growers.length - 1 ? free : Math.floor(free / growers.length); widths[i] += share; free -= share })
+    } else if (free < 0) {
+      // Boxes that ask to shrink give way first, as Yoga leaves a one-cell Text whole; anything else only if that is not enough
+      const by = (test) => kids.map((k, i) => [k, i]).filter(([k, i]) => test(k) && natural[i] > 0)
+      let need = -free
+      for (const can of [by((k) => k.type === Box && k.props.flexShrink > 0), by((k) => !(k.type === Box && k.props.flexShrink !== undefined))]) {
+        const base = can.reduce((t, [, i]) => t + widths[i], 0)
+        const want = need
+        can.forEach(([, i], ci) => { const cut = ci === can.length - 1 ? need : Math.min(need, Math.ceil((widths[i] / (base || 1)) * want)); const real = Math.min(cut, widths[i]); widths[i] -= real; need -= real })
+      }
+      if (need > 0) ctx.over = true
+    }
+    const measured = kids.map((k, i) => (spacer(k) ? { w: widths[i], h: 0, rows: [] } : tLayout(k, Math.max(0, widths[i]), ctx, Math.max(0, widths[i]))))
+    innerH = Math.max(0, ...measured.map((m) => m.h))
+    let x = 0
+    measured.forEach((m, i) => {
+      const y = p.alignItems === 'center' ? Math.round((innerH - m.h) / 2) : p.alignItems === 'flex-end' ? innerH - m.h : 0
+      placed.push({ x, y, m }); x += widths[i] + (i < measured.length - 1 ? gap : 0)
+    })
+    innerW = target
+  }
+  const W = innerW + 2 * bw + pl + pr, H = innerH + 2 * bw + pt + pb
+  const bg = p.backgroundColor ? tColor(p.backgroundColor, pal) : undefined
+  const rows = Array.from({ length: H }, () => Array.from({ length: W }, () => ({ c: ' ', bg })))
+  for (const { x, y, m } of placed) for (let j = 0; j < m.h; j++) for (let i = 0; i < m.w; i++) { const c = m.rows[j][i]; if (c && rows[y + j + bw + pt] && (x + i + bw + pl) < W) rows[y + j + bw + pt][x + i + bw + pl] = c }
+  if (bw) {
+    const [tl, tr, bl, br] = p.borderStyle === 'round' ? ['╭', '╮', '╰', '╯'] : ['┌', '┐', '└', '┘']
+    const fg = tColor(p.borderColor, pal) || pal.text
+    const put = (y, x, c) => { rows[y][x] = { c, fg } }
+    for (let i = 1; i < W - 1; i++) { put(0, i, '─'); put(H - 1, i, '─') }
+    for (let j = 1; j < H - 1; j++) { put(j, 0, '│'); put(j, W - 1, '│') }
+    put(0, 0, tl); put(0, W - 1, tr); put(H - 1, 0, bl); put(H - 1, W - 1, br)
+  }
+  return { w: W, h: H, rows }
+}
+
+function drawCells(parent, cells, keep) {
+  let cur = null, span = null
+  for (const c of cells) {
+    const k = [c.fg, c.bg, c.bold, c.act].join('|')
+    if (k !== cur) {
+      span = document.createElement('span')
+      if (c.fg) span.style.color = c.fg
+      if (c.bg) span.style.background = c.bg
+      if (c.bold) span.style.fontWeight = '700'
+      if (c.act !== undefined) { span.dataset.act = c.act; span.onclick = () => keep(c.act) }
+      parent.append(span); cur = k
+    }
+    span.textContent += c.c
+  }
+}
+
+/* The pane as the real CLI frames it: inline a round border with a cell of padding, docked a tinted column with a rule and a ✕. */
+function renderTerm(tree, surf, mode) {
+  const pal = HEX[mode].terminal, T = TERM[mode]
+  const acts = []
+  const ctx = { pal, over: false, act: (fn) => { acts.push(fn); return acts.length - 1 } }
+  const out = tLayout(tree, surf.W, ctx, surf.W)
+  const press = (i) => { const fn = acts[i]; if (fn) fn() }
+  const el = document.createElement('div')
+  el.className = 'tpane'
+  el.style.background = T.ground
+  el.style.color = pal.text
+  const bordered = surf.placement === 'inline'
+  const addRow = (cells, past) => { const d = document.createElement('div'); d.className = 'trow' + (past ? ' past' : ''); drawCells(d, cells, press); el.append(d) }
+  const side = (c) => ({ c, fg: T.border })
+  const tint = surf.placement === 'dock' ? T.dock : undefined
+  const shade = (cells) => (tint ? cells.map((c) => ({ ...c, bg: c.bg || tint })) : cells)
+  if (bordered) addRow([side('╭'), ...Array.from({ length: surf.W + 2 }, () => side('─')), side('╮')])
+  else addRow([side('│'), ...shade(padRow([], surf.W)), side('✕')])
+  out.rows.forEach((r, i) => {
+    const past = i >= surf.fold
+    if (i === surf.fold) { const d = document.createElement('div'); d.className = 'tfold'; d.textContent = `    ▼ the pane shows ${surf.fold} rows; ${out.h - surf.fold} more scroll`; el.append(d) }
+    addRow(bordered ? [side('│'), { c: ' ' }, ...r, { c: ' ' }, side('│')] : [side('│'), ...shade(r)], past)
+  })
+  if (bordered) addRow([side('╰'), ...Array.from({ length: surf.W + 2 }, () => side('─')), side('╯')], out.h > surf.fold)
+  const seen = new Set()
+  out.rows.slice(0, surf.fold).forEach((r) => r.forEach((c) => { const m = c.key && String(c.key).match(/^set-([a-zA-Z]+)/); if (m) seen.add(m[1]) }))
+  const all = new Set()
+  out.rows.forEach((r) => r.forEach((c) => { const m = c.key && String(c.key).match(/^set-([a-zA-Z]+)/); if (m) all.add(m[1]) }))
+  return { el, rows: out.h, seen: seen.size, all: all.size, over: ctx.over }
+}
+
+/* ---------- desktop: the same tree as DOM, in cells of 8.16 px across and 1lh down ---------- */
+const CELL = 8.16, LH = 19.5
+function dNode(n, ui) {
+  if (typeof n === 'string') return document.createTextNode(n)
+  const p = n.props
+  if (n.type === Text) {
+    const s = document.createElement('span')
+    const wrap = String(p.wrap || 'wrap')
+    s.className = 'dtext' + (wrap.startsWith('truncate') ? ' trunc' : wrap === 'wrap' && p.wrap ? ' wrap' : '')
+    if (p.color) s.style.color = p.color
+    n.kids.forEach((k) => s.append(dNode(k, ui)))
+    return s
+  }
+  if (n.type === Button) {
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.dataset.key = p.key || p.label
+    b.className = 'dbtn' + (p.plain ? ' plain' : '') + (p.variant === 'primary' && !p.plain ? ' primary' : '') + (p.dimColor ? ' dim' : '')
+    if (p.hotkey) { const c = document.createElement('span'); c.className = 'cue'; c.textContent = p.hotkey; b.append(c) }
+    b.append(document.createTextNode(p.label))
+    b.onclick = () => p.onPress && p.onPress()
+    return b
+  }
+  if (n.type === Select) {
+    const opt = p.options.find((o) => o.value === p.value) || p.options[0]
+    const i = p.options.indexOf(opt), next = p.options[(i + 1) % p.options.length]
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.dataset.key = p.key
+    b.className = 'dbtn'
+    b.append(document.createTextNode(opt.label || opt.value))
+    const car = document.createElement('span')
+    car.className = 'caret'
+    car.innerHTML = '<svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.5 5.5 7 9l3.5-3.5"/></svg>'
+    b.append(car)
+    b.onclick = () => p.onSelect && p.onSelect(next.value)
+    return b
+  }
+  if (n.type === Svg) {
+    const d = document.createElement('div')
+    d.style.cssText = `width:${p.width}px;height:${p.height}px;flex:none;max-width:100%;overflow:hidden`
+    d.innerHTML = p.source
+    return d
+  }
+  const d = document.createElement('div')
+  d.className = 'dbox'
+  const st = d.style
+  const dir = p.flexDirection || 'row'
+  st.flexDirection = dir
+  if (p.alignItems) st.alignItems = p.alignItems
+  if (p.flexGrow !== undefined) st.flexGrow = p.flexGrow
+  if (p.flexShrink !== undefined) st.flexShrink = p.flexShrink
+  if (p.overflow) st.overflow = p.overflow
+  if (p.width !== undefined) st.width = `${p.width * CELL}px`
+  if (p.gap !== undefined) st.gap = dir === 'row' ? `${p.gap * CELL}px` : `${p.gap * LH}px`
+  const pick = (...xs) => xs.find((x) => x !== undefined) || 0
+  st.paddingLeft = `${pick(p.paddingLeft, p.paddingX, p.padding) * CELL}px`
+  st.paddingRight = `${pick(p.paddingRight, p.paddingX, p.padding) * CELL}px`
+  st.paddingTop = `${pick(p.paddingTop, p.paddingY, p.padding) * LH}px`
+  st.paddingBottom = `${pick(p.paddingBottom, p.paddingY, p.padding) * LH}px`
+  if (p.borderStyle) { st.border = `1px solid ${p.borderColor || 'currentColor'}`; if (p.borderStyle === 'round') st.borderRadius = '8px' }
+  n.kids.forEach((k) => d.append(dNode(k, ui)))
+  return d
+}
+const BAND_FOLD = 11 * LH      // max-h-[calc(11lh+40px)] on the band's site wrapper, 40 px of it padding
+function renderDesk(tree, surf, mode) {
+  const D = DESK[mode]
+  const el = document.createElement('div')
+  el.className = 'dpane'
+  const st = el.style
+  st.width = `${surf.W * CELL + 36}px`
+  st.background = D.ground; st.boxShadow = `inset 0 0 0 1px ${D.frame}`
+  for (const [k, v] of Object.entries({ text: D.text, faint: D.faint, fill: D.fill, fill2: D.fill2, prim: D.prim, onprim: D.onprim, ground: D.ground })) st.setProperty(`--t-${k}`, v)
+  const body = document.createElement('div')
+  body.className = 'dbody'
+  body.append(dNode(tree))
+  el.append(body)
+  return { el, body }
+}
+
+/* ---------- directions and surfaces ---------- */
+const DIRS = [
+  { id: 'A', name: 'Current', draw: drawSettings, note: 'As shipped in 0.3.40. Every hint always open, so the terminal shows Look and part of Cache. Active value is the engine\'s bold periwinkle on the terminal, a solid pill on the desktop.' },
+  { id: 'B', name: 'Cards', draw: drawB, note: 'The unmerged 0.3.37: hairline cards, first sentence under each title, More for the rest, a Select for numbers on the desktop. The most like a desktop Settings page, and the tallest on every surface. Borders eat 4 columns and rules a row each. Keeps the bold periwinkle. At 40 the More button squeezes the price label to "million tok…", which breaks the rule that every string says tokens.' },
+  { id: 'C', name: 'Ledger', draw: drawC, note: 'One row per option, nothing hidden. Wide: group, label, one-line hint, value. Narrow: group headings and one help row that follows focus (ui.focus, confirmed firing on the real CLI). Long hints are gone: the full text stays in /config. A mouse on the narrow desktop only sees a row\'s hint after pressing it.' },
+  { id: 'D', name: 'Accordion', draw: drawD, note: 'Five rows that say what each group holds, one open, hints in full. Fits the 14-row pane with any group open. Most options sit one press away, and every summary is a sentence that must stay true as options change. Adds open-group state.' },
+  { id: 'E', name: 'In force', draw: drawE, note: 'Leads with what is really happening on this plan, then what you can change; rows that do nothing here drop to the bottom. The clearest answer to "why is keep-warm off?", which the Context pane already gives. Rows move between sessions, and until the first reply the plan is not known.' },
+  { id: 'F', name: 'Essentials', draw: drawF, note: 'Five or six options, the rest behind one press with a count of any changed there. The shortest. Which options count as essential is my judgement, with no usage data behind it, and it breaks "every option in one place".' },
+]
+const SURFACES = [
+  { id: 'd98', surface: 'desktop', W: 98, name: 'Desktop · 98 columns, 800 px', sub: 'What the Context pane measured on the desktop: the band above the prompt, or a wide dock. Dashed line: where the band stops at 11 lines, read from the renderer\'s CSS; a docked pane has no such stop.' },
+  { id: 'd40', surface: 'desktop', W: 40, name: 'Desktop · narrow, 40 columns, 326 px', sub: 'The width the settings test pins.' },
+  { id: 't96', surface: 'terminal', W: 96, fold: 14, placement: 'inline', name: 'Terminal · inline, 96 × 14', sub: 'A 100 × 50 terminal, measured on the real CLI. Under 110 columns the pane is inline at a third of the height.' },
+  { id: 't54', surface: 'terminal', W: 54, fold: 43, placement: 'dock', name: 'Terminal · docked, 54 × 43', sub: 'Any terminal from 110 columns up, measured at 110, 140, 180 and 220: always 54 wide.' },
+  { id: 't40', surface: 'terminal', W: 40, fold: 14, placement: 'inline', name: 'Terminal · narrow, 40 × 14', sub: 'The width the settings test pins, in a 44-column terminal.' },
+]
+const MODES = ['dark', 'light']
+const VIEW = { dirs: new Set(DIRS.map((d) => d.id)), surfs: new Set(SURFACES.map((s) => s.id)), modes: new Set(MODES), zoom: 0.5 }
+
+function uiFor(surface, mode) {
+  const term = surface === 'terminal'
+  const pal = HEX[mode][term ? 'terminal' : 'desktop']
+  return { Box, Text, Button, term, Select: term ? undefined : Select, Svg: term ? undefined : Svg, hex: (k) => (String(k)[0] === '#' ? k : pal[k] || pal.inactive) }
+}
+function refusedMsg() { return S.refused ? 'Rewrite noisy bash not saved: locked by your organization' : '' }
+function treeFor(dir, surf, mode) {
+  settingsMsg = refusedMsg()
+  const o = {
+    W: surf.W, msg: settingsMsg,
+    onSet: (r, v) => { S.opts[r.key] = v; S.focus = r.key; renderAll() },
+    onDone: () => {},
+  }
+  const tree = dir.draw(uiFor(surf.surface, mode), o)
+  const errs = []
+  check(tree, surf.surface, errs)
+  return { tree, errs: [...new Set(errs)] }
+}
+
+/* ---------- measuring, with no zoom and off screen ---------- */
+function measure() {
+  const box = document.getElementById('measure')
+  const out = {}
+  for (const dir of DIRS) {
+    const m = (out[dir.id] = {})
+    for (const surf of SURFACES) {
+      const { tree, errs } = treeFor(dir, surf, 'dark')
+      if (errs.length) { m[surf.id] = { errs }; continue }
+      if (surf.surface === 'terminal') { m[surf.id] = renderTerm(tree, surf, 'dark'); delete m[surf.id].el; continue }
+      const r = renderDesk(tree, surf, 'dark')
+      box.replaceChildren(r.el)
+      const top = r.body.getBoundingClientRect().top
+      const keys = [...r.body.querySelectorAll('[data-key^="set-"]')]
+      const opt = (b) => b.dataset.key.match(/^set-([a-zA-Z]+)/)[1]
+      const seen = new Set(keys.filter((b) => b.getBoundingClientRect().top - top < BAND_FOLD).map(opt))
+      m[surf.id] = { px: Math.round(r.body.getBoundingClientRect().height), seen: seen.size, all: new Set(keys.map(opt)).size }
+      box.replaceChildren()
+    }
+  }
+  return out
+}
+const pct = (v, base) => { if (base === v) return '0%'; const d = Math.round(((v - base) / base) * 100); return `${d > 0 ? '+' : '−'}${Math.abs(d)}%` }
+
+function renderTable(M) {
+  const a = M.A
+  const cell = (v, base, unit, dirId) => `<td class="${dirId === 'A' ? 'base' : ''}">${v}${unit}${dirId === 'A' ? '' : `<span class="d">${pct(v, base)}</span>`}</td>`
+  const rows = DIRS.map((d) => {
+    const m = M[d.id]
+    const fits = m.t96.rows <= 14
+    return `<tr class="${d.id === 'C' ? 'pick' : ''}"><td>${d.id} · ${d.name}</td>`
+      + cell(m.t96.rows, a.t96.rows, '', d.id) + cell(m.t54.rows, a.t54.rows, '', d.id) + cell(m.t40.rows, a.t40.rows, '', d.id)
+      + `<td class="${fits ? 'fit' : 'nofit'}">${fits ? 'fits' : `${m.t96.rows - 14} over`}</td>`
+      + `<td>${m.t96.seen} of 13</td>`
+      + cell(m.d98.px, a.d98.px, ' px', d.id) + cell(m.d40.px, a.d40.px, ' px', d.id)
+      + `<td>${m.d98.seen} of 13</td>`
+      + `<td>${13 - m.t96.all}</td>`
+      + `<td class="txt">${d.id === 'B' ? 'Box, Text, Button, and Svg and Select on the desktop' : 'Box, Text, Button'}</td>`
+      + `</tr>`
+  }).join('')
+  document.getElementById('table').innerHTML = `<table class="m"><thead><tr><th>Direction, Δ against A</th>`
+    + `<th>Terminal rows<br>96 wide</th><th>54, docked</th><th>40, narrow</th><th>In the 14-row pane?</th><th>Options in view<br>at 96 × 14</th>`
+    + `<th>Desktop height<br>98 columns</th><th>40, narrow</th><th>Options above<br>the band's stop</th><th>Options behind<br>a press</th><th style="text-align:left">Elements</th></tr></thead><tbody>${rows}</tbody></table>`
+  const ok = S.plan === 'sub' && !S.refused && JSON.stringify(S.opts) === JSON.stringify(DEFAULTS)
+  document.getElementById('cal').innerHTML = `Terminal frames are proven: all six trees were drawn on the real CLI (Claude Code 2.1.302) at 96, 54 and 40 columns, and all 18 match these frames line for line, on the subscription state in dark. The light palette's colours come from a real capture of A and the theme table. Desktop frames are not proven: they use the engine's CSS and the app's tokens from its code cache, with the band's 19 px buttons (<code>design/mid-session.js</code>), and have not been compared with a screenshot. A docked desktop pane may draw taller controls (<code>--cds-h-control</code> runs 20 to 40 px), which would make A and B taller than shown. VS Code draws the same elements as the desktop, inline under 800 px and docked above. Mobile places no pane, so <code>/tokens settings</code> prints text there in every direction.${ok ? '' : ' The table reflects the state you have pressed; Reset returns to defaults.'}`
+}
+
+function renderBar() {
+  const bar = document.getElementById('bar')
+  bar.replaceChildren()
+  const grp = (label, items) => {
+    const g = document.createElement('div'); g.className = 'grp'
+    const s = document.createElement('span'); s.textContent = label; g.append(s)
+    for (const it of items) {
+      const b = document.createElement('button'); b.textContent = it.label; b.title = it.title || ''
+      if (it.on) b.className = 'on'
+      if (it.cls) b.className = it.cls
+      b.onclick = it.press; g.append(b)
+    }
+    bar.append(g)
+  }
+  const toggle = (set, id) => () => { if (set.has(id) && set.size > 1) set.delete(id); else set.add(id); renderAll() }
+  grp('Show', DIRS.map((d) => ({ label: d.id, title: d.name, on: VIEW.dirs.has(d.id), press: toggle(VIEW.dirs, d.id) })))
+  grp('Surface', SURFACES.map((s) => ({ label: { d98: 'Desktop', d40: 'Desktop narrow', t96: 'Terminal inline', t54: 'Terminal dock', t40: 'Terminal narrow' }[s.id], on: VIEW.surfs.has(s.id), press: toggle(VIEW.surfs, s.id) })))
+  grp('Palette', MODES.map((m) => ({ label: cap1(m), on: VIEW.modes.has(m), press: toggle(VIEW.modes, m) })))
+  grp('Plan', [['sub', 'Subscription'], ['api', 'API key'], ['unknown', 'Before first reply']].map(([id, label]) => ({ label, on: S.plan === id, press: () => { S.plan = id; renderAll() } })))
+  grp('State', [{ label: 'Refused save', on: S.refused, press: () => { S.refused = !S.refused; renderAll() } }, { label: 'Reset', cls: 'reset', press: () => { Object.assign(S, { opts: { ...DEFAULTS }, plan: 'sub', refused: false, focus: 'theme', open: 'Look', allRows: false }); S.more.clear(); renderAll() } }])
+  grp('Zoom', [0.4, 0.5, 0.75, 1].map((z) => ({ label: `${Math.round(z * 100)}%`, on: VIEW.zoom === z, press: () => { VIEW.zoom = z; renderAll() } })))
+}
+
+function renderBoards(M) {
+  const root = document.getElementById('boards')
+  root.replaceChildren()
+  root.style.zoom = VIEW.zoom
+  for (const surf of SURFACES) {
+    if (!VIEW.surfs.has(surf.id)) continue
+    const sec = document.createElement('section'); sec.className = 'board'
+    sec.innerHTML = `<h2>${surf.name}</h2><p class="sub">${surf.sub}</p>`
+    for (const mode of MODES) {
+      if (!VIEW.modes.has(mode)) continue
+      const line = document.createElement('div'); line.className = 'modeRow'
+      for (const dir of DIRS) {
+        if (!VIEW.dirs.has(dir.id)) continue
+        const f = document.createElement('div'); f.className = 'frame'
+        const { tree, errs } = treeFor(dir, surf, mode)
+        const m = M[dir.id][surf.id], a = M.A[surf.id]
+        const head = document.createElement('div'); head.className = 'fhead'
+        const meas = surf.surface === 'terminal'
+          ? `${m.rows} rows${dir.id === 'A' ? '' : ` · ${pct(m.rows, a.rows)}`} · ${m.seen} of 13 in view`
+          : `${m.px} px${dir.id === 'A' ? '' : ` · ${pct(m.px, a.px)}`}`
+        head.innerHTML = `<span class="id">${dir.id}</span><b>${dir.name}</b><span>${cap1(mode)}</span><span class="meas">${meas}</span>`
+        f.append(head)
+        if (errs.length) {
+          const e = document.createElement('div'); e.className = 'err'; e.textContent = `Not drawable on ${surf.surface}:\n${errs.join('\n')}`; f.append(e)
+        } else if (surf.surface === 'terminal') {
+          const r = renderTerm(tree, surf, mode)
+          if (r.over) { const e = document.createElement('div'); e.className = 'err'; e.textContent = 'A row overflows here: the terminal would break it a letter at a time'; f.append(e) }
+          f.append(r.el)
+        } else {
+          const r = renderDesk(tree, surf, mode)
+          if (surf.id === 'd98' && m.px > BAND_FOLD) { const line2 = document.createElement('div'); line2.className = 'foldline'; line2.style.top = `${BAND_FOLD}px`; line2.innerHTML = '<span>the band stops here</span>'; r.body.append(line2) }
+          f.append(r.el)
+        }
+        line.append(f)
+      }
+      sec.append(line)
+    }
+    root.append(sec)
+  }
+}
+
+function renderDirs() {
+  document.getElementById('dirs').innerHTML = DIRS.map((d) => `<div class="dir"><h2><span class="id">${d.id}</span>${d.name}</h2><p>${d.note}</p></div>`).join('')
+}
+function renderRec(M) {
+  const c = M.C, a = M.A, d = M.D
+  document.getElementById('rec').innerHTML = `<p><b>Build C, the ledger.</b> It is the only direction that keeps all 13 options visible and still fits the terminal's 14-row pane: ${c.t96.rows} rows at 96 wide against A's ${a.t96.rows}, ${c.t54.rows} docked against ${a.t54.rows}, ${c.d98.px} px on the desktop against ${a.d98.px}. A settings panel is mostly read to see what is set, so values in one column beat explanations, and the long text already lives in <code>/config</code> (the <code>plugin.json</code> descriptions). It needs only Box, Text and Button, so the same tree is drawable on every surface. It also ends the bold periwinkle, moves a refused save to the title row, and dims a row that does nothing on your plan and says why.</p>`
+    + `<p><b>Runner-up: D, the accordion</b> (${d.t96.rows} rows, full hints kept). It wins if strangers need the explanations in the panel more than they need to see every value at once.</p>`
+}
+
+function renderAll() {
+  const M = measure()
+  renderRec(M); renderTable(M); renderBar(); renderBoards(M)
+  window.__M = M
+}
+renderDirs()
+renderAll()
+</script>
+</body>
+</html>
