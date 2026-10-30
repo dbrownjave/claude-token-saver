@@ -21,6 +21,8 @@ The mod is one module, `plugins/token-saver/hooks/register.js`, plus `glossary.j
 - **Pieces that may be squeezed get `wrap: 'truncate'`** (`one()` / `line()` in `drawContextPane`), or they wrap word by word.
 - **Narrow** is `!term && (o.mobile || cells < 72)`: long rows split, cards go one per row, ⤢ is hidden. Mobile is `e.surface === 'mobile'`.
 - **`$.session.compact` rejects on the desktop/SDK**: compact there is `$.prompt.submit({ text: '/compact' })`. Keep the fallback.
+- **VS Code is `e.surface === 'vscode'`**: Svg like the desktop, never Raster or Client; it always places panes, so branch on `placesPanes(surface, isFullscreen)`, not on `isFullscreen` alone. `no-surface` (nothing attached) gets text, not a toast.
+- **No `options` in `plugin.json` `userConfig`**: older CLIs (VS Code's bundled 2.1.263) refuse the whole plugin over it. Validate choices in `register()`.
 - **Panes may not be placed**: check `opened.isPlaced !== false` and toast the reason; never a button that does nothing.
 - **Numbers must be true.** The pane claims only what the plugin itself did (trimmed output, compactions vetoed, keep-warm net). Claude's own prompt cache is shown beside it and never added in. Any new figure needs: what it measures, the counterfactual it assumes, and a `≈` if estimated.
 - No `bold` in the pane; colour carries hierarchy (`text`, `inactive`, `success`, threshold colour).
