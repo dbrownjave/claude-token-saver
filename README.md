@@ -107,14 +107,14 @@ A settings hook can only add a note before `/compact`. The mod sits on the compa
 | `/compact`, cache cold | **Refused.** One line names the idle time and the tokens a compaction would re-send, and points at `/handoff` then `/clear`. |
 | `/compact force` | Runs anyway. Keep-list still appended. |
 | auto-compaction | Never refused. Keep-list appended. Blocking it would let the window overflow. |
-| idle compaction (Claude Code 2.1.299+) | Never refused. Keep-list appended. The pane names it as Claude Code's own work, with the before and after size, and never counts it in Saved. Keep-warm stops for that stretch, since the prefix it would re-read is gone. Claude Code runs it on the 1-hour cache, for sessions over 200k tokens (`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`, 100k floor), about 54 minutes after the last reply. Opt out with `"idleCompaction": false`. |
+| idle compaction (Claude Code 2.1.299+ in the terminal, 2.1.314+ in VS Code and the desktop app) | Never refused. Keep-list appended. The pane names it as Claude Code's own work, with the before and after size, and never counts it in Saved. Keep-warm stops for that stretch, since the prefix it would re-read is gone. Claude Code runs it on the 1-hour cache, for sessions over 200k tokens (`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`, 100k floor), about 54 minutes after the last reply. Opt out with `"idleCompaction": false`. |
 | subagent transcripts | Left alone. |
 
 **Idle compaction card** (the fourth card in the pane, and a row in `/tokens list`). It counts down from your last reply to when Claude Code would compact the session, about 54 minutes on the one-hour cache, with a bar that fills as the moment nears. It reads the same settings Claude Code does. It says Off when `"idleCompaction": false`, auto-compact is off, or `DISABLE_COMPACT` is set. It waits with a size bar while the session is under the floor (200k, or your `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`, never under 100k), and says when the session is on the 5-minute cache, where it never runs. The time is marked ≈ because Claude Code can tune the moment.
 
 "Cold" means idle longer than the prompt-cache TTL since the last response. The TTL follows Claude Code: a reply's cache writes say 5 minutes or 1 hour, a model switch reports it, and an idle compaction only happens on the 1-hour cache. Until one of those is seen it is 5 minutes. `longCacheTtl` forces 1 hour. `/tokens` shows which state you are in.
 
-**Keep-warm** (`keepWarm`, on by default) applies only to API billing with the 5-minute TTL, and turns itself off once Claude Code is seen on the 1-hour cache. While you are idle, it re-reads the session's own cached prefix with one tiny request (`$.model.fork`) about 75 seconds before the cache lapses. A read costs about 0.1× the input price and restarts the TTL. Your next message then hits the cache instead of paying a 1.25× re-write.
+**Keep-warm** (`keepWarm`, on by default) applies only to API billing with the 5-minute TTL, and turns itself off once Claude Code is seen on the 1-hour cache. While you are idle, it re-reads the session's own cached prefix with one tiny request (`$.model.fork`) about 75 seconds before the cache lapses. A read costs at most 0.1× the input price (0.05× on Opus and Sonnet 5.5, 0.025× on Fable 5.1) and restarts the TTL. Your next message then hits the cache instead of paying a 1.25× re-write.
 - It stops after `keepWarmPings` pings per idle stretch (default 5, about 20 minutes, the break-even if you come back half the time).
 - It stops on the first miss, and it never runs during a turn.
 - It is off on a subscription, which already caches the main thread for an hour; pings there would spend plan quota.
@@ -128,9 +128,9 @@ The app's own "Switch model?" dialog has no number in it. The mod sits on the sw
 |---|---|
 | cache cold | Goes through. One toast: free, the next message re-reads everything either way. |
 | cache warm, under 20k tokens | Goes through. One toast: cheap, N tokens re-read once. |
-| cache warm, 20k tokens or more | One dialog with the cost (tokens at 1.25× the input price, in dollars at the target model's list price, or as % of the 5-hour window on a subscription) and three buttons: **Switch**, **One message**, **Stay**. |
+| cache warm, 20k tokens or more | One dialog with the cost (tokens at the write price, 1.25× input on the 5-minute cache or 2× on the one-hour cache, in dollars at the target model's list price, or as % of the 5-hour window on a subscription) and three buttons: **Switch**, **One message**, **Stay**. |
 | One message | The switch is refused, but the next reply alone goes to the other model. The session stays put, so its warm cache survives every turn after it. The status line under the prompt says so until that turn ends. |
-| Stay | The switch is refused. The Receipt books the cold re-write you did not pay (142k tokens held → 177k at 1.25×), on the same basis as a vetoed compaction. |
+| Stay | The switch is refused. The Receipt books the cold re-write you did not pay (142k tokens held → 177k at 1.25×, or 284k at 2× on the one-hour cache), on the same basis as a vetoed compaction. |
 | Switch | Goes through. The Receipt lists the cold re-read as paid, never as a saving. |
 | subagents, SDK and Remote Control switches | Never questioned. |
 
@@ -298,7 +298,7 @@ Opt-in (off until you enable them):
 | `cache-guard` | Asks before a mid-session model switch when the cache is warm |
 | `slim-startup` | Caps bash at 8k chars; sets `CLAUDE_CODE_DISABLE_ARTIFACT=1` (reversible) |
 | `deny-secrets` | Blocks Read on `.env`, `secrets/`, `node_modules` |
-| `thinking-cap` | `MAX_THINKING_TOKENS=8000` |
+| `effort-cap` | `effortLevel: medium` for models with no saved level (mainly Fable 5.1 and older models; the 5.5 models already start at medium) |
 | `no-connectors` | Disables claude.ai connectors (only if you do not use Slack/Jira/etc) |
 | `no-remote` | Disables remote-control tool defs |
 

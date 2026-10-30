@@ -31,7 +31,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 TTL_S = 300                 # the 5-minute subagent cache
-LAPSE_RE = 1.15             # a lapse write at 1.25× that a longer cache would have served at 0.1×
+def lapse_re(model: str) -> float:
+    """A lapse write at 1.25× against the hit a longer cache would have made, at the model's read price."""
+    m = model or ""
+    read = 0.025 if re.search(r"(fable|mythos)-5-1", m, re.I) else 0.05 if re.search(r"(opus|sonnet)-5-5", m, re.I) else 0.1
+    return 1.25 - read
+
+
 LONG_PREMIUM = 0.75         # what every other write would have cost extra at the 1-hour price (2× − 1.25×)
 MIN_VERSION = (0, 3, 25)    # the first mod version that records subagent lapses
 
@@ -97,7 +103,7 @@ def hit_pct(r: dict) -> int:
 def analyse(rows: list[dict]) -> dict:
     """The mod's rule, applied to one agent's requests."""
     out = {"steps": len(rows), "lapses": 0, "lapse_write": 0, "other_write": 0, "write_5m": 0, "write_1h": 0,
-           "gap_hits": 0, "max_gap_s": 0, "lapse_gaps": []}
+           "gap_hits": 0, "max_gap_s": 0, "lapse_gaps": [], "lapse_net": 0.0}
     prev = None
     for r in rows:
         out["write_5m"] += r["write_5m"]
@@ -108,6 +114,7 @@ def analyse(rows: list[dict]) -> dict:
             if gap > TTL_S and r["write"] > 0 and hit_pct(r) < 50:
                 out["lapses"] += 1
                 out["lapse_write"] += r["write"]
+                out["lapse_net"] += lapse_re(r["model"]) * r["write"]
                 out["lapse_gaps"].append((round(gap / 60), r["write"], hit_pct(r)))
                 prev = r
                 continue
@@ -116,7 +123,7 @@ def analyse(rows: list[dict]) -> dict:
         out["other_write"] += r["write"]
         prev = r
     out["cost"] = round(out["lapse_write"] * 1.25)
-    out["net_1h"] = round(LAPSE_RE * out["lapse_write"] - LONG_PREMIUM * out["other_write"])
+    out["net_1h"] = round(out["lapse_net"] - LONG_PREMIUM * out["other_write"])
     return out
 
 
@@ -168,6 +175,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         t["runs_lapsed"] += 1 if a["lapses"] else 0
         for k in ("lapses", "lapse_write", "other_write", "write_5m", "write_1h", "gap_hits"):
             t[k] += a[k]
+        t["lapse_net"] = t.get("lapse_net", 0.0) + a["lapse_net"]
         sessions.add(f.parents[1].with_suffix(".jsonl"))
     main5 = main1 = 0
     for s in sessions:
@@ -179,7 +187,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
     tot = {"runs": 0, "lapses": 0, "cost": 0, "net": 0, "gap_hits": 0}
     for name, t in sorted(by_type.items(), key=lambda kv: -kv[1]["lapse_write"]):
         cost = round(t["lapse_write"] * 1.25)
-        net = round(LAPSE_RE * t["lapse_write"] - LONG_PREMIUM * t["other_write"])
+        net = round(t.get("lapse_net", 0.0) - LONG_PREMIUM * t["other_write"])
         tot["runs"] += t["runs"]; tot["lapses"] += t["lapses"]; tot["cost"] += cost; tot["net"] += max(0, net); tot["gap_hits"] += t["gap_hits"]
         verdict = f"saves ≈ {fmt_k(net)} tokens" if net > 0 else ("costs more than it saves" if t["lapses"] else "no waits, leave it")
         print(f"{name:<22}{t['runs']:>6}{t['runs_lapsed']:>8}{t['lapses']:>9}{fmt_k(t['lapse_write']):>11}{fmt_k(cost):>11}  {verdict:<18}")

@@ -297,7 +297,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const one = surface === 'terminal' ? /^¹[ \u00a0]$/ : /^①[ \u00a0]$/, five = surface === 'terminal' ? /^⁵[ \u00a0]$/ : /^⑤[ \u00a0]$/
     expect(await ui.find({ text: one })).toBeDefined()
     expect(await ui.find({ text: five })).toBeDefined()
-    expect(await ui.find({ text: /Warm, 5m left: your next message reuses 484k \(≈ \$0\.15 instead of \$1\.81\)\./ })).toBeDefined()
+    expect(await ui.find({ text: /Warm, 5m left: your next message reuses 484k \(≈ \$0\.07 instead of \$1\.81\)\./ })).toBeDefined()
     expect(await ui.find({ text: /Recommended now: Later\./ })).toBeDefined()
     expect(await ui.find({ key: 'ctx-more:cache' })).toBeDefined()
     expect(await ui.find({ text: /undefined|NaN/ })).toBeUndefined()
@@ -376,7 +376,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
     expect(await ui.find({ text: /^0 tokens$/ })).toBeDefined()           // Saved: zero, the plugin did nothing yet
     expect(await ui.find({ text: /^Cut 0% of input$/ })).toBeDefined()
-    expect(await ui.find({ text: /Prompt cache read 150k tokens at a tenth of the price/ })).toBeDefined()
+    expect(await ui.find({ text: /Prompt cache read 150k tokens at a fraction of the price/ })).toBeDefined()
     expect(await ui.find({ text: /^Cache reads/ })).toBeUndefined()    // the old, false source is gone
     await ui.press({ key: 'ctx-receipt' })
     expect(await ui.find({ text: /^Prompt cache, Claude's own \(not counted\)$/ })).toBeDefined()

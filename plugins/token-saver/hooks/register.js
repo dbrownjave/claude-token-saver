@@ -57,7 +57,7 @@ let levels = DEFAULT_LEVELS
 let pythonQuietOn = false
 let bandHidden = false
 let bandSurface = 'terminal'      // where the band last drew: the desktop's native buttons drop a press that spans a redraw
-const totals = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, keptOut: 0, vetoTokens: 0, switchHeld: 0, switchPaid: 0, oneShot: 0, agentLapses: 0, agentLapseTok: 0 }   // this session, from turn.step usage
+const totals = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, billed: 0, keptOut: 0, vetoTokens: 0, switchHeld: 0, switchPaid: 0, oneShot: 0, agentLapses: 0, agentLapseTok: 0 }   // this session, from turn.step usage
 /**
  * Subagent cache lapses. Every subagent request gets the 5-minute cache TTL, even where the main thread has an hour.
  * An agent that idles past 5 minutes mid-run (a test suite, a build, a CI wait) re-writes its whole context at 1.25×
@@ -70,17 +70,28 @@ const totals = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, kep
 const agents = new Map()        // agentId → { type, model, lastStepAt, lapses, lapseWrite, otherWrite, steps }
 const agentTypes = new Map()    // type → { lapses, lapseWrite, otherWrite, runs }
 let agentWeeks = {}             // type → weekCount, read from $.store once per loadContext
-const LAPSE_RE = 1.15           // a lapse write at 1.25× that a longer cache would have made a hit at 0.1×
-const LONG_PREMIUM = 0.75       // what every other write would have cost extra at the 1-hour price (2× − 1.25×)
+const WRITE_SHORT = 1.25        // a 5-minute cache write against fresh input, on every model
+const WRITE_LONG = 2            // a one-hour cache write
+const LONG_PREMIUM = WRITE_LONG - WRITE_SHORT   // what every other write would have cost extra at the 1-hour price
+/** A cache read against fresh input. Unlike writes it varies by model (platform.claude.com pricing, 2026-10). */
+function readRate(model) {
+  const m = String(model || '')
+  if (/(fable|mythos)-5-1/i.test(m)) return 0.025
+  if (/(opus|sonnet)-5-5/i.test(m)) return 0.05
+  return 0.1
+}
+/** A lapse write against the hit a longer cache would have made. */
+function lapseRe(model) { return WRITE_SHORT - readRate(model) }
+let lastModel = ''              // the main thread's model, from its last step
 let oneShot = null              // { model } while the next main-thread turn goes to another model and the session stays put
 let limitBase = null            // { pct, tokens } when the five-hour window was first seen: tokens per % of window
 let monthSaved = { key: '', tok: 0, usd: 0, sessionTok: 0, sessionUsd: 0 }   // carried in $.store across sessions
 let announcedPct = 0            // highest threshold already toasted this session
 /**
  * Keep-warm: while you are idle, re-read the session's own cached prefix ($.model.fork) shortly before the 5-minute TTL
- * lapses, so your next message hits the cache instead of re-writing it. A read costs 0.1× fresh input and refreshes the
- * TTL; a lapse costs a 1.25× re-write, so a ping pays while pings × 0.1 < chance-you-return × 1.15. The cap (default 5,
- * about 20 minutes) assumes about even odds. Costs and savings are booked in fresh-input-token equivalents.
+ * lapses, so your next message hits the cache instead of re-writing it. A read (readRate, at most 0.1× fresh input)
+ * refreshes the TTL; a lapse costs a 1.25× re-write, so a ping pays while pings × read < chance-you-return × lapseRe.
+ * The cap (default 5, about 20 minutes) assumes about even odds. Costs and savings are booked in fresh-input-token equivalents.
  */
 const keepWarm = { on: false, want: false, streak: 0, pings: 0, misses: 0, costTok: 0, savedTok: 0, busy: false, refreshedAt: 0, stopped: '' }
 /**
@@ -92,6 +103,8 @@ const keepWarm = { on: false, want: false, streak: 0, pings: 0, misses: 0, costT
 const engineTtl = { value: '', via: '' }     // '1h' | '5m' | '' (not seen yet)
 let longTtlOption = false
 function ttlNow() { return longTtlOption || engineTtl.value === '1h' ? TTL_LONG : TTL_SHORT }
+/** What re-writing the main thread's cache costs against fresh input, on the TTL in force. */
+function writeRate() { return ttlNow() === TTL_LONG ? WRITE_LONG : WRITE_SHORT }
 /** Record a TTL the engine reported. Returns true when the TTL in force changed. */
 function noteEngineTtl(value, via) {
   if (value !== '1h' && value !== '5m') return false
@@ -324,8 +337,9 @@ function isoWeek(ms) {
 
 /** A finished subagent run folds into its type's session sums; a run that lapsed also rolls into the store's week count. */
 async function rollAgent($, rec) {
-  const t = agentTypes.get(rec.type) || { lapses: 0, lapseWrite: 0, otherWrite: 0, runs: 0 }
+  const t = agentTypes.get(rec.type) || { lapses: 0, lapseWrite: 0, otherWrite: 0, runs: 0, model: '' }
   t.lapses += rec.lapses; t.lapseWrite += rec.lapseWrite; t.otherWrite += rec.otherWrite; t.runs += 1
+  if (rec.model) t.model = rec.model
   agentTypes.set(rec.type, t)
   if (!rec.lapses) return
   try {
@@ -418,10 +432,13 @@ function keepWarmDue(w, now, lastStep, ttl, maxPings, turnRunning) {
   return 'ping'
 }
 
-/** One input-token-equivalent figure for what a call cost: write 1.25×, read 0.1×, output 5×. */
-function billedTok(u) {
+/** One input-token-equivalent figure for what a call cost: writes by TTL, reads by model, output 5×. */
+function billedTok(u, model) {
   if (!u) return 0
-  return Math.round((u.input_tokens || 0) + 1.25 * (u.cache_creation_input_tokens || 0) + 0.1 * (u.cache_read_input_tokens || 0) + 5 * (u.output_tokens || 0))
+  const write = u.cache_creation_input_tokens || 0
+  const cc = u.cache_creation && typeof u.cache_creation === 'object' ? u.cache_creation : null
+  const long = Math.min(write, cc ? Number(cc.ephemeral_1h_input_tokens) || 0 : ttlNow() === TTL_LONG ? write : 0)
+  return Math.round((u.input_tokens || 0) + WRITE_LONG * long + WRITE_SHORT * (write - long) + readRate(model) * (u.cache_read_input_tokens || 0) + 5 * (u.output_tokens || 0))
 }
 
 async function tickKeepWarm($, ttl, maxPings) {
@@ -434,7 +451,7 @@ async function tickKeepWarm($, ttl, maxPings) {
     try { u = await $.session.usage() } catch { /* no usage API */ }
     if (!(u && u.cost && Number.isFinite(u.cost.usd))) { keepWarm.stopped = 'not API billing'; keepWarm.on = false; return }
     const r = await $.model.fork({ prompt: KEEP_WARM_PROMPT })
-    if (r.usage) keepWarm.costTok += billedTok(r.usage)
+    if (r.usage) keepWarm.costTok += billedTok(r.usage, lastModel)
     if (!r.isAnswered && r.reason === 'nothing-to-fork') return
     keepWarm.pings += 1
     keepWarm.streak += 1
@@ -1532,8 +1549,8 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const hasCost = !!(usage && usage.cost && Number.isFinite(usage.cost.usd))
   const mode = hasCost ? 'api' : five ? 'subscription' : 'unknown'
   const inputAll = T.input + T.cacheRead + T.cacheWrite
-  // spend in fresh-input-token equivalents: input 1×, cache write 1.25×, cache read 0.1×, output 5× (the pricing ratios)
-  const billedUnits = T.input + 1.25 * T.cacheWrite + 0.1 * T.cacheRead + 5 * T.output
+  // spend in fresh-input-token equivalents, booked step by step at each step's own model and TTL (billedTok)
+  const billedUnits = Number.isFinite(T.billed) ? T.billed : T.input + WRITE_SHORT * T.cacheWrite + 0.1 * T.cacheRead + 5 * T.output
   const rate = Number(saved.rate) || (hasCost && billedUnits > 50_000 ? (usage.cost.usd / billedUnits) * 1e6 : 0)
   const kw = saved.keepWarm || { pings: 0, savedTok: 0, costTok: 0 }
   const warmNet = kw.savedTok - kw.costTok                 // can be negative: pings you never came back for
@@ -1543,10 +1560,10 @@ function contextView(usage, ttl, usageLast, clock, stats) {
     { label: 'Trimmed output', tok: T.keptOut },                                   // ≈ chars ÷ 4, never re-sent
     { label: 'Compactions vetoed', tok: Math.round(T.vetoTokens * 1.25) },         // the 1.25× re-write a cold /compact would have paid
     { label: 'Keep-warm', tok: warmNet },                                          // re-writes avoided, less what the pings cost
-    { label: 'Model switches held', tok: Math.round((T.switchHeld || 0) * 1.25) }, // the cold re-write on the other model that a 'Stay' avoided
+    { label: 'Model switches held', tok: Math.round((T.switchHeld || 0) * writeRate()) }, // the cold re-write on the other model that a 'Stay' avoided
   ]
   const totalTok = Math.max(0, sources[0].tok + sources[1].tok + warmNet + sources[3].tok)
-  const cacheInfo = { read: T.cacheRead, line: T.cacheRead > 0 ? `Prompt cache read ${fmtK(T.cacheRead)} tokens at a tenth of the price — Claude's own, not counted` : '' }
+  const cacheInfo = { read: T.cacheRead, line: T.cacheRead > 0 ? `Prompt cache read ${fmtK(T.cacheRead)} tokens at a fraction of the price — Claude's own, not counted` : '' }
   const share = totalTok > 0 ? totalTok / (totalTok + billedUnits) : 0
   const priced = mode === 'api' && rate > 0
   const usd = (tok) => (priced ? `$${((tok * rate) / 1e6).toFixed(2)}` : '')
@@ -1561,7 +1578,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const receipt = [
     ...sources.map((s) => ({ label: s.label, tok: fmtK(s.tok), amount: priced ? `≈ ${usd(s.tok)}` : '', role: 'inactive', amountRole: s.tok < 0 ? 'warning' : 'success' })),
     ...(T.cacheRead > 0 ? [{ label: "Prompt cache, Claude's own (not counted)", tok: fmtK(T.cacheRead), amount: '', role: 'inactive', amountRole: 'inactive' }] : []),
-    ...(T.switchPaid > 0 ? [{ label: 'Model switches, cold re-read (not a saving)', tok: fmtK(Math.round(T.switchPaid * 1.25)), amount: priced ? `≈ ${usd(Math.round(T.switchPaid * 1.25))}` : '', role: 'inactive', amountRole: 'inactive' }] : []),
+    ...(T.switchPaid > 0 ? [{ label: 'Model switches, cold re-read (not a saving)', tok: fmtK(Math.round(T.switchPaid * writeRate())), amount: priced ? `≈ ${usd(Math.round(T.switchPaid * writeRate()))}` : '', role: 'inactive', amountRole: 'inactive' }] : []),
     ...(T.agentLapses > 0 ? [{ label: 'Agents re-read after a long wait (not a saving)', tok: fmtK(T.agentLapseTok), amount: priced ? `≈ ${usd(T.agentLapseTok)}` : '', role: 'inactive', amountRole: 'inactive' }] : []),
     { rule: true },
     { label: 'Total saved', tok: fmtK(totalTok), amount: priced ? `≈ ${usd(totalTok)}` : '', role: 'text', amountRole: 'success' },
@@ -1573,9 +1590,9 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const note = mode === 'api' ? (Number(saved.rate) ? `At $${Number(saved.rate).toFixed(2)}/M input (your rate)` : rate ? `At ≈$${rate.toFixed(2)}/M input, derived from this session's bill` : 'Set $/M in /config for dollars')
     : mode === 'subscription' ? (tokPerPct > 0 ? 'Subscription: savings shown as window headroom' : 'Subscription: window maths appears once the 5-hour window moves') : 'Tokens only'
   const oneShotNote = T.oneShot > 0 ? ` · ${T.oneShot} one-off message${T.oneShot === 1 ? '' : 's'} on another model, each paid as one cold read` : ''
-  // What a model switch costs right now: the whole context re-cached on the other model at 1.25× the input price,
+  // What a model switch costs right now: the whole context re-cached on the other model at the TTL's write price,
   // priced at this session's own rate (the switch dialog itself has the engine's list-price estimate for the target)
-  const switchUnits = Math.round(used * 1.25)
+  const switchUnits = Math.round(used * writeRate())
   const switchUsd = priced ? usd(switchUnits) : ''
   const switchPct = !priced && tokPerPct > 0 ? `${Math.max(1, Math.round(switchUnits / tokPerPct))}% of the 5-hour window` : ''
   const switchCost = !cache.known || !cache.warm
@@ -1583,7 +1600,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
     : used < SWITCH_CHEAP
       ? { verdict: 'cheap', short: 'Switch model: cheap', line: `Switching model now is cheap: ${fmtK(used)} tokens re-read once.` }
       : { verdict: 'costly', short: `Switch model ≈ ${switchUsd || switchPct || `${fmtK(switchUnits)} tokens`}`,
-          line: `Switching model now re-caches ${fmtK(used)} tokens at 1.25× the input price${switchUsd ? `, ≈ ${switchUsd} at this session's rate` : switchPct ? `, ≈ ${switchPct}` : ''}.` }
+          line: `Switching model now re-caches ${fmtK(used)} tokens at ${writeRate()}× the input price${switchUsd ? `, ≈ ${switchUsd} at this session's rate` : switchPct ? `, ≈ ${switchPct}` : ''}.` }
   // Subagent cache lapses: the worst agent type by what a 1-hour cache would have saved, net of its 2× write price.
   // Measured (the receipt row above) whatever the billing; recommended only where the engine would honour it.
   const types = (saved.agents && saved.agents.types) || new Map()
@@ -1591,7 +1608,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   let worst = null
   for (const [type, a] of types) {
     if (!a.lapses) continue
-    const net = Math.round(LAPSE_RE * a.lapseWrite - LONG_PREMIUM * a.otherWrite)
+    const net = Math.round(lapseRe(a.model) * a.lapseWrite - LONG_PREMIUM * a.otherWrite)
     if (!worst || net > worst.net) worst = { type, net, lapses: a.lapses, reread: a.lapseWrite }
   }
   // Plain words: an agent "waited over 5 minutes and re-read" what it had. No cache jargon in the pane.
@@ -2040,7 +2057,7 @@ function liveNumbers(view, s) {
   const msgs = next && avg > 0 ? Math.max(1, Math.ceil(left / avg)) : 0
   const ttlMin = Math.max(1, Math.round(s.ttl / MINUTE))
   const amt = c.amount
-  const warmCost = usdOf(view.used * 0.1), coldCost = usdOf(view.used * 1.25)
+  const warmCost = usdOf(view.used * readRate(lastModel)), coldCost = usdOf(view.used * writeRate())
   const five = view.five
   let windowResets
   const r = five && five.resetsAt ? Date.parse(five.resetsAt) : NaN
@@ -2093,7 +2110,7 @@ function explainEntries(view, L, open) {
   const card = nextCard(view, avgGrowth())
   const runway = /^Runway (\d+)%$/.exec(card.strong)
   const live3 = !c.known ? 'No reply yet, so nothing is cached.'
-    : c.warm ? `Warm, ${c.leftMin}m left: your next message reuses ${c.amount}${L.priced && L.coldCost ? ` (≈ ${money((view.used * 0.1 * sv.rate) / 1e6)} instead of ${L.coldCost})` : L.api ? ' at a tenth of the price' : ' at a tenth of the usage'}.`
+    : c.warm ? `Warm, ${c.leftMin}m left: your next message reuses ${c.amount}${L.priced && L.coldCost ? ` (≈ ${money((view.used * readRate(lastModel) * sv.rate) / 1e6)} instead of ${L.coldCost})` : L.api ? ' at a fraction of the price' : ' at a fraction of the usage'}.`
     : `Cold: your next message re-processes ${c.amount}${L.priced && L.coldCost ? ` (≈ ${L.coldCost})` : ''}.`
   const entries = [
     [1, 'Context', 'How full Claude’s working memory is: everything it has to read again before it can answer.',
@@ -2101,7 +2118,7 @@ function explainEntries(view, L, open) {
       next && next.hint === 'new-conversation' ? 'Before it fills, write a handoff, then Clear.' : 'Keep one task per conversation; Clear when the topic changes.', 'context'],
     [2, 'The bar', 'The same number, drawn. Its colour follows your marks, and the ticks show where they are.',
       `Now ${colour}. Marks at ${view.marksAll.map((m) => m.pct + '%').join(', ')}${view.compactPct === null ? '' : `; auto-compact at ${view.compactPct}%`}.`, '', 'marks'],
-    [3, 'Cache', 'Anthropic keeps a copy of this conversation for a while. Reusing it costs a tenth; letting it lapse means paying again in full.',
+    [3, 'Cache', 'Anthropic keeps a copy of this conversation for a while. Reusing it costs a small fraction; letting it lapse means paying again in full.',
       `${live3}${L.switchLine ? ` ${L.switchLine}` : ''}`, c.known && c.warm ? 'Reply before it cools, and avoid editing CLAUDE.md mid-session.' : 'Clear beats Compact while cold: compacting would pay for everything again.', 'cache'],
     [4, 'Saved', 'Tokens the plugin kept off your bill this session.',
       !c.known && !sv.totalTok ? 'Nothing yet: it counts from the first reply.' : `${L.saved} tokens${L.savedUsd ? ` ≈ ${L.savedUsd}` : ''}, ${L.share}% of what you would have sent.`, 'Press Open on the band to see where it came from.', 'saved'],
@@ -2152,7 +2169,7 @@ function invalidate($) {
 async function rollMonth($) {
   try {
     const key = `saved:${new Date().toISOString().slice(0, 7)}`
-    const sessionTok = Math.max(0, totals.keptOut + Math.round(totals.vetoTokens * 1.25) + Math.round(totals.switchHeld * 1.25) + keepWarm.savedTok - keepWarm.costTok)
+    const sessionTok = Math.max(0, totals.keptOut + Math.round(totals.vetoTokens * 1.25) + Math.round(totals.switchHeld * writeRate()) + keepWarm.savedTok - keepWarm.costTok)
     const delta = sessionTok - monthSaved.sessionTok
     if (monthSaved.key !== key) { const prev = await $.store.get(key); monthSaved = { key, tok: Number(prev && prev.tok) || 0, usd: 0, sessionTok: 0, sessionUsd: 0 } }
     monthSaved.tok += Math.max(0, delta)
@@ -2871,6 +2888,7 @@ export function register(on, options = {}) {
   // Keep-warm never pings while a turn runs: the turn itself keeps the cache warm, and a fork would race it
   // Per-message growth for the pane's "In ≈N messages": context at turn.start against context at turn.complete
   on('turn.start', async ($, e, next) => {
+    if (e.agentId) return next(e)     // subagent and teammate turns fire this too (2.1.299+): the main thread's state is not theirs
     inTurn = true
     try {
       const c = await contextOf($)
@@ -2884,7 +2902,7 @@ export function register(on, options = {}) {
     try {
       return await next(e)
     } finally {
-      inTurn = false
+      if (!e.agentId) inTurn = false
       if (e.agentId && agents.has(e.agentId)) {          // a subagent's answer: fold its run into its type's sums
         const rec = agents.get(e.agentId)
         agents.delete(e.agentId)
@@ -2894,7 +2912,7 @@ export function register(on, options = {}) {
         oneShot = null
         try { $.ui.status(undefined) } catch { /* no UI */ }
       }
-      if (turnStartTokens !== null) {
+      if (!e.agentId && turnStartTokens !== null) {
         const before = turnStartTokens
         turnStartTokens = null
         try {
@@ -2909,7 +2927,8 @@ export function register(on, options = {}) {
   })
 
   on('turn.step', async function* ($, e, next) {
-    const result = yield* next(oneShot && !e.agentId ? { ...e, model: oneShot.model } : e)   // 'One message' from the switch guard
+    const stepModel = oneShot && !e.agentId ? oneShot.model : e.model
+    const result = yield* next(stepModel !== e.model ? { ...e, model: stepModel } : e)   // 'One message' from the switch guard
     if (e.agentId && result && result.usage) {
       // A subagent's step: its own cache clock, never the main thread's. A gap past the 5-minute TTL followed by a
       // request that missed (the context written again, not read) is a lapse; a gap followed by a hit means a longer
@@ -2936,8 +2955,10 @@ export function register(on, options = {}) {
       noteEngineTtl(ttlOfUsage(result.usage), 'step')     // before the keep-warm booking: an hour-long TTL lapses nothing in minutes
       // Kept warm through an idle stretch that would have lapsed, and this request hit: the re-write was avoided
       if (keepWarm.streak > 0 && lastStepAt && stepAt - lastStepAt >= ttlNow() && stepAt - keepWarm.refreshedAt < ttlNow() && hitPct(result.usage) >= 80) {
-        keepWarm.savedTok += Math.round(1.15 * (result.usage.cache_read_input_tokens || 0))
+        keepWarm.savedTok += Math.round(lapseRe(stepModel) * (result.usage.cache_read_input_tokens || 0))
       }
+      if (e.model) lastModel = e.model
+      totals.billed += billedTok(result.usage, stepModel)
       keepWarm.streak = 0
       lastUsage = result.usage
       lastStepAt = stepAt
@@ -3070,10 +3091,10 @@ export function register(on, options = {}) {
     const { priced, tokPerPct } = await billing($)
     const usd = Number(e.estimated_cache_write_usd) || 0
     const basis = e.pricing === 'catalog' ? `${to}'s list price` : e.pricing === 'configured' ? 'your configured price' : 'the default tier'
-    const pct = tokPerPct > 0 ? Math.max(1, Math.round((used * 1.25) / tokPerPct)) : 0
+    const pct = tokPerPct > 0 ? Math.max(1, Math.round((used * writeRate()) / tokPerPct)) : 0
     const cost = priced && usd > 0 ? `≈ $${usd.toFixed(2)} at ${basis}` : pct ? `≈ ${pct}% of your 5-hour window` : ''
     const question =
-      `Switching to ${to} re-caches ${fmt(used)} tokens at 1.25× the input price${cost ? `, ${cost}` : ''}. ` +
+      `Switching to ${to} re-caches ${fmt(used)} tokens at ${writeRate()}× the input price${cost ? `, ${cost}` : ''}. ` +
       `One message sends only the next reply to ${to} and keeps ${from}'s cache warm. ` +
       `Or stay, finish this task here, then /clear and start on ${to}.`
     let choice = 'Stay'

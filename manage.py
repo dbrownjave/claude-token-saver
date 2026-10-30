@@ -27,9 +27,13 @@ SETTINGS_KEYS_OWNED = {
 }
 ENV_KEYS_OWNED = {
     "BASH_MAX_OUTPUT_LENGTH",
-    "MAX_THINKING_TOKENS",
     "CLAUDE_CODE_DISABLE_ARTIFACT",
 }
+# Keys people also set by hand: turning a module off removes one only if it still holds the module's value.
+SETTINGS_KEYS_IF_OURS = {"effortLevel"}
+# thinking-cap set MAX_THINKING_TOKENS, which current models ignore: dropped from enabled.json, its value undone on sync.
+RETIRED_MODULES = {"thinking-cap"}
+RETIRED_ENV = {"MAX_THINKING_TOKENS": "8000"}
 
 
 def load_catalog() -> list[dict]:
@@ -186,7 +190,7 @@ def apply_settings_module(settings: dict, mod: dict, enable: bool) -> None:
                 settings["env"] = env
             elif "env" in settings:
                 del settings["env"]
-        elif k in SETTINGS_KEYS_OWNED:
+        elif k in SETTINGS_KEYS_OWNED or (k in SETTINGS_KEYS_IF_OURS and settings.get(k) == v):
             settings.pop(k, None)
     if mod.get("deny"):
         deny = (settings.get("permissions") or {}).get("deny") or []
@@ -278,7 +282,14 @@ def apply_statusline(settings: dict, files_root: Path, enable: bool) -> str | No
 def rebuild_settings(settings: dict, enabled: list[str], catalog: list[dict], files_root: Path) -> dict:
     settings = strip_our_hooks(settings, files_root)
     index = by_id(catalog)
+    enabled = [m for m in enabled if m not in RETIRED_MODULES]
     enabled_set = set(enabled)
+    env = settings.get("env") or {}
+    for key, value in RETIRED_ENV.items():
+        if env.get(key) == value:
+            del env[key]
+    if not env:
+        settings.pop("env", None)
     for mod in catalog:
         if mod["kind"] == "settings" and mod["id"] not in enabled_set:
             apply_settings_module(settings, mod, enable=False)
@@ -318,7 +329,7 @@ def sync(scope: str, project: Path | None, enabled: list[str], catalog: list[dic
 
 
 def current_enabled(files_root: Path) -> list[str]:
-    return list(read_json(state_path(files_root), {}).get("enabled") or [])
+    return [m for m in read_json(state_path(files_root), {}).get("enabled") or [] if m not in RETIRED_MODULES]
 
 
 def mod_rewrite_enabled() -> bool:

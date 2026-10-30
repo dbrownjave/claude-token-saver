@@ -101,15 +101,13 @@
       ]
     },
     {
-      "id": "thinking-cap",
-      "name": "Cap extra thinking tokens",
+      "id": "effort-cap",
+      "name": "Medium effort by default",
       "kind": "settings",
       "default": false,
-      "summary": "Sets MAX_THINKING_TOKENS=8000. Skip this if you want full reasoning on hard tasks.",
+      "summary": "Sets effortLevel to medium for models with no saved level. Opus, Sonnet and Haiku 5.5 already start at medium, so this mainly lowers Fable 5.1 and older models. /effort still overrides it.",
       "settings": {
-        "env": {
-          "MAX_THINKING_TOKENS": "8000"
-        }
+        "effortLevel": "medium"
       }
     },
     {

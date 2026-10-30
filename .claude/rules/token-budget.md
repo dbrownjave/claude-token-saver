@@ -8,10 +8,11 @@ Tokens compound. Every turn resends the whole session. Prefer a short, cache-sta
 
 ## Session
 - One task per session. Topic change → `/clear` (or `/rename` then `/clear`).
-- Set model and effort once at the start. Do not switch mid-session (busts the prompt-cache prefix).
-- Do not edit `CLAUDE.md` or `.claude/settings.json` mid-session.
+- Set the model once at the start. Do not switch mid-session (busts the prompt-cache prefix).
+- Lower `/effort` whenever a task is simple: on Opus, Sonnet and Haiku 5.5 and Fable 5.1 (API key or subscription) it keeps the cache. On other models and on Bedrock, Agent Platform or a Claude apps gateway it busts it.
+- `CLAUDE.md` edits keep the cache but apply only after `/clear`, `/compact` or a restart.
 - Before a break: `/compact` while the cache is still warm. After a long idle, start a new session instead of compacting a cold history.
-- On the one-hour cache, Claude Code 2.1.299+ compacts an idle session over 200k tokens itself, just before the cache expires ("Compacted while idle"). Under 200k, or on the 5-minute cache, the line above still applies. Opt out: `"idleCompaction": false`.
+- On the one-hour cache, Claude Code compacts an idle session over 200k tokens itself ("Compacted while idle"): just before the cache expires in the terminal (2.1.299+), and in VS Code and the desktop app (2.1.314+) with the summary used only if the cache has expired by your next message. Under 200k, or on the 5-minute cache, the line above still applies. Opt out: `"idleCompaction": false`.
 - To drop last turns only: `/rewind`, not `/compact`.
 - Prefer `@path/to/file` over a `Read` when the path is already known.
 
@@ -33,7 +34,7 @@ Tokens compound. Every turn resends the whole session. Prefer a short, cache-sta
 - Keep project `CLAUDE.md` under 200 lines. Put workflows in skills, not in CLAUDE.md.
 
 ## Cache prefix
-- Do not toggle MCP, plugins, effort, or fast mode mid-task. Tool definitions sit in the prefix.
+- Do not toggle fast mode mid-task, or MCP servers when tool search is off. Deferred MCP tools and plugin skills, commands and hooks keep the prefix.
 - Search goes to a subagent, not `/model` Haiku. Each model has its own cache.
 - A pile of images breaks the match from the dropped image on.
 - `/clear` is free. `/compact` is cheap only while the cache is warm. After the TTL, compact reprocesses the whole history.
