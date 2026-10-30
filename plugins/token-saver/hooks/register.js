@@ -5,7 +5,8 @@
  * "claude-code". No node:* imports, no process/env globals. Files go through
  * $.fs, environment through $.env, time through $.clock.
  *
- * VS Code's chat panel runs these hooks but does not draw UI.
+ * Surfaces: the terminal, the desktop app and VS Code (extension 2.1.301 or later; it always places panes).
+ * Where nothing draws (an older VS Code panel, an SDK host), /tokens answers in text.
  */
 
 import { GLOSSARY } from './glossary.js'
@@ -947,7 +948,7 @@ let PAL = PALETTES.dark
 let themeOption = 'auto'            // plugin option: auto | dark | light
 let cliTheme = null                 // the terminal's /config Theme row (dark, light, light-daltonized, auto, ...)
 let fgbgLight = null                // COLORFGBG says the terminal's ground is light (for Theme auto)
-/** dark or light for a surface. auto: the terminal follows its /config Theme; the desktop gives a mod no signal, so dark. */
+/** dark or light for a surface. auto: the terminal follows its /config Theme; the desktop and VS Code give a mod no signal, so dark. */
 function themeMode(term) {
   if (themeOption === 'dark' || themeOption === 'light') return themeOption
   if (term && cliTheme) {
@@ -2244,8 +2245,9 @@ async function openContextPane($) {
       await rollMonth($)
       return true
     }
-    // not placed: say why, instead of a button that does nothing
-    try { $.ui.toast(`Context pane not shown: ${opened.reason || 'the window is too narrow'}. Try /tokens.`, { timeoutMs: 8000 }) } catch { /* no UI */ }
+    // not placed: say why, instead of a button that does nothing. No surface: /tokens answers in text instead.
+    const why = notPlacedWhy(opened.reason)
+    if (why) toast($, `Context pane not shown: ${why}. /tokens list prints it as text.`, 8000)
   } catch (err) {
     try { $.ui.toast(`Context pane could not open: ${err && err.message ? err.message : String(err)}`, { timeoutMs: 8000 }) } catch { /* no UI */ }
   }
@@ -2403,7 +2405,7 @@ const ttl = ttlNow(), longTtl = ttl === TTL_LONG
       // desktop, on a surface that places panes (what More used to do there): ⤢ moves the open band into a
       // Pane of its own, always open, and the band folds back
       expanded: popped ? true : undefined,
-      onPopOut: inBand && !term && e.viewport && e.viewport.isFullscreen === true ? async () => { if (await openContextPane($)) { ctxPopped = true; ctxExpanded = false; invalidate($) } } : undefined,
+      onPopOut: inBand && !term && placesPanes(e.surface, e.viewport && e.viewport.isFullscreen) ? async () => { if (await openContextPane($)) { ctxPopped = true; ctxExpanded = false; invalidate($) } } : undefined,
       onExplain: () => { ctxExplain = !ctxExplain; if (!ctxExplain) ctxGloss = { open: false, focus: null }; invalidate($) },
       onGlossary: (focus) => { ctxGloss = { open: true, focus }; invalidate($) },
       onGlossaryBack: () => { ctxGloss = { open: false, focus: null }; invalidate($) },
@@ -2436,7 +2438,7 @@ const SETTINGS_PANE = 'settings'
 const SETTINGS = [
   { group: 'Look', rows: [
     { key: 'theme', label: 'Palette', kind: 'choice', options: ['auto', 'dark', 'light'], def: 'auto',
-      hint: "Auto follows the terminal's /config Theme. The desktop app does not tell a mod its appearance, so Auto is dark there: pick Light in light mode." },
+      hint: "Auto follows the terminal's /config Theme. The desktop app and VS Code do not tell a mod their appearance, so Auto is dark there: pick Light in light mode." },
     { key: 'cardBars', label: 'Card bars', kind: 'choice', options: ['fire', 'ember'], def: 'fire', hint: 'Ember: a calm glow at each head, so only the context bar moves.' },
     { key: 'cacheBand', label: 'Band above the prompt', kind: 'bool', def: true },
     { key: 'compactHint', label: 'Cache-aware hint on the band', kind: 'bool', def: true },
@@ -2489,7 +2491,8 @@ async function openSettingsPane($) {
   try {
     const opened = await $.ui.open({ id: SETTINGS_PANE, title: 'Token-saver settings', focus: true, closeOnEscape: true, holdToasts: true })
     if (!opened || opened.isPlaced !== false) return true
-    toast($, `token-saver: Settings not shown: ${opened.reason || 'the window is too narrow'}. /tokens settings lists them.`, 8000)
+    const why = notPlacedWhy(opened.reason)
+    if (why) toast($, `token-saver: Settings not shown: ${why}. /tokens settings lists them.`, 8000)
   } catch (err) {
     toast($, `token-saver: Settings could not open: ${err && err.message ? err.message : String(err)}`, 8000)
   }
@@ -2574,8 +2577,22 @@ async function renderSettings($, e, inBand) {
 }
 
 /** Settings from a press or /tokens settings: the side panel, or the band where this desktop places no panes. */
+/**
+ * Whether a surface draws plugin panes. The terminal and VS Code always do (VS Code: inline under 800 px, docked
+ * beside the chat above it); the desktop only when it reports `isFullscreen`; mobile never.
+ */
+function placesPanes(surface, isFullscreen) {
+  return surface === 'terminal' || surface === 'vscode' || isFullscreen === true
+}
+
+/** Why a pane did not open, in words, or null where saying so would reach nobody (no surface is attached). */
+function notPlacedWhy(reason) {
+  if (/^no-surface\b/.test(String(reason || ''))) return null
+  return reason || 'the window is too narrow'
+}
+
 async function showSettings($, surface, isFullscreen) {
-  if (surface !== 'terminal' && isFullscreen !== true) {
+  if (!placesPanes(surface, isFullscreen)) {
     try { await $.store.set('settingsInBand', true) } catch { /* fine */ }
     invalidate($)
     return 'band'
@@ -2783,7 +2800,7 @@ export function register(on, options = {}) {
     if (arg === 'settings' || arg === 'config') {
       // the side panel; a desktop that places no panes shows it in the band; text where nothing draws
       const pres = e.presentation || {}
-      const where = await showSettings($, pres.isFullscreen !== true && bandSurface !== 'terminal' ? bandSurface : 'terminal', pres.isFullscreen)
+      const where = await showSettings($, bandSurface, pres.isFullscreen)
       if (where === 'pane') return { text: 'Settings opened. Esc closes it.' }
       if (where === 'band') return { text: 'Settings are above the prompt. Done puts them away.' }
       return { text: settingsText() }
@@ -2795,9 +2812,14 @@ export function register(on, options = {}) {
     }
     if (arg === '' || arg === 'pane') {
       // The Context pane: the engine's own context dialog, drawn by the mod. Text where panes do not draw (vscode).
-      // desktop: shown above the prompt, unless the surface places panes (then the Pane below is the one)
-      if (!(e.presentation && e.presentation.isFullscreen === true)) { ctxExpanded = true; invalidate($) }
-      if (await openContextPane($)) return { text: 'Context pane opened. Esc closes it. /tokens list prints the same as text.' }
+      // desktop: shown above the prompt, unless the surface places panes (then the Pane below is the one).
+      // VS Code always places panes: the Pane opens in full and the band stays closed, so it is never drawn twice.
+      const vscode = bandSurface === 'vscode'
+      if (!vscode && !(e.presentation && e.presentation.isFullscreen === true)) { ctxExpanded = true; invalidate($) }
+      if (await openContextPane($)) {
+        if (vscode) { ctxPopped = true; ctxExpanded = false; invalidate($) }
+        return { text: 'Context pane opened. Esc closes it. /tokens list prints the same as text.' }
+      }
     }
     // /tokens list: the pane's cards as text, one line each, from the same view the pane draws.
     const now = await $.clock.now()

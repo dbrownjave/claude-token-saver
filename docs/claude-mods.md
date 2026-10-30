@@ -556,7 +556,9 @@ From the types:
 From token-saver (observed, not in the types):
 
 - The desktop app's Code tab has no slot for plugin panes: `$.ui.open` succeeds but nothing is drawn (`register.js` comment on `renderContext`; commit 275f303). token-saver draws the same tree in `AbovePrompt` there instead.
-- VS Code's chat panel runs the hooks but does not draw mod UI (`register.js` header; `cacheBand` `userConfig` description).
+- VS Code, checked against extension 2.1.301 (its webview and bundled CLI, 2026-10-16): the panel attaches as surface `vscode` (`ui_attach`) and asks for `AbovePrompt` (the band, up to 12 rows) and `Pane`, and shows toasts, `$.ui.status` lines and `$.ui.log`. It draws Box, Text, Button, Input, Select, Svg (as an image, so SMIL animates and nothing inside it is clickable), Link, Code and Markdown; `Client` draws nothing. Panes are always placed: inline above the band under 800 px of panel width (`isFullscreen: false`), docked beside the chat from 800 px (`isFullscreen: true`). There is no theme signal. token-saver treats it as a surface that places panes (`placesPanes` in `register.js`).
+- VS Code extension 2.1.263 and older: the webview has no mod UI at all, and its bundled CLI rejects a `userConfig` string with `options` ("Invalid input"), which fails the whole plugin load, and gates hooks modules behind the `tengu_plugin_hooks_modules` rollout flag (`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` overrides it). token-saver keeps `options` out of its manifest and validates choices in code.
+- With no UI client attached (an older panel on a newer CLI, an SDK host), `$.ui.open` resolves `{ isPlaced: false, reason: 'no-surface: …' }` and a toast reaches nobody. Answer in the command's `text` instead.
 
 ---
 
@@ -882,4 +884,4 @@ Each is sourced in the parentheses. "token-saver" means a comment or behavior in
 28. A change of width re-runs every hooked site; a change of height alone does not. Size to `e.props.bodyColumns` for `Pane` and `AbovePrompt`, not `e.viewport.columns`, which is wider while a pane is docked (`RenderViewport`).
 29. `claude plugin init` does not create a mod, and `/plugin install` is not available in the desktop app's Code tab (reference.md).
 30. Two quiet-bash implementations (the Python hook and the mod) rewrite a command twice; token-saver detects the Python hook and stands down (`pythonQuietOn`; README).
-31. VS Code's chat panel runs the hooks but draws no mod UI per token-saver's own header and `cacheBand` description, even though the types give `vscode` a table. Treat `vscode` UI as untested.
+31. VS Code (extension 2.1.301 on) draws the band and panes as surface `vscode`, though the types leave `AbovePrompt` off its list. It always places panes, even when `isFullscreen` is false, so a desktop-style "draw the pane in the band" fallback draws it twice there. Older extensions draw no mod UI, and their CLI refuses a manifest whose `userConfig` has `options` (section 5, "What each surface does NOT draw").
