@@ -96,12 +96,17 @@ for (const bodyColumns of [100, 40]) {
     for (const key of ['set-cacheBand', 'set-quietBash', 'set-suggestSkills']) {
       const b = await desk.find({ key })
       expect(b.props.label.replace(/\u00a0/g, '')).toBe('')
+      // 11 spaces measured 53 px in the app against a 40 px pill, and a plain Button's hover fill showed past its end. 6 stays inside.
+      expect(b.props.label.length).toBe(6)
       expect(b.children ?? []).toEqual([])
     }
     expect(nodes.some((n) => n.props?.color === 'transparent')).toBe(false)
     const sw = nodes.filter((n) => n.type === 'Svg' && n.props.alt !== 'divider')
     expect(sw.length).toBe(9)
     for (const s of sw) { expect(s.props.width).toBe(40); expect(s.props.height).toBe(20) }
+    const over = nodes.filter((n) => n.type === 'Box' && n.props.position === 'absolute')
+    expect(over.length).toBe(9)
+    for (const b of over) { expect(b.props.left).toBe(0); expect(b.props.right).toBe(0); expect(b.props.justifyContent).toBe('center') }
     expect(await desk.find({ type: 'Text', text: /^(On|Off)$/ })).toBeUndefined()
     await desk.press({ key: 'set-quietBash' })
     expect(log.sets).toContainEqual({ key: 'token-saver.quietBash', value: false })

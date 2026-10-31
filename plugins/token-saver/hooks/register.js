@@ -2601,7 +2601,7 @@ function settingsText() {
   return out.join('\n')
 }
 
-const SWITCH = { W: 40, H: 20, CELLS: 5, COVER: 11, ON: '━━━●', OFF: '●━━━' }   // COVER: the spaces that stretch the plain Button over the pill
+const SWITCH = { W: 40, H: 20, CELLS: 5, COVER: 6, ON: '━━━●', OFF: '●━━━' }   // COVER: the spaces in the plain Button over the pill. 11 measured 53 px in the app, so 6 is about 34: its hover fill stays inside the pill
 /** The desktop's switch: a pill and a knob. Orange means in force; a stored On that does nothing here keeps its knob and loses the colour. */
 function switchSvg(on, lit, light) {
   const track = lit ? PAL.hex.desktop.claude : light ? PAL.DESK_TRACK : PAL.DESK_BUFFER
@@ -2626,7 +2626,8 @@ function drawSettings(ui, o) {
     ? t('─'.repeat(inner), 'subtle', { wrap: 'truncate' })
     : h(Svg, { key, source: `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="17" viewBox="0 0 ${px} 17"><rect y="8" width="${px}" height="1" fill="${hair}"/></svg>`, alt: 'divider', width: px, height: 17 })
   // A Button holds no Svg, so the desktop's switch is an Svg with a plain Button laid over it. The Button is spaces only: a word
-  // there shows in the app even in a `transparent` Text. The state is the Svg's alt.
+  // there shows in the app even in a `transparent` Text. It is narrower than the pill and centred, because a plain Button paints
+  // a fill under the pointer, and anything past the pill's ends reads as a second shape. The state is the Svg's alt.
   // The terminal has no Svg: a plain Button holding orange Text draws in that colour with no bold, the same switch in glyphs.
   const toggle = (r, on) => {
     const lit = on && !settingsIdle(r)
@@ -2634,7 +2635,7 @@ function drawSettings(ui, o) {
     if (term) return h(Button, { key: `set-${r.key}`, plain: true, onPress }, h(Text, { color: lit ? 'claude' : 'inactive' }, on ? SWITCH.ON : SWITCH.OFF))
     return h(Box, { position: 'relative', width: SWITCH.CELLS, height: 1, flexShrink: 0 },
       h(Svg, { source: switchSvg(on, lit, themeMode(false) === 'light'), alt: `${r.label}: ${on ? 'On' : 'Off'}`, width: SWITCH.W, height: SWITCH.H }),
-      h(Box, { position: 'absolute', top: 0, left: 0 }, h(Button, { key: `set-${r.key}`, label: '\u00a0'.repeat(SWITCH.COVER), plain: true, onPress })))
+      h(Box, { flexDirection: 'row', position: 'absolute', top: 0, left: 0, right: 0, justifyContent: 'center' }, h(Button, { key: `set-${r.key}`, label: '\u00a0'.repeat(SWITCH.COVER), plain: true, onPress })))
   }
   const segmented = (r, v) => r.options.map((x) => {
     const pick = () => { if (x !== v) o.onSet(r, x) }
