@@ -36,10 +36,10 @@ test('settings panel on terminal: every option has a control, and a press saves 
   await ui.press({ key: 'set-theme:light' })
   expect(log.sets).toContainEqual({ key: 'token-saver.theme', value: 'light' })
 
-  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label).toBe('━━━━●')
+  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label).toBe('━━━●')
   await ui.press({ key: 'set-keepWarm' })
   expect(log.sets).toContainEqual({ key: 'token-saver.keepWarm', value: false })
-  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label).toBe('●━━━━')
+  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label).toBe('●━━━')
 
   await ui.press({ key: 'set-keepWarmPings:up' })
   expect(log.sets).toContainEqual({ key: 'token-saver.keepWarmPings', value: 6 })
@@ -101,17 +101,17 @@ for (const bodyColumns of [100, 40]) {
     expect(nodes.some((n) => n.props?.color === 'transparent')).toBe(false)
     const sw = nodes.filter((n) => n.type === 'Svg' && n.props.alt !== 'divider')
     expect(sw.length).toBe(9)
-    for (const s of sw) { expect(s.props.width).toBe(48); expect(s.props.height).toBe(20) }
+    for (const s of sw) { expect(s.props.width).toBe(40); expect(s.props.height).toBe(20) }
     expect(await desk.find({ type: 'Text', text: /^(On|Off)$/ })).toBeUndefined()
     await desk.press({ key: 'set-quietBash' })
     expect(log.sets).toContainEqual({ key: 'token-saver.quietBash', value: false })
 
     const term: any = await mount($, 'terminal', props)
     expect(await term.find({ type: 'Text', text: /^(On|Off)$/ })).toBeUndefined()
-    expect((await term.find({ key: 'set-cacheBand' })).props.label).toBe('━━━━●')
+    expect((await term.find({ key: 'set-cacheBand' })).props.label).toBe('━━━●')
     await term.press({ key: 'set-cacheBand' })
     expect(log.sets).toContainEqual({ key: 'token-saver.cacheBand', value: false })
-    expect((await term.find({ key: 'set-cacheBand' })).props.label).toBe('●━━━━')
+    expect((await term.find({ key: 'set-cacheBand' })).props.label).toBe('●━━━')
   })
 }
 
@@ -144,7 +144,7 @@ test('on a subscription the rows that do nothing say so, and the switch keeps it
   expect(await ui.find({ text: /Not used while keep-warm is off/ })).toBeDefined()
   expect(await ui.find({ text: /^Not used on a subscription/ })).toBeDefined()
   const keepWarm = await ui.find({ key: 'set-keepWarm' })
-  expect(keepWarm.props.label).toBe('━━━━●')
+  expect(keepWarm.props.label).toBe('━━━●')
   expect(keepWarm.children[0].props.color).toBe('inactive')
   expect((await ui.find({ key: 'set-quietBash' })).children[0].props.color).toBe('claude')
 })
@@ -168,7 +168,7 @@ test('settings panel at 40 columns: no box wider than the panel, and every label
   const texts = walk(await term.drawn()).filter((n) => n.type === 'Text').map((n) => String(n.children?.[0] ?? ''))
   expect(texts).toContain('Input $ per million tokens')
   expect('Input $ per million tokens'.length + 1 + '− $0.80 +'.length).toBeLessThanOrEqual(36)
-  expect('Suggest parked skills at start'.length + 1 + '━━━━●'.length).toBeLessThanOrEqual(36)
+  expect('Suggest parked skills at start'.length + 1 + '━━━●'.length).toBeLessThanOrEqual(36)
   expect('Palette'.length + 1 + 'Auto Dark Light'.length).toBeLessThanOrEqual(36)
 })
 

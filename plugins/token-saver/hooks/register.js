@@ -2601,7 +2601,7 @@ function settingsText() {
   return out.join('\n')
 }
 
-const SWITCH = { W: 48, H: 20, CELLS: 6, COVER: 13, ON: '━━━━●', OFF: '●━━━━' }   // COVER: the spaces that stretch the plain Button over the pill
+const SWITCH = { W: 40, H: 20, CELLS: 5, COVER: 11, ON: '━━━●', OFF: '●━━━' }   // COVER: the spaces that stretch the plain Button over the pill
 /** The desktop's switch: a pill and a knob. Orange means in force; a stored On that does nothing here keeps its knob and loses the colour. */
 function switchSvg(on, lit, light) {
   const track = lit ? PAL.hex.desktop.claude : light ? PAL.DESK_TRACK : PAL.DESK_BUFFER
