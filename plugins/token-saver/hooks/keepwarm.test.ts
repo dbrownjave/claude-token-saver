@@ -6,7 +6,7 @@ const PREFIX = 100_000
 const HIT = { input_tokens: 40, cache_read_input_tokens: PREFIX, cache_creation_input_tokens: 0, output_tokens: 2 }
 const MISS = { input_tokens: 40, cache_read_input_tokens: 0, cache_creation_input_tokens: PREFIX, output_tokens: 2 }
 const API = { context: { tokens: PREFIX, window: 200_000, percent: 50 }, rateLimits: [], cost: { usd: 3.1 } }
-const SUBSCRIPTION = { context: { tokens: PREFIX, window: 200_000, percent: 50 }, rateLimits: [{ kind: 'five_hour', percentUsed: 12 }] }
+const SUBSCRIPTION = { context: { tokens: PREFIX, window: 200_000, percent: 50 }, rateLimits: [{ kind: 'five_hour', percentUsed: 12 }, { kind: 'seven_day', percentUsed: 14 }], cost: { usd: 0.004 } }
 const OPTIONS = { suggestSkills: false, cacheBand: false }
 // A main-thread write as the API reports it, split by TTL bucket
 const WRITE = (ttl: '5m' | '1h') => ({ ...HIT, cache_creation_input_tokens: 500, cache_creation: { ephemeral_5m_input_tokens: ttl === '5m' ? 500 : 0, ephemeral_1h_input_tokens: ttl === '1h' ? 500 : 0 } })
@@ -78,7 +78,7 @@ test('keep-warm pings just before the 5-minute TTL lapses, stops at the cap, and
   await turn($)
   expect(forks.length - before).toBe(2)
   text = await tokensText($)
-  expect(text).toContain('7 pings · avoided 115.0k')
+  expect(text).toContain('7 pings · avoided 120.0k')
 })
 
 test('keep-warm stays off on a subscription: the main thread already caches for an hour and pings would spend quota', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -180,4 +180,134 @@ test('longCacheTtl overrides a 5-minute engine reading: no pings', { options: { 
   await turn($)
   await idle(clock, 10 * MIN)
   expect(forks.length).toBe(0)
+})
+
+test('a subagent finishing mid-turn leaves the main turn running: keep-warm stays quiet', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home' })
+  const forks: any[] = []
+  wire(on, API, forks)
+  await ($ as any).session.start({ cwd: '/tmp/x', surface: null, isInteractive: true })
+  await turn($)
+  await ($ as any).turn.start({ text: 'long one', turnId: 't2' })
+  await ($ as any).turn.start({ text: 'sub', turnId: 'a1', agentId: 'a1' })
+  await ($ as any).turn.complete({ turnId: 'a1', agentId: 'a1', reason: 'answer', answer: 'ok', text: 'ok' })
+  await idle(clock, 10 * MIN)
+  expect(forks.length).toBe(0)                              // the main turn is still running
+})
+
+test('a subagent starting after the reply does not hold keep-warm back', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home' })
+  const forks: any[] = []
+  wire(on, API, forks)
+  await ($ as any).session.start({ cwd: '/tmp/x', surface: null, isInteractive: true })
+  await turn($)
+  await ($ as any).turn.start({ text: 'background', turnId: 'a1', agentId: 'a1' })
+  await idle(clock, 4 * MIN)
+  expect(forks.length).toBe(1)                              // the main thread is idle, so its ping still goes out
+})
+
+// 10k input, 2M read, 20k written, 5k output: the bill divided by these units gives the model's base input price back.
+const STEP = { input_tokens: 10_000, cache_read_input_tokens: 2_000_000, cache_creation_input_tokens: 20_000, output_tokens: 5_000 }
+for (const [model, usd, cc, rate] of [
+  ['claude-opus-5-5', 0.64, undefined, '$4.00'],                                                   // reads 0.05×: 160k units
+  ['claude-sonnet-5-5', 0.32, undefined, '$2.00'],                                                 // reads 0.05×: 160k units
+  ['claude-fable-5-1', 1.1, undefined, '$10.00'],                                                  // reads 0.025×: 110k units
+  ['claude-haiku-5-5', 0.026, undefined, '$0.10'],                                                 // reads 0.1×: 260k units
+  ['claude-opus-5-5', 0.7, { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 20_000 }, '$4.00'],   // one-hour writes 2×: 175k units
+] as const) {
+  test(`the derived rate on ${model}${cc ? ', one-hour writes,' : ''} comes back to its input price`, { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+    mock.clock(on, { now: NOW })
+    mock.store(on)
+    mock.env(on, { HOME: '/nonexistent-home' })
+    on('session.usage' as any, () => ({ value: { ...API, cost: { usd } } }))
+    on('session.start' as any, (_$: any, e: any) => ({ cwd: e.cwd }))
+    on('turn.start' as any, (_$: any, e: any) => ({ turnId: e.turnId }))
+    on('turn.complete' as any, () => ({ text: 'ok' }))
+    on('turn.step' as any, async function* () {
+      return { turnId: 't', index: 0, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: { ...STEP, ...(cc ? { cache_creation: cc } : {}) } }
+    })
+    for (const ev of ['ui.toast', 'ui.status', 'ui.log', 'command.register']) on(ev as any, () => ({ value: undefined }))   // not ui.invalidate: the receipt redraws through it
+    await ($ as any).session.start({ cwd: '/tmp/x', surface: null, isInteractive: true })
+    await ($ as any).turn.start({ text: 'hi', turnId: 't' })
+    const s = ($ as any).turn.step({ turnId: 't', index: 0, model, messageCount: 1 })
+    for await (const _ of s) { /* drain */ }
+    await s.result
+    await ($ as any).turn.complete({ turnId: 't', reason: 'answer', answer: 'ok', text: 'ok' })
+    const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'desktop', component: 'Pane', requestId: 'context',
+      props: { title: 'Context', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } })
+    if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
+    await ui.press({ key: 'ctx-receipt' })
+    expect(await ui.find({ text: `At ≈${rate}/M input, derived from this session's bill` })).toBeDefined()
+  })
+}
+
+// The real engine as of 2.1.314: turn.step usage has no cache-write buckets, and a subscription's usage carries a dollar estimate.
+test('a real subscription: an hour of cache from its first step, no pings, however long the idle', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home' })
+  const forks: any[] = []
+  wire(on, SUBSCRIPTION, forks)
+  await ($ as any).session.start({ cwd: '/tmp/x', surface: null, isInteractive: true })
+  await turn($)
+  await idle(clock, 30 * MIN)
+  expect(forks.length).toBe(0)
+  const text = await tokensText($)
+  expect(text).toContain('off (not API billing)')
+  expect(text).not.toContain('Cold')
+  expect(text).not.toContain('needs the one-hour cache')
+  expect(text).not.toContain('$')                           // savings are window headroom, never dollars
+})
+
+test('past the window a subscription pays by the token: 5-minute cache, and keep-warm comes back', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home' })
+  const forks: any[] = []
+  let usage: any = SUBSCRIPTION
+  wire(on, { get context() { return usage.context }, get rateLimits() { return usage.rateLimits }, get cost() { return usage.cost } }, forks)
+  await ($ as any).session.start({ cwd: '/tmp/x', surface: null, isInteractive: true })
+  await turn($)
+  await idle(clock, 6 * MIN)
+  expect(forks.length).toBe(0)
+  usage = { ...SUBSCRIPTION, rateLimits: [{ kind: 'five_hour', percentUsed: 100 }, { kind: 'seven_day', percentUsed: 40 }] }
+  await turn($)
+  await idle(clock, 4 * MIN)
+  expect(forks.length).toBe(1)
+})
+
+for (const [label, settings, env] of [
+  ['promptCacheTtl', { promptCacheTtl: '1h' }, {}],
+  ['CLAUDE_CODE_PROMPT_CACHE_TTL', {}, { CLAUDE_CODE_PROMPT_CACHE_TTL: '1h' }],
+  ['ENABLE_PROMPT_CACHING_1H', {}, { ENABLE_PROMPT_CACHING_1H: '1' }],
+] as const) {
+  test(`an API key on one hour through ${label}: no pings`, { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+    const clock = mock.clock(on, { now: NOW })
+    mock.store(on)
+    mock.env(on, { HOME: '/nonexistent-home', ...env })
+    on('settings.read' as any, () => ({ value: settings }))
+    const forks: any[] = []
+    wire(on, API, forks)
+    await ($ as any).session.start({ cwd: '/tmp/x', surface: null, isInteractive: true })
+    await turn($)
+    await idle(clock, 6 * MIN)
+    expect(forks.length).toBe(0)
+  })
+}
+
+test('FORCE_PROMPT_CACHING_5M beats promptCacheTtl: pings go out on an API key', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home', FORCE_PROMPT_CACHING_5M: '1' })
+  on('settings.read' as any, () => ({ value: { promptCacheTtl: '1h' } }))
+  const forks: any[] = []
+  wire(on, API, forks)
+  await ($ as any).session.start({ cwd: '/tmp/x', surface: null, isInteractive: true })
+  await turn($)
+  await idle(clock, 4 * MIN)
+  expect(forks.length).toBe(1)
 })

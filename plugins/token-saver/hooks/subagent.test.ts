@@ -88,8 +88,8 @@ test('a 6-minute gap followed by a cold write is a lapse: a receipt row that is 
   expect(await ui.find({ text: /^62\.5k$/ })).toBeDefined()                         // 50k written again × 1.25
   expect(await ui.find({ text: /^Total saved$/ })).toBeDefined()
   expect(await ui.find({ text: /^0 tokens$/ })).toBeDefined()                       // the lapse is never counted as saved
-  // net = 1.15 × 50k lapsed − 0.75 × 50k other writes = 20k
-  expect(await ui.find({ text: /^The Explore agent waited over 5 minutes 1× this session and re-read 50k tokens\. A 1-hour cache for it would have saved ≈ 20k tokens: put cacheTtl: 1h under experimental in its agent file\.$/ })).toBeDefined()
+  // net = 1.2 × 50k lapsed (Sonnet 5.5 reads at 0.05×) − 0.75 × 50k other writes = 22.5k
+  expect(await ui.find({ text: /^The Explore agent waited over 5 minutes 1× this session and re-read 50k tokens\. A 1-hour cache for it would have saved ≈ 22\.5k tokens: put cacheTtl: 1h under experimental in its agent file\.$/ })).toBeDefined()
 })
 
 test('a gap followed by a cache hit is not a lapse: a longer cache was already in force', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -142,6 +142,14 @@ test('on usage credits the lapse is still measured but the 1-hour recommendation
   const ui = await openReceipt($)
   expect(await ui.find({ text: /^Agents re-read after a long wait \(not a saving\)$/ })).toBeDefined()
   expect(await ui.find({ text: /^The Explore agent/ })).toBeUndefined()
+})
+
+test('inside a subscription, with its dollar estimate, the 1-hour recommendation is made', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const h = setup(on, () => ({ ...CREDITS, rateLimits: [{ kind: 'five_hour', percentUsed: 14 }, { kind: 'seven_day', percentUsed: 14 }] }))
+  await mainTurn($, h.step)
+  await agentRun($, h, 'a1', 'Explore', 6, WRITE(50_000))
+  const ui = await openReceipt($)
+  expect(await ui.find({ text: /^The Explore agent/ })).toBeDefined()
 })
 
 test('a small lapse after many warm writes: the 1-hour cache would not pay, and the line says so', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {

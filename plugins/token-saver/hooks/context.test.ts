@@ -280,6 +280,29 @@ for (const surface of ['terminal', 'desktop'] as const) {
   })
 }
 
+test('a subagent finishing mid-turn does not end the turn: Compact still queues', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const { log } = setup(on, () => USAGE)
+  await turn($)
+  await ($ as any).turn.start({ text: 'long one', turnId: 't2' })
+  await ($ as any).turn.start({ text: 'sub', turnId: 'a1', agentId: 'a1' })
+  await ($ as any).turn.complete({ turnId: 'a1', agentId: 'a1', reason: 'answer', answer: 'ok', text: 'ok' })
+  const ui: any = await mount($, 'terminal')
+  await ui.press({ key: 'ctx-compact' })
+  expect(log.compacts.length).toBe(0)
+  expect((await ui.find({ key: 'ctx-compact' }))?.props.label).toBe('Queued')
+})
+
+test('a subscription caches for the hour: Compact runs ten idle minutes on, no veto', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const { log, clock } = setup(on, () => ({ ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 40 }, { kind: 'seven_day', percentUsed: 10 }] }))
+  await turn($)
+  await clock.advance(10 * MIN)
+  const ui: any = await mount($, 'terminal')
+  await ui.press({ key: 'ctx-compact' })
+  for (let i = 0; i < 50 && !log.compacts.length; i++) await new Promise((r) => setTimeout(r, 10))
+  expect(log.compacts.length).toBe(1)
+  expect(await ui.find({ text: /^Compact vetoed/ })).toBeUndefined()
+})
+
 test('context pane counts context growth per message and says how many messages to the next mark', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
   const ctx = { tokens: 100_000, window: 200_000, percent: 50 }
   const { clock } = setup(on, () => ({ context: { ...ctx }, rateLimits: [], cost: { usd: 0.5 } }))
@@ -312,7 +335,7 @@ test('context pane without a breakdown falls back to one Used row and no groups'
 })
 
 test('context pane on a subscription: the five-hour window card, and never a dollar', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
-  setup(on, () => ({ startedAt: NOW, context: { tokens: 300_000, window: 1_000_000, percent: 30 }, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(NOW + 3600_000).toISOString() }] }))
+  setup(on, () => ({ startedAt: NOW, context: { tokens: 300_000, window: 1_000_000, percent: 30 }, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(NOW + 3600_000).toISOString() }], cost: { usd: 0.5 } }))
   const ui: any = await mount($, 'desktop')
   await ui.press({ key: 'ctx-expand' })
   expect(await ui.find({ text: /^Current session$/ })).toBeDefined()
@@ -336,7 +359,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const one = surface === 'terminal' ? /^¹[ \u00a0]$/ : /^①[ \u00a0]$/, five = surface === 'terminal' ? /^⁵[ \u00a0]$/ : /^⑤[ \u00a0]$/
     expect(await ui.find({ text: one })).toBeDefined()
     expect(await ui.find({ text: five })).toBeDefined()
-    expect(await ui.find({ text: /Warm, 5m left: your next message reuses 484k \(≈ \$0\.15 instead of \$1\.81\)\./ })).toBeDefined()
+    expect(await ui.find({ text: /Warm, 5m left: your next message reuses 484k \(≈ \$0\.07 instead of \$1\.81\)\./ })).toBeDefined()
     expect(await ui.find({ text: /Recommended now: Later\./ })).toBeDefined()
     expect(await ui.find({ key: 'ctx-more:cache' })).toBeDefined()
     expect(await ui.find({ text: /undefined|NaN/ })).toBeUndefined()
@@ -377,7 +400,7 @@ test('/tokens learn prints the glossary; a term prints just that term with its l
 })
 
 test('the glossary on a subscription never shows a dollar', { options: { ...OPTIONS, inputPricePerM: 3 }, timeoutMs: SLOW }, async ($, on) => {
-  setup(on, () => ({ ...USAGE, cost: undefined, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(NOW + 3600_000).toISOString() }] }))
+  setup(on, () => ({ ...USAGE, rateLimits: [{ kind: 'five_hour', percentUsed: 40, resetsAt: new Date(NOW + 3600_000).toISOString() }] }))
   await turn($)
   const all = String((await ($ as any).command.run({ command: 'tokens', args: 'learn' })).text)
   expect(all).not.toContain('$')
@@ -415,7 +438,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
     expect(await ui.find({ text: /^0 tokens$/ })).toBeDefined()           // Saved: zero, the plugin did nothing yet
     expect(await ui.find({ text: /^Cut 0% of input$/ })).toBeDefined()
-    expect(await ui.find({ text: /Prompt cache read 150k tokens at a tenth of the price/ })).toBeDefined()
+    expect(await ui.find({ text: /Prompt cache read 150k tokens at a fraction of the price/ })).toBeDefined()
     expect(await ui.find({ text: /^Cache reads/ })).toBeUndefined()    // the old, false source is gone
     await ui.press({ key: 'ctx-receipt' })
     expect(await ui.find({ text: /^Prompt cache, Claude's own \(not counted\)$/ })).toBeDefined()

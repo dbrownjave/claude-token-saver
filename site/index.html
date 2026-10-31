@@ -133,7 +133,7 @@ claude plugin install token-saver@token-saver">Copy</button>
       <div class="card"><h3>Quiet commands</h3><p><code>git status</code> becomes <code>git status -sb</code>, test runners get their quietest reporter, before they run. Your own rules in <code>quiet.json</code>.</p></div>
       <div class="card"><h3>Trimmed output</h3><p>Huge successful stdout is cut to its head and tail before Claude reads it. Failures are never trimmed. The full log is kept on disk, with the grep to read it.</p></div>
       <div class="card"><h3>Compact guard</h3><p>A <code>/compact</code> on a cold cache re-sends the whole conversation at write price. The mod refuses it, names the cost, and points at <code>/handoff</code> then <code>/clear</code>. Auto-compaction is never blocked.</p></div>
-      <div class="card"><h3>Keep-warm</h3><p>API billing, 5-minute TTL: just before the cache lapses, one tiny read (≈0.1× input price) restarts it, so your next message hits the cache instead of paying a 1.25× re-write. Capped, stops on a miss.</p></div>
+      <div class="card"><h3>Keep-warm</h3><p>API billing, 5-minute TTL: just before the cache lapses, one tiny read (at most 0.1× input price) restarts it, so your next message hits the cache instead of paying a 1.25× re-write. Capped, stops on a miss.</p></div>
       <div class="card"><h3>Context pane</h3><p><code>/tokens</code>: where the window went, your marks, the cache clock, a receipt line by line, and buttons that run <code>/mcp</code>, <code>/memory</code>, <code>/loadout</code>. Terminal, desktop and phone.</p></div>
       <div class="card"><h3>Skill loadout</h3><p>Every skill in <code>~/.claude/skills</code> costs its description on every turn. <code>/loadout</code> shows the price, parks what you have not used in 30 days, and links one back per repo.</p></div>
     </div>
@@ -161,7 +161,7 @@ const sources = [
 ]
 <span class="c">// Claude's own prompt cache: reported, never summed</span>
 const cacheInfo = { read: T.cacheRead, line:
-  `Prompt cache read ${fmtK(T.cacheRead)} tok at a tenth of the price — Claude's own, not counted` }</pre>
+  `Prompt cache read ${fmtK(T.cacheRead)} tokens at a fraction of the price — Claude's own, not counted` }</pre>
         <p class="note">Locked in by tests: a session with 150k cache reads and nothing trimmed shows <b>Saved 0 tok</b>.</p>
       </div>
     </div>

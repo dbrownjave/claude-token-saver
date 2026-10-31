@@ -76,6 +76,17 @@ test('warm and large on the API: one priced dialog; Stay denies the switch and b
   expect(await ui.find({ text: /^177\.5k tokens$/ })).toBeDefined()        // 142k × 1.25, the cold re-write a Stay avoided
 })
 
+test('on the one-hour cache the dialog and the receipt price the re-write at 2×', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const { log } = setup(on, () => API, () => 'Stay')
+  await turn($)
+  await $.classic.PreModelSwitch({ ...SWITCH(), cache_ttl: '1h' })
+  expect(log.asks[0].question).toContain('at 2× the input price')
+  const ui: any = await mount($)
+  if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
+  await ui.press({ key: 'ctx-receipt' })
+  expect(await ui.find({ text: /^284k tokens$/ })).toBeDefined()           // 142k × 2
+})
+
 test('One message: the switch is denied, the next turn alone goes to the other model, the one after returns', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
   const { log } = setup(on, () => API, () => 'One message')
   await turn($)
@@ -110,7 +121,7 @@ test('Switch: allowed, and the receipt lists the cold re-read as paid, never as 
 
 test('subscription: the dialog prices the switch as window headroom and never shows a dollar', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
   let pct = 10
-  const usage = () => ({ context: { tokens: USED, window: 1_000_000, percent: 14 }, rateLimits: [{ kind: 'five_hour', percentUsed: pct }] })
+  const usage = () => ({ context: { tokens: USED, window: 1_000_000, percent: 14 }, rateLimits: [{ kind: 'five_hour', percentUsed: pct }], cost: { usd: 0.4 } })
   const { log } = setup(on, () => usage(), () => 'Stay')
   await turn($)                                                      // limitBase at 10%
   pct = 12
