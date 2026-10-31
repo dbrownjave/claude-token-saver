@@ -22,53 +22,127 @@ function setup(on: any, opts: { refuse?: string } = {}) {
 const mount = ($: any, surface: 'terminal' | 'desktop', props: any = PANE) =>
   $.ui.mount({ plugin: 'token-saver', surface, component: 'Pane', requestId: 'settings', props })
 
-for (const surface of ['terminal', 'desktop'] as const) {
-  test(`settings panel on ${surface}: every option has a control, and a press saves it to /config`, { options: OPTIONS }, async ($, on) => {
-    const log = setup(on)
-    const ui: any = await mount($, surface)
-    for (const k of ['set-theme:auto', 'set-theme:dark', 'set-theme:light', 'set-cardBars:ember', 'set-cacheBand', 'set-compactHint', 'set-longCacheTtl',
-      'set-keepWarm', 'set-keepWarmPings:up', 'set-compactGuard', 'set-modelGuard', 'set-quietBash', 'set-trimOutput', 'set-suggestSkills', 'set-inputPricePerM:up', 'settings-done']) {
-      expect(await ui.find({ key: k })).toBeDefined()
-    }
-    expect((await ui.find({ key: 'set-theme:auto' }))?.props.variant).toBe('primary')
-    expect(await ui.find({ text: /Auto is dark there/ })).toBeDefined()
+const SHARED = ['set-cardBars:fire', 'set-cardBars:ember', 'set-cacheBand', 'set-compactHint', 'set-longCacheTtl', 'set-keepWarm', 'set-compactGuard', 'set-modelGuard', 'set-quietBash', 'set-trimOutput', 'set-suggestSkills', 'settings-done']
+const walk = (n: any, out: any[] = []) => { if (!n || typeof n !== 'object') return out; out.push(n); (n.children || []).forEach((k: any) => walk(k, out)); return out }
+const SUBSCRIPTION = { context: { tokens: 1000, window: 200_000, percent: 1 }, rateLimits: [{ kind: 'five_hour', percentUsed: 12 }, { kind: 'seven_day', percentUsed: 14 }], cost: { usd: 1 } }
+const API = { context: { tokens: 1000, window: 200_000, percent: 1 }, rateLimits: [], cost: { usd: 1 } }
 
-    await ui.press({ key: 'set-theme:light' })
-    expect(log.sets).toContainEqual({ key: 'token-saver.theme', value: 'light' })
-    expect((await ui.find({ key: 'set-theme:light' }))?.props.variant).toBe('primary')
-    expect((await ui.find({ key: 'set-theme:auto' }))?.props.variant).toBeUndefined()
-    if (surface === 'desktop') expect((await ui.find({ type: 'Text', text: /^Settings$/ }))?.props.color).toBe('#141413')   // the light palette, before the reload
+test('settings panel on terminal: every option has a control, and a press saves it to /config', { options: OPTIONS }, async ($, on) => {
+  const log = setup(on)
+  const ui: any = await mount($, 'terminal')
+  for (const k of [...SHARED, 'set-theme:auto', 'set-theme:dark', 'set-theme:light', 'set-keepWarmPings:up', 'set-inputPricePerM:up']) expect(await ui.find({ key: k })).toBeDefined()
+  expect(await ui.find({ text: /Auto is dark there/ })).toBeDefined()
 
-    expect((await ui.find({ key: 'set-keepWarm' }))?.props.label).toBe('On')
-    await ui.press({ key: 'set-keepWarm' })
-    expect(log.sets).toContainEqual({ key: 'token-saver.keepWarm', value: false })
-    expect((await ui.find({ key: 'set-keepWarm' }))?.props.label).toBe('Off')
+  await ui.press({ key: 'set-theme:light' })
+  expect(log.sets).toContainEqual({ key: 'token-saver.theme', value: 'light' })
 
-    await ui.press({ key: 'set-keepWarmPings:up' })
-    expect(log.sets).toContainEqual({ key: 'token-saver.keepWarmPings', value: 6 })
-    expect(await ui.find({ text: /^[  ]6[  ]$/ })).toBeDefined()
+  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label).toBe('━━●')
+  await ui.press({ key: 'set-keepWarm' })
+  expect(log.sets).toContainEqual({ key: 'token-saver.keepWarm', value: false })
+  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label).toBe('●━━')
 
-    await ui.press({ key: 'settings-done' })
-    expect(log.closed.map((c) => c.id)).toContain('settings')
-  })
-}
+  await ui.press({ key: 'set-keepWarmPings:up' })
+  expect(log.sets).toContainEqual({ key: 'token-saver.keepWarmPings', value: 6 })
+  expect(await ui.find({ type: 'Text', text: /^6$/ })).toBeDefined()
 
-test('a refused change goes back and says why', { options: OPTIONS }, async ($, on) => {
+  await ui.press({ key: 'settings-done' })
+  expect(log.closed.map((c) => c.id)).toContain('settings')
+})
+
+test('settings panel on terminal: no bold bracket Button and no Svg, the active value in orange', { options: OPTIONS }, async ($, on) => {
+  setup(on)
+  const ui: any = await mount($, 'terminal')
+  const nodes = walk(await ui.drawn())
+  const buttons = nodes.filter((n) => n.type === 'Button')
+  expect(buttons.length).toBeGreaterThan(13)
+  for (const b of buttons) expect(b.props.plain).toBe(true)
+  expect(nodes.some((n) => n.type === 'Svg')).toBe(false)
+  expect(nodes.some((n) => n.props?.bold)).toBe(false)
+  const auto = await ui.find({ key: 'set-theme:auto' })
+  expect(auto.children[0].props.color).toBe('claude')
+  expect((await ui.find({ key: 'set-theme:dark' })).props.dimColor).toBe(true)
+})
+
+test('settings panel on desktop: a switch that presses, dropdowns for the longer lists, a press saves it to /config', { options: OPTIONS }, async ($, on) => {
+  const log = setup(on)
+  const ui: any = await mount($, 'desktop')
+  for (const k of [...SHARED, 'set-theme', 'set-keepWarmPings', 'set-inputPricePerM']) expect(await ui.find({ key: k })).toBeDefined()
+  expect(await ui.find({ text: /Auto is dark there/ })).toBeDefined()
+
+  await ui.select({ key: 'set-theme', value: 'light' })
+  expect(log.sets).toContainEqual({ key: 'token-saver.theme', value: 'light' })
+  expect((await ui.find({ type: 'Text', text: /^Settings$/ }))?.props.color).toBe('#141413')   // the light palette, before the reload
+
+  const alts = async () => walk(await ui.drawn()).filter((n) => n.type === 'Svg' && n.props.alt !== 'divider').map((n) => n.props.alt)
+  expect((await alts()).filter((x) => x === 'On').length).toBeGreaterThan(5)
+  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label.trim()).toBe('On')
+  await ui.press({ key: 'set-keepWarm' })
+  expect(log.sets).toContainEqual({ key: 'token-saver.keepWarm', value: false })
+  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label.trim()).toBe('Off')
+  expect(await alts()).toContain('Off')
+
+  await ui.select({ key: 'set-keepWarmPings', value: '6' })
+  expect(log.sets).toContainEqual({ key: 'token-saver.keepWarmPings', value: 6 })
+
+  await ui.press({ key: 'settings-done' })
+  expect(log.closed.map((c) => c.id)).toContain('settings')
+})
+
+test('settings panel in VS Code: the same switch and dropdowns', { options: OPTIONS }, async ($, on) => {
+  setup(on)
+  const ui: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'vscode', component: 'Pane', requestId: 'settings', props: PANE })
+  expect(await ui.find({ key: 'set-theme' })).toBeDefined()
+  expect(await ui.find({ key: 'set-keepWarm' })).toBeDefined()
+})
+
+test('a refused change goes back and says why, above the card', { options: OPTIONS }, async ($, on) => {
   setup(on, { refuse: 'locked by your organization' })
   const ui: any = await mount($, 'desktop')
   await ui.press({ key: 'set-quietBash' })
-  expect((await ui.find({ key: 'set-quietBash' }))?.props.label).toBe('On')
+  expect((await ui.find({ key: 'set-quietBash' }))?.props.label.trim()).toBe('On')
   expect(await ui.find({ text: /^Rewrite noisy bash not saved: locked by your organization$/ })).toBeDefined()
+  const nodes = walk(await ui.drawn())
+  const msg = nodes.findIndex((n) => n.type === 'Text' && /not saved/.test(n.children?.[0] ?? ''))
+  const firstControl = nodes.findIndex((n) => n.props?.key === 'set-theme')
+  expect(msg).toBeGreaterThan(-1)
+  expect(msg).toBeLessThan(firstControl)
 })
 
-test('settings panel at 40 columns: no box wider than the panel, labels above their controls', { options: OPTIONS }, async ($, on) => {
+test('on a subscription the rows that do nothing say so, and the switch keeps its knob without the colour', { options: OPTIONS }, async ($, on) => {
+  setup(on)
+  on('session.usage' as any, () => ({ value: SUBSCRIPTION }))
+  const ui: any = await mount($, 'terminal')
+  expect(await ui.find({ text: /^Off \(not API billing\): a subscription caches for an hour already\.$/ })).toBeDefined()
+  expect(await ui.find({ text: /^Off: the TTL follows Claude Code, now 1 hour from your plan\.$/ })).toBeDefined()
+  expect(await ui.find({ text: /Not used while keep-warm is off/ })).toBeDefined()
+  expect(await ui.find({ text: /^Not used on a subscription/ })).toBeDefined()
+  const keepWarm = await ui.find({ key: 'set-keepWarm' })
+  expect(keepWarm.props.label).toBe('━━●')
+  expect(keepWarm.children[0].props.color).toBe('inactive')
+  expect((await ui.find({ key: 'set-quietBash' })).children[0].props.color).toBe('claude')
+})
+
+test('on an API key keep-warm is in force and says what it does', { options: OPTIONS }, async ($, on) => {
+  setup(on)
+  on('session.usage' as any, () => ({ value: API }))
+  const ui: any = await mount($, 'terminal')
+  expect(await ui.find({ text: /^API billing on the 5-minute cache only\./ })).toBeDefined()
+  expect(await ui.find({ text: /^Off: the TTL follows Claude Code, now 5 minutes\.$/ })).toBeDefined()
+  expect((await ui.find({ key: 'set-keepWarm' })).children[0].props.color).toBe('claude')
+})
+
+test('settings panel at 40 columns: no box wider than the panel, and every label fits beside its control', { options: OPTIONS }, async ($, on) => {
   setup(on)
   const ui: any = await mount($, 'desktop', { ...PANE, bodyColumns: 40 })
-  const boxes: any[] = []
-  const walk = (n: any) => { if (!n || typeof n !== 'object') return; if (n.type === 'Box') boxes.push(n); (n.children || []).forEach(walk) }
-  walk(await ui.drawn())
-  for (const b of boxes) if (typeof b.props?.width === 'number') expect(b.props.width).toBeLessThanOrEqual(40)
-  expect(await ui.find({ key: 'set-theme:light' })).toBeDefined()
+  for (const b of walk(await ui.drawn()).filter((n) => n.type === 'Box')) if (typeof b.props?.width === 'number') expect(b.props.width).toBeLessThanOrEqual(40)
+  expect(await ui.find({ key: 'set-theme' })).toBeDefined()
+  // the terminal's card leaves 36 cells at 40: the longest label and its widest control must fit, or a word gets cut
+  const term: any = await mount($, 'terminal', { ...PANE, bodyColumns: 40 })
+  const texts = walk(await term.drawn()).filter((n) => n.type === 'Text').map((n) => String(n.children?.[0] ?? ''))
+  expect(texts).toContain('Input $ per million tokens')
+  expect('Input $ per million tokens'.length + 1 + '− $0.80 +'.length).toBeLessThanOrEqual(36)
+  expect('Suggest parked skills at start'.length + 1 + '━━●'.length).toBeLessThanOrEqual(36)
+  expect('Palette'.length + 1 + 'Auto Dark Light'.length).toBeLessThanOrEqual(36)
 })
 
 test('/tokens settings opens the side panel where panes dock', { options: OPTIONS }, async ($, on) => {
@@ -86,7 +160,7 @@ test('a desktop that docks no panes shows Settings in the band, and Done puts th
   expect(String(r.text)).toContain('above the prompt')
   expect(log.opened.length).toBe(0)
   const ui: any = await band()
-  expect(await ui.find({ key: 'set-theme:light' })).toBeDefined()
+  expect(await ui.find({ key: 'set-theme' })).toBeDefined()
   await ui.press({ key: 'settings-done' })
-  expect(await (await band()).find({ key: 'set-theme:light' })).toBeUndefined()
+  expect(await (await band()).find({ key: 'set-theme' })).toBeUndefined()
 })

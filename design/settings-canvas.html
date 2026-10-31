@@ -73,9 +73,11 @@ section.board > .sub { color:var(--dim); margin:0 0 14px }
 .dbtn.plain.dim { color:var(--t-faint) }
 .dbtn.plain:hover { background:var(--t-fill); color:var(--t-text) }
 .dbtn .cue { display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; width:calc(1em + 6px); height:calc(1em + 6px); border:1px solid color-mix(in srgb,currentColor 20%,transparent); border-radius:4px; font-size:11px; line-height:1; color:var(--t-faint); text-transform:uppercase }
+.dbtn.select { height:24px; padding:0 8px 0 10px; border-radius:6px; background:none; box-shadow:inset 0 0 0 1px var(--t-line) }
+.dbtn.select:hover { background:var(--t-fill) }
 .dbtn .caret { width:.875rem; height:.875rem; color:var(--t-faint); flex-shrink:0 }
 .foldline { position:absolute; left:-18px; right:-18px; height:0; border-top:1px dashed var(--brand); pointer-events:none }
-.foldline span { position:absolute; right:4px; top:-16px; font-size:10px; color:var(--brand); background:var(--t-ground); padding:0 4px }
+.foldline span { position:absolute; right:92px; top:-8px; font-size:10px; color:var(--brand); background:var(--t-ground); padding:0 4px }
 
 /* ---------- terminal: a character grid, drawn cell by cell by tLayout below ---------- */
 .tpane { font:13px/17.5px "SF Mono",Menlo,Monaco,ui-monospace,monospace; padding:10px 12px; border-radius:8px; width:max-content; font-variant-ligatures:none }
@@ -91,7 +93,7 @@ section.board > .sub { color:var(--dim); margin:0 0 14px }
 <body>
 <div class="canvas">
 <header class="top">
-  <h1>Settings panel: the current design and five directions</h1>
+  <h1>Settings panel: the current design, your reference, and five other directions</h1>
   <p class="lede">Read from <code>88efe87</code> (0.3.40). Every frame below is a real <code>h(Box/Text/Button…)</code> tree: a checker holds it to each surface's element and prop table from <code>docs/claude-mods.md</code> and prints an error in the frame if the surface could not draw it. A's tree and <code>SETTINGS</code> are pasted verbatim from <code>register.js</code>. Press anything: values change in every frame.</p>
 </header>
 
@@ -109,7 +111,7 @@ section.board > .sub { color:var(--dim); margin:0 0 14px }
   <li><b>The terminal shows 40% of the panel, or a narrow layout.</b> Measured on the real CLI, opened as Settings opens it: under 110 columns the pane sits inline at a third of the height (76 × 6 on an 80 × 24 terminal, 96 × 14 on 100 × 50). From 110 columns it docks at 54 columns however wide the terminal is, even at 220, and <code>narrow = cells &lt; 60</code> gives every docked terminal the label-above-control layout. Asking <code>rows: 17, columns: 72</code> in <code>$.ui.open</code> changed nothing, so a direction has to fit these, not ask for more.</li>
   <li><b>A refused save is off screen.</b> <code>settingsMsg</code> draws on the last row. Press a row near the top of the 14-row inline pane and the save goes back with no word in view. Try "Refused save" in the bar: A's message lands on row 35, with 14 in view.</li>
   <li><b>Since 0.3.40 the panel contradicts the pane on a subscription.</b> "Prompt cache TTL is 1 hour" reads Off while the cache really is one hour. Keep-warm reads On while the pane says off (not API billing). Pings and Input price change nothing on a plan. B to F say what is true for the plan and relabel the row "Treat the cache as 1 hour" (the <code>plugin.json</code> title would follow); A is left as it ships.</li>
-  <li><b>The terminal's <code>primary</code> Button is bold periwinkle, and every bracketed Button is bold.</b> Captured: <code>#b1b9f9</code> dark, <code>#5769f7</code> light. A Button takes no colour prop, so "no bold, no blue" cannot hold with <code>[ label ]</code> at all. <code>plain</code> Buttons are regular weight, and <code>Text</code> can be orange. C to F draw the active value as Text and the others as plain dim Buttons; the real CLI drew that correctly with no bold and no blue.</li>
+  <li><b>The terminal's <code>primary</code> Button is bold periwinkle, and every bracketed Button is bold.</b> Captured: <code>#b1b9f9</code> dark, <code>#5769f7</code> light. A Button takes no colour prop, and <code>[ label ]</code> is always bold. A <code>plain</code> Button is regular weight and can hold a <code>Text</code>, so a plain Button holding orange Text is pressable, orange and not bold. The real CLI drew that and Enter pressed it. C to G use this or orange Text for the active value.</li>
   <li><b>Tab into a Select opens it in place on the terminal.</b> Closed it is one row, <code>Auto ▾</code>. Focused, its options take a row each and push the rows below down; Pings would add 11 rows to a 14-row pane. The 0.3.37 attempt kept −/+ on the terminal, and this is why that was right.</li>
   <li><b>An overfull terminal row breaks words a letter at a time.</b> Buttons wider than the row wrapped as <code>Pl / ai / nD</code> in the capture. Any new control row has to be measured at 40.</li>
   <li><b>A Settings redesign already exists, unmerged:</b> <code>claude/sad-lewin-9851f3</code> (<code>1106e19</code>, <code>be5354c</code>) carries a different 0.3.37 with cards and a More button. Direction B is its layout, without the bold. It never reached 0.3.40.</li>
@@ -163,8 +165,8 @@ const HEX = {
   },
 }
 const DESK = {   // bg-100, the band's fill at 13/8 % (design/mid-session.js APP_BTN), --cds-fill-primary from the app's code cache
-  dark: { ground: '#262624', text: '#faf9f5', faint: '#9c9a92', fill: 'rgba(222,220,209,.13)', fill2: 'rgba(222,220,209,.24)', prim: '#efefef', onprim: '#141413', frame: 'rgba(222,220,209,.15)' },
-  light: { ground: '#faf9f5', text: '#141413', faint: '#73726c', fill: 'rgba(31,30,29,.08)', fill2: 'rgba(31,30,29,.16)', prim: '#191919', onprim: '#faf9f5', frame: 'rgba(31,30,29,.15)' },
+  dark: { line: '#353533', ground: '#262624', text: '#faf9f5', faint: '#9c9a92', fill: 'rgba(222,220,209,.13)', fill2: 'rgba(222,220,209,.24)', prim: '#efefef', onprim: '#141413', frame: 'rgba(222,220,209,.15)' },
+  light: { line: '#e8e6dc', ground: '#faf9f5', text: '#141413', faint: '#73726c', fill: 'rgba(31,30,29,.08)', fill2: 'rgba(31,30,29,.16)', prim: '#191919', onprim: '#faf9f5', frame: 'rgba(31,30,29,.15)' },
 }
 const TERM = {   // captured: the dock's fill (#262626 / #f5f5f5, composerSidebarBackground); the terminal's own ground is the person's
   dark: { ground: '#151515', dock: '#262626', border: '#c8c8c8' },
@@ -182,13 +184,14 @@ const PROPS = {
   Select: 'key label options value autoFocus onSelect',
   Svg: 'key source alt width height isInteractive',
 }
-const LEAF = new Set([Button, Select, Svg])
+const LEAF = new Set([Select, Svg])
 function check(n, surface, errs) {
   if (typeof n === 'string') return
   if (!ELEMENTS[surface].includes(n.type)) errs.push(`${surface} has no ${n.type}`)
   const ok = new Set((PROPS[n.type] || '').split(' '))
   for (const k of Object.keys(n.props)) if (!ok.has(k)) errs.push(`${n.type} takes no ${k}`)
   if (LEAF.has(n.type) && n.kids.length) errs.push(`${n.type} is a leaf`)
+  if (n.type === Button && n.kids.some((k) => typeof k !== 'string' && k.type !== Text)) errs.push('a Button holds strings and Text only')
   if (n.type === Text && n.props.bold) errs.push('bold in the pane')
   n.kids.forEach((k) => check(k, surface, errs))
 }
@@ -283,7 +286,7 @@ function fullHint(r, f) {
   return r.hint
 }
 
-/* Helpers the new directions share. The active value is Text, because only Text can be orange and pressing it does nothing; the rest are plain Buttons. */
+/* Helpers C to F share. The active value is Text, since pressing it does nothing; the rest are plain Buttons. */
 function kit(ui, o) {
   const { term } = ui
   const t = (s, color, extra) => h(Text, { ...(color ? { color: term ? color : ui.hex(color) } : {}), ...extra }, term ? s : nbsp(s))
@@ -483,6 +486,131 @@ function drawF(ui, o) {
   return col({ width: cells }, kids)
 }
 
+/* ---------- G · settings page: the code as built, register.js on this branch; only the names of the plan facts differ ---------- */
+const SETTINGS_G = [
+  { group: 'Look', rows: [
+    { key: 'theme', label: 'Palette', kind: 'choice', options: ['auto', 'dark', 'light'], def: 'auto',
+      hint: "Auto follows the terminal's /config Theme. The desktop app and VS Code do not tell a mod their appearance, so Auto is dark there: pick Light in light mode." },
+    { key: 'cardBars', label: 'Card bars', kind: 'choice', options: ['fire', 'ember'], def: 'fire', hint: 'Ember: a calm glow at each head, so only the context bar moves.' },
+    { key: 'cacheBand', label: 'Band above the prompt', kind: 'bool', def: true, hint: 'Context, cache and savings in one line above the prompt.' },
+    { key: 'compactHint', label: 'Cache-aware hint on the band', kind: 'bool', def: true, hint: 'Says whether /compact or /clear is the cheaper move right now.' },
+  ] },
+  { group: 'Cache', rows: [
+    { key: 'longCacheTtl', label: 'Treat the cache as 1 hour', kind: 'bool', def: false, hint: 'Off: the TTL follows Claude Code.' },
+    { key: 'keepWarm', label: 'Keep the cache warm while idle', kind: 'bool', def: true, hint: 'API billing on the 5-minute cache only. One tiny request at about 0.1× input, before it lapses.' },
+    { key: 'keepWarmPings', label: 'Pings per idle stretch', kind: 'step', steps: [0, 1, 2, 3, 4, 5, 6, 8, 10, 15, 20], def: 5, hint: 'About 4 minutes apart. 0 turns keep-warm off.' },
+  ] },
+  { group: 'Guards', rows: [
+    { key: 'compactGuard', label: 'Veto /compact on a cold cache', kind: 'bool', def: true, hint: 'Override once with /compact force.' },
+    { key: 'modelGuard', label: 'Price a model switch', kind: 'bool', def: true, hint: 'Shows what a mid-session model switch costs before it happens.' },
+  ] },
+  { group: 'Output', rows: [
+    { key: 'quietBash', label: 'Rewrite noisy bash', kind: 'bool', def: true, hint: 'git status, git log and test commands become short reporters before they run.' },
+    { key: 'trimOutput', label: 'Trim huge successful output', kind: 'bool', def: true, hint: 'Keeps the head and tail. Failures are left intact.' },
+    { key: 'suggestSkills', label: 'Suggest parked skills at start', kind: 'bool', def: true, hint: 'Names parked skills that fit this repo, once per session.' },
+  ] },
+  { group: 'Price', rows: [
+    { key: 'inputPricePerM', label: 'Input $ per million tokens', kind: 'step', steps: [0, 0.8, 1, 3, 5, 15], def: 0,
+      hint: "Puts dollars on the savings. 0 shows tokens only. Check your model's price." },
+  ] },
+]
+const PX = 8.1
+const PALS = { dark: { hex: { desktop: HEX.dark.desktop }, DESK_TRACK: '#353533', DESK_BUFFER: '#545350' }, light: { hex: { desktop: HEX.light.desktop }, DESK_TRACK: '#e8e6dc', DESK_BUFFER: '#cfcdc3' } }
+let PAL = PALS.dark, palMode = 'dark'
+const themeMode = () => palMode
+function settingsIdle(r) { return inert(r, facts()) }
+function settingsHint(r) {
+  const f = facts()
+  if (r.key === 'longCacheTtl' && !f.long && f.known) return f.sub ? 'Off: the TTL follows Claude Code, now 1 hour from your plan.' : 'Off: the TTL follows Claude Code, now 5 minutes.'
+  if (r.key === 'longCacheTtl' && f.long) return 'On: always 1 hour.'
+  if (r.key === 'keepWarm' && f.sub) return 'Off (not API billing): a subscription caches for an hour already.'
+  if (r.key === 'keepWarm' && f.long) return 'Off on the 1-hour cache.'
+  if (r.key === 'keepWarmPings' && inert(r, f)) return 'About 4 minutes apart. Not used while keep-warm is off.'
+  if (r.key === 'inputPricePerM' && f.sub) return 'Not used on a subscription: savings show in tokens and % of the 5-hour window.'
+  return r.hint
+}
+const SWITCH = { W: 32, H: 20, CELLS: 4 }
+/** The desktop's switch: a pill and a knob. Orange means in force; a stored On that does nothing here keeps its knob and loses the colour. */
+function switchSvg(on, lit, light) {
+  const track = lit ? PAL.hex.desktop.claude : light ? PAL.DESK_TRACK : PAL.DESK_BUFFER
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${SWITCH.W}" height="${SWITCH.H}" viewBox="0 0 ${SWITCH.W} ${SWITCH.H}"><rect width="${SWITCH.W}" height="${SWITCH.H}" rx="${SWITCH.H / 2}" fill="${track}"/><circle cx="${on ? SWITCH.W - 10 : 10}" cy="10" r="8" fill="#ffffff"/></svg>`
+}
+
+/** The panel's tree. `o.onDone` closes it (the Pane, or the band on a desktop that places no panes). */
+function drawG(ui, o) {
+  const { Box, Text, Button, Select, Svg, term } = ui
+  const cells = o.W
+  const narrow = cells < 60
+  const t = (s, color, extra) => h(Text, { ...(color ? { color: term ? color : ui.hex(color) } : {}), ...extra }, term ? s : nbsp(s))
+  const row = (props, kids) => h(Box, { flexDirection: 'row', ...props }, ...kids.filter(Boolean))
+  const col = (props, kids) => h(Box, { flexDirection: 'column', ...props }, ...kids.filter(Boolean))
+  const grow = () => h(Box, { flexGrow: 1 })
+  // the card: a hairline each side and its padding; what is left is the rows' width
+  const padX = term || narrow ? 1 : 2
+  const inner = Math.max(16, cells - 2 - 2 * padX)
+  const px = Math.max(120, Math.min(1600, Math.round(inner * PX)))
+  const hair = term ? ui.hex('subtle') : PAL.DESK_TRACK
+  const rule = (key) => term
+    ? t('─'.repeat(inner), 'subtle', { wrap: 'truncate' })
+    : h(Svg, { key, source: `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="17" viewBox="0 0 ${px} 17"><rect y="8" width="${px}" height="1" fill="${hair}"/></svg>`, alt: 'divider', width: px, height: 17 })
+  // A Button holds no Svg, so the desktop's switch is an Svg with a plain Button laid over it, its word kept for what reads it.
+  // The terminal has no Svg: a plain Button holding orange Text draws in that colour with no bold, the same switch in glyphs.
+  const toggle = (r, on) => {
+    const lit = on && !settingsIdle(r)
+    const onPress = () => o.onSet(r, !on)
+    if (term) return h(Button, { key: `set-${r.key}`, plain: true, onPress }, h(Text, { color: lit ? 'claude' : 'inactive' }, on ? '━━●' : '●━━'))
+    return h(Box, { position: 'relative', width: SWITCH.CELLS, height: 1, flexShrink: 0 },
+      h(Svg, { source: switchSvg(on, lit, themeMode(false) === 'light'), alt: on ? 'On' : 'Off', width: SWITCH.W, height: SWITCH.H }),
+      h(Box, { position: 'absolute', top: 0, left: 0 }, h(Button, { key: `set-${r.key}`, plain: true, onPress }, h(Text, { color: 'transparent' }, ` ${on ? 'On' : 'Off'} `))))
+  }
+  const segmented = (r, v) => r.options.map((x) => {
+    const pick = () => { if (x !== v) o.onSet(r, x) }
+    if (x !== v) return h(Button, { key: `set-${r.key}:${x}`, label: cap1(x), plain: true, dimColor: true, onPress: pick })
+    return term
+      ? h(Button, { key: `set-${r.key}:${x}`, plain: true, onPress: pick }, h(Text, { color: 'claude' }, cap1(x)))
+      : h(Button, { key: `set-${r.key}:${x}`, label: cap1(x), onPress: pick })
+  })
+  const stepLabel = (r, n) => (r.key === 'inputPricePerM' ? `$${n % 1 ? n.toFixed(2) : n}` : String(n))
+  const control = (r) => {
+    const v = optOf(r)
+    if (r.kind === 'bool') return [toggle(r, !!v)]
+    if (r.kind === 'choice') {
+      if (!Select || r.options.length < 3) return segmented(r, v)
+      return [h(Select, { key: `set-${r.key}`, value: v, options: r.options.map((x) => ({ value: x, label: cap1(x) })), onSelect: (x) => { if (x !== v) o.onSet(r, x) } })]
+    }
+    const n = Number(v)
+    const steps = r.steps.includes(n) ? r.steps : [...r.steps, n].sort((a, b) => a - b)
+    if (Select) return [h(Select, { key: `set-${r.key}`, value: String(n), options: steps.map((x) => ({ value: String(x), label: stepLabel(r, x) })), onSelect: (x) => { const m = Number(x); if (Number.isFinite(m) && m !== n) o.onSet(r, m) } })]
+    const i = steps.indexOf(n)
+    return [
+      h(Button, { key: `set-${r.key}:down`, label: '−', plain: true, onPress: () => { if (i > 0) o.onSet(r, steps[i - 1]) }, ...(i > 0 ? {} : { dimColor: true }) }),
+      t(stepLabel(r, n), 'text'),
+      h(Button, { key: `set-${r.key}:up`, label: '+', plain: true, onPress: () => { if (i < steps.length - 1) o.onSet(r, steps[i + 1]) }, ...(i < steps.length - 1 ? {} : { dimColor: true }) }),
+    ]
+  }
+  const optionRow = (r) => {
+    const label = t(r.label, settingsIdle(r) ? 'inactive' : 'text', { wrap: 'truncate' })
+    const hint = t(settingsHint(r), 'inactive', { wrap: 'wrap' })
+    const ctl = row({ gap: 1, flexShrink: 0, alignItems: 'center' }, control(r))
+    if (narrow) return col({ key: `row-${r.key}` }, [row({ alignItems: 'center' }, [row({ flexShrink: 1, overflow: 'hidden' }, [label]), grow(), t(' '), ctl]), hint])
+    // the terminal cannot centre one row on two, so its control stays level with the title
+    return row({ key: `row-${r.key}`, alignItems: term ? 'flex-start' : 'center', gap: 2 }, [col({ flexGrow: 1, flexShrink: 1 }, [label, hint]), ctl])
+  }
+  const rows = []
+  SETTINGS_G.flatMap((g) => g.rows).forEach((r, i) => { if (i) rows.push(rule(`rule-${r.key}`)); rows.push(optionRow(r)) })
+  return col({ width: cells }, [
+    row({ alignItems: 'center' }, [
+      t('Settings', 'text', { wrap: 'truncate' }), grow(),
+      o.onDone ? h(Button, { key: 'settings-done', label: 'Done', ...(term ? { plain: true } : {}), onPress: o.onDone }) : null,
+    ]),
+    o.msg ? t(o.msg, 'error', { wrap: 'wrap' }) : null,        // above the card, where a press near the top can still see it
+    term ? null : t(' '),
+    col({ key: 'settings-card', borderStyle: 'round', borderColor: hair, paddingX: padX, paddingY: term ? 0 : 1 }, rows),
+    t(' '),
+    t('Saved to /config as token-saver.<name>. A change reloads the mod.', 'inactive', { wrap: 'wrap' }),
+  ])
+}
+
 /* ---------- terminal: flex in whole cells, the way Ink lays it out. Diffed line for line against the real CLI for every direction at every width. ---------- */
 const tColor = (c, pal) => (!c ? null : c[0] === '#' ? c : pal[c] || c)
 function wrapCells(cells, W) {
@@ -530,6 +658,8 @@ function tLayout(n, avail, ctx, fixed = null) {
     const p = n.props
     const act = ctx.act(p.onPress, p.key)
     const fg = p.dimColor ? pal.inactive : p.variant === 'primary' ? pal.permission : pal.text
+    const inner = n.kids.length ? n.kids.flatMap((k) => (typeof k === 'string' ? run(k, { fg }) : run(k.kids.join(''), { fg: tColor(k.props.color, pal) || fg }))).map((c) => ({ ...c, bold: !p.plain, act, key: p.key })) : null
+    if (inner) return tLeaf(p.plain ? inner : [...run('[ ', { fg, bold: true, act, key: p.key }), ...inner, ...run(' ]', { fg, bold: true, act, key: p.key })], avail, fixed)
     const lab = p.plain ? (p.hotkey ? `${p.hotkey}: ${p.label}` : p.label) : `[ ${p.label} ]`
     return tLeaf(run(lab, { fg, bold: !p.plain, act, key: p.key }), avail, fixed)
   }
@@ -674,7 +804,8 @@ function dNode(n, ui) {
     b.dataset.key = p.key || p.label
     b.className = 'dbtn' + (p.plain ? ' plain' : '') + (p.variant === 'primary' && !p.plain ? ' primary' : '') + (p.dimColor ? ' dim' : '')
     if (p.hotkey) { const c = document.createElement('span'); c.className = 'cue'; c.textContent = p.hotkey; b.append(c) }
-    b.append(document.createTextNode(p.label))
+    if (n.kids.length) n.kids.forEach((k) => { const c = document.createElement('span'); c.textContent = typeof k === 'string' ? k : k.kids.join(''); if (k.props && k.props.color) c.style.color = k.props.color; b.append(c) })
+    else b.append(document.createTextNode(p.label))
     b.onclick = () => p.onPress && p.onPress()
     return b
   }
@@ -684,7 +815,7 @@ function dNode(n, ui) {
     const b = document.createElement('button')
     b.type = 'button'
     b.dataset.key = p.key
-    b.className = 'dbtn'
+    b.className = 'dbtn select'
     b.append(document.createTextNode(opt.label || opt.value))
     const car = document.createElement('span')
     car.className = 'caret'
@@ -709,6 +840,10 @@ function dNode(n, ui) {
   if (p.flexShrink !== undefined) st.flexShrink = p.flexShrink
   if (p.overflow) st.overflow = p.overflow
   if (p.width !== undefined) st.width = `${p.width * CELL}px`
+  if (p.height !== undefined) st.height = `${p.height * LH}px`
+  if (p.position) st.position = p.position
+  if (p.top !== undefined) st.top = `${p.top * LH}px`
+  if (p.left !== undefined) st.left = `${p.left * CELL}px`
   if (p.gap !== undefined) st.gap = dir === 'row' ? `${p.gap * CELL}px` : `${p.gap * LH}px`
   const pick = (...xs) => xs.find((x) => x !== undefined) || 0
   st.paddingLeft = `${pick(p.paddingLeft, p.paddingX, p.padding) * CELL}px`
@@ -727,7 +862,7 @@ function renderDesk(tree, surf, mode) {
   const st = el.style
   st.width = `${surf.W * CELL + 36}px`
   st.background = D.ground; st.boxShadow = `inset 0 0 0 1px ${D.frame}`
-  for (const [k, v] of Object.entries({ text: D.text, faint: D.faint, fill: D.fill, fill2: D.fill2, prim: D.prim, onprim: D.onprim, ground: D.ground })) st.setProperty(`--t-${k}`, v)
+  for (const [k, v] of Object.entries({ line: D.line, text: D.text, faint: D.faint, fill: D.fill, fill2: D.fill2, prim: D.prim, onprim: D.onprim, ground: D.ground })) st.setProperty(`--t-${k}`, v)
   const body = document.createElement('div')
   body.className = 'dbody'
   body.append(dNode(tree))
@@ -738,6 +873,7 @@ function renderDesk(tree, surf, mode) {
 /* ---------- directions and surfaces ---------- */
 const DIRS = [
   { id: 'A', name: 'Current', draw: drawSettings, note: 'As shipped in 0.3.40. Every hint always open, so the terminal shows Look and part of Cache. Active value is the engine\'s bold periwinkle on the terminal, a solid pill on the desktop.' },
+  { id: 'G', name: 'Settings page', draw: drawG, note: 'Your reference, as built: one hairline card, a title and a grey sentence at the left of each row, the control at the right, thin rules between. Switches, dropdowns for the longer lists, a segmented control for two choices. On the desktop the switch is an Svg with a plain Button over it, because a Button cannot hold an Svg. Orange instead of the reference\'s blue, per the no-blue rule. The terminal has no Svg, so its switch is glyphs in a plain Button: real, but tall: 45 rows in a 14-row pane, more than A.' },
   { id: 'B', name: 'Cards', draw: drawB, note: 'The unmerged 0.3.37: hairline cards, first sentence under each title, More for the rest, a Select for numbers on the desktop. The most like a desktop Settings page, and the tallest on every surface. Borders eat 4 columns and rules a row each. Keeps the bold periwinkle. At 40 the More button squeezes the price label to "million tok…", which breaks the rule that every string says tokens.' },
   { id: 'C', name: 'Ledger', draw: drawC, note: 'One row per option, nothing hidden. Wide: group, label, one-line hint, value. Narrow: group headings and one help row that follows focus (ui.focus, confirmed firing on the real CLI). Long hints are gone: the full text stays in /config. A mouse on the narrow desktop only sees a row\'s hint after pressing it.' },
   { id: 'D', name: 'Accordion', draw: drawD, note: 'Five rows that say what each group holds, one open, hints in full. Fits the 14-row pane with any group open. Most options sit one press away, and every summary is a sentence that must stay true as options change. Adds open-group state.' },
@@ -761,6 +897,7 @@ function uiFor(surface, mode) {
 }
 function refusedMsg() { return S.refused ? 'Rewrite noisy bash not saved: locked by your organization' : '' }
 function treeFor(dir, surf, mode) {
+  PAL = PALS[mode]; palMode = mode
   settingsMsg = refusedMsg()
   const o = {
     W: surf.W, msg: settingsMsg,
@@ -803,21 +940,21 @@ function renderTable(M) {
   const rows = DIRS.map((d) => {
     const m = M[d.id]
     const fits = m.t96.rows <= 14
-    return `<tr class="${d.id === 'C' ? 'pick' : ''}"><td>${d.id} · ${d.name}</td>`
+    return `<tr class="${d.id === 'G' ? 'pick' : ''}"><td>${d.id} · ${d.name}</td>`
       + cell(m.t96.rows, a.t96.rows, '', d.id) + cell(m.t54.rows, a.t54.rows, '', d.id) + cell(m.t40.rows, a.t40.rows, '', d.id)
       + `<td class="${fits ? 'fit' : 'nofit'}">${fits ? 'fits' : `${m.t96.rows - 14} over`}</td>`
       + `<td>${m.t96.seen} of 13</td>`
       + cell(m.d98.px, a.d98.px, ' px', d.id) + cell(m.d40.px, a.d40.px, ' px', d.id)
       + `<td>${m.d98.seen} of 13</td>`
       + `<td>${13 - m.t96.all}</td>`
-      + `<td class="txt">${d.id === 'B' ? 'Box, Text, Button, and Svg and Select on the desktop' : 'Box, Text, Button'}</td>`
+      + `<td class="txt">${d.id === 'B' || d.id === 'G' ? 'Box, Text, Button, and Svg and Select on the desktop' : 'Box, Text, Button'}</td>`
       + `</tr>`
   }).join('')
   document.getElementById('table').innerHTML = `<table class="m"><thead><tr><th>Direction, Δ against A</th>`
     + `<th>Terminal rows<br>96 wide</th><th>54, docked</th><th>40, narrow</th><th>In the 14-row pane?</th><th>Options in view<br>at 96 × 14</th>`
     + `<th>Desktop height<br>98 columns</th><th>40, narrow</th><th>Options above<br>the band's stop</th><th>Options behind<br>a press</th><th style="text-align:left">Elements</th></tr></thead><tbody>${rows}</tbody></table>`
   const ok = S.plan === 'sub' && !S.refused && JSON.stringify(S.opts) === JSON.stringify(DEFAULTS)
-  document.getElementById('cal').innerHTML = `Terminal frames are proven: all six trees were drawn on the real CLI (Claude Code 2.1.302) at 96, 54 and 40 columns, and all 18 match these frames line for line, on the subscription state in dark. The light palette's colours come from a real capture of A and the theme table. Desktop frames are not proven: they use the engine's CSS and the app's tokens from its code cache, with the band's 19 px buttons (<code>design/mid-session.js</code>), and have not been compared with a screenshot. A docked desktop pane may draw taller controls (<code>--cds-h-control</code> runs 20 to 40 px), which would make A and B taller than shown. VS Code draws the same elements as the desktop, inline under 800 px and docked above. Mobile places no pane, so <code>/tokens settings</code> prints text there in every direction.${ok ? '' : ' The table reflects the state you have pressed; Reset returns to defaults.'}`
+  document.getElementById('cal').innerHTML = `Terminal frames are proven: all seven trees were drawn on the real CLI (Claude Code 2.1.302) at 96, 54 and 40 columns, and all 21 match these frames line for line, on the subscription state in dark. G's are the built panel itself. The light palette's colours come from a real capture of A and the theme table. Desktop frames are not proven: they use the engine's CSS and the app's tokens from its code cache, with the band's 19 px buttons (<code>design/mid-session.js</code>), and have not been compared with a screenshot. A docked desktop pane may draw taller controls (<code>--cds-h-control</code> runs 20 to 40 px), which would make A and B taller than shown. VS Code draws the same elements as the desktop, inline under 800 px and docked above. Mobile places no pane, so <code>/tokens settings</code> prints text there in every direction.${ok ? '' : ' The table reflects the state you have pressed; Reset returns to defaults.'}`
 }
 
 function renderBar() {
@@ -888,9 +1025,9 @@ function renderDirs() {
   document.getElementById('dirs').innerHTML = DIRS.map((d) => `<div class="dir"><h2><span class="id">${d.id}</span>${d.name}</h2><p>${d.note}</p></div>`).join('')
 }
 function renderRec(M) {
-  const c = M.C, a = M.A, d = M.D
-  document.getElementById('rec').innerHTML = `<p><b>Build C, the ledger.</b> It is the only direction that keeps all 13 options visible and still fits the terminal's 14-row pane: ${c.t96.rows} rows at 96 wide against A's ${a.t96.rows}, ${c.t54.rows} docked against ${a.t54.rows}, ${c.d98.px} px on the desktop against ${a.d98.px}. A settings panel is mostly read to see what is set, so values in one column beat explanations, and the long text already lives in <code>/config</code> (the <code>plugin.json</code> descriptions). It needs only Box, Text and Button, so the same tree is drawable on every surface. It also ends the bold periwinkle, moves a refused save to the title row, and dims a row that does nothing on your plan and says why.</p>`
-    + `<p><b>Runner-up: D, the accordion</b> (${d.t96.rows} rows, full hints kept). It wins if strangers need the explanations in the panel more than they need to see every value at once.</p>`
+  const g = M.G, a = M.A
+  document.getElementById('rec').innerHTML = `<p><b>Picked: G, your reference.</b> It is built in <code>register.js</code> on this branch and is not installed yet. Terminal frames match the built panel on the real CLI line by line. Desktop frames are from the engine's CSS and have not been compared with a screenshot, so the switch overlay still needs one look in the app.</p>`
+    + `<p><b>What it costs:</b> ${g.t96.rows} terminal rows at 96 wide against A's ${a.t96.rows}, in a pane that shows 14; ${g.t54.rows} docked against ${a.t54.rows}; ${g.d98.px} px on the desktop against ${a.d98.px}. The ledger, C, stays here as the compact alternative at ${M.C.t96.rows} rows.</p>`
 }
 
 function renderAll() {

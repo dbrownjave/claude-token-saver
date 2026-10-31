@@ -44,7 +44,7 @@
     },
     "longCacheTtl": {
       "type": "boolean",
-      "title": "Prompt cache TTL is 1 hour",
+      "title": "Treat the cache as 1 hour",
       "description": "Off: the TTL follows Claude Code, read from its cache writes, a model switch, or an idle compaction (5 minutes until one is seen). On: always 1 hour. Sets when the band and the compact guard call the cache cold, and keep-warm turns itself off on 1 hour.",
       "default": false
     },

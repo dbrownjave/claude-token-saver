@@ -2494,40 +2494,66 @@ const ttl = ttlNow(), longTtl = ttl === TTL_LONG
 
 
 /* ── Settings: the side panel ────────────────────────────────────────────────────────────────────────────────────
-   Every option of plugin.json, grouped, one control each. A change is $.config.set on `token-saver.<key>`, the same
-   row /config shows, so there is one source; Claude Code then reloads the module with the new options. The panel
-   shows the new value at once, and the palette and card bars switch before the reload. */
+   Every option of plugin.json in one card, laid out like a desktop Settings page. A change is $.config.set on
+   `token-saver.<key>`, the same row /config shows, so there is one source; Claude Code then reloads the module with the
+   new options. The panel shows the new value at once, and the palette and card bars switch before the reload. */
 const SETTINGS_PANE = 'settings'
 const SETTINGS = [
   { group: 'Look', rows: [
     { key: 'theme', label: 'Palette', kind: 'choice', options: ['auto', 'dark', 'light'], def: 'auto',
       hint: "Auto follows the terminal's /config Theme. The desktop app and VS Code do not tell a mod their appearance, so Auto is dark there: pick Light in light mode." },
     { key: 'cardBars', label: 'Card bars', kind: 'choice', options: ['fire', 'ember'], def: 'fire', hint: 'Ember: a calm glow at each head, so only the context bar moves.' },
-    { key: 'cacheBand', label: 'Band above the prompt', kind: 'bool', def: true },
-    { key: 'compactHint', label: 'Cache-aware hint on the band', kind: 'bool', def: true },
+    { key: 'cacheBand', label: 'Band above the prompt', kind: 'bool', def: true, hint: 'Context, cache and savings in one line above the prompt.' },
+    { key: 'compactHint', label: 'Cache-aware hint on the band', kind: 'bool', def: true, hint: 'Says whether /compact or /clear is the cheaper move right now.' },
   ] },
   { group: 'Cache', rows: [
-    { key: 'longCacheTtl', label: 'Prompt cache TTL is 1 hour', kind: 'bool', def: false, hint: 'Off: the TTL follows Claude Code.' },
+    { key: 'longCacheTtl', label: 'Treat the cache as 1 hour', kind: 'bool', def: false, hint: 'Off: the TTL follows Claude Code.' },
     { key: 'keepWarm', label: 'Keep the cache warm while idle', kind: 'bool', def: true, hint: 'API billing on the 5-minute cache only. One tiny request at about 0.1× input, before it lapses.' },
     { key: 'keepWarmPings', label: 'Pings per idle stretch', kind: 'step', steps: [0, 1, 2, 3, 4, 5, 6, 8, 10, 15, 20], def: 5, hint: 'About 4 minutes apart. 0 turns keep-warm off.' },
   ] },
   { group: 'Guards', rows: [
     { key: 'compactGuard', label: 'Veto /compact on a cold cache', kind: 'bool', def: true, hint: 'Override once with /compact force.' },
-    { key: 'modelGuard', label: 'Price a model switch', kind: 'bool', def: true },
+    { key: 'modelGuard', label: 'Price a model switch', kind: 'bool', def: true, hint: 'Shows what a mid-session model switch costs before it happens.' },
   ] },
   { group: 'Output', rows: [
-    { key: 'quietBash', label: 'Rewrite noisy bash', kind: 'bool', def: true },
-    { key: 'trimOutput', label: 'Trim huge successful output', kind: 'bool', def: true, hint: 'Failures are left intact.' },
-    { key: 'suggestSkills', label: 'Suggest parked skills at start', kind: 'bool', def: true },
+    { key: 'quietBash', label: 'Rewrite noisy bash', kind: 'bool', def: true, hint: 'git status, git log and test commands become short reporters before they run.' },
+    { key: 'trimOutput', label: 'Trim huge successful output', kind: 'bool', def: true, hint: 'Keeps the head and tail. Failures are left intact.' },
+    { key: 'suggestSkills', label: 'Suggest parked skills at start', kind: 'bool', def: true, hint: 'Names parked skills that fit this repo, once per session.' },
   ] },
   { group: 'Price', rows: [
-    { key: 'inputPricePerM', label: 'Input price, $ per million tokens', kind: 'step', steps: [0, 0.8, 1, 3, 5, 15], def: 0,
+    { key: 'inputPricePerM', label: 'Input $ per million tokens', kind: 'step', steps: [0, 0.8, 1, 3, 5, 15], def: 0,
       hint: "Puts dollars on the savings. 0 shows tokens only. Check your model's price." },
   ] },
 ]
 let OPTS = {}                       // the options as this load got them, with the panel's changes laid over
 let settingsMsg = ''
 const optOf = (r) => (OPTS[r.key] === undefined ? r.def : OPTS[r.key])
+const onPlan = () => keepWarm.stopped === 'not API billing'     // noteBilling: inside a subscription's window
+const baseTtl = () => engineTtl.value || configTtl || planTtl     // the TTL with this panel's option left out: '1h', '5m' or '' (not seen yet)
+const hourNow = () => OPTS.longCacheTtl === true || baseTtl() === '1h'
+/** A row that changes nothing right now. It stays pressable, reads dim, and its sentence says why. */
+function settingsIdle(r) {
+  if (r.key === 'longCacheTtl') return baseTtl() === '1h'
+  if (r.key === 'keepWarm') return onPlan() || hourNow()
+  if (r.key === 'keepWarmPings') return OPTS.keepWarm === false || onPlan() || hourNow()
+  if (r.key === 'inputPricePerM') return onPlan()
+  return false
+}
+/** The row's one sentence, true for this plan and this TTL. */
+function settingsHint(r) {
+  if (r.key === 'longCacheTtl') {
+    if (OPTS.longCacheTtl === true) return 'On: always 1 hour.'
+    if (baseTtl() === '1h') return `Off: the TTL follows Claude Code, now 1 hour${onPlan() ? ' from your plan' : ''}.`
+    if (baseTtl() === '5m') return 'Off: the TTL follows Claude Code, now 5 minutes.'
+  }
+  if (r.key === 'keepWarm') {
+    if (onPlan()) return 'Off (not API billing): a subscription caches for an hour already.'
+    if (hourNow()) return 'Off on the 1-hour cache.'
+  }
+  if (r.key === 'keepWarmPings' && settingsIdle(r)) return 'About 4 minutes apart. Not used while keep-warm is off.'
+  if (r.key === 'inputPricePerM' && onPlan()) return 'Not used on a subscription: savings show in tokens and % of the 5-hour window.'
+  return r.hint
+}
 
 async function setOption($, r, value) {
   const was = OPTS[r.key]
@@ -2575,47 +2601,86 @@ function settingsText() {
   return out.join('\n')
 }
 
+const SWITCH = { W: 32, H: 20, CELLS: 4 }
+/** The desktop's switch: a pill and a knob. Orange means in force; a stored On that does nothing here keeps its knob and loses the colour. */
+function switchSvg(on, lit, light) {
+  const track = lit ? PAL.hex.desktop.claude : light ? PAL.DESK_TRACK : PAL.DESK_BUFFER
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${SWITCH.W}" height="${SWITCH.H}" viewBox="0 0 ${SWITCH.W} ${SWITCH.H}"><rect width="${SWITCH.W}" height="${SWITCH.H}" rx="${SWITCH.H / 2}" fill="${track}"/><circle cx="${on ? SWITCH.W - 10 : 10}" cy="10" r="8" fill="#ffffff"/></svg>`
+}
+
 /** The panel's tree. `o.onDone` closes it (the Pane, or the band on a desktop that places no panes). */
 function drawSettings(ui, o) {
-  const { Box, Text, Button, term } = ui
+  const { Box, Text, Button, Select, Svg, term } = ui
   const cells = o.W
   const narrow = cells < 60
   const t = (s, color, extra) => h(Text, { ...(color ? { color: term ? color : ui.hex(color) } : {}), ...extra }, term ? s : nbsp(s))
   const row = (props, kids) => h(Box, { flexDirection: 'row', ...props }, ...kids.filter(Boolean))
   const col = (props, kids) => h(Box, { flexDirection: 'column', ...props }, ...kids.filter(Boolean))
   const grow = () => h(Box, { flexGrow: 1 })
-  const btn = (key, label, on, onPress) => h(Button, { key, label, onPress, ...(on ? { variant: 'primary' } : { dimColor: true }) })
+  // the card: a hairline each side and its padding; what is left is the rows' width
+  const padX = term || narrow ? 1 : 2
+  const inner = Math.max(16, cells - 2 - 2 * padX)
+  const px = Math.max(120, Math.min(1600, Math.round(inner * PX)))
+  const hair = term ? ui.hex('subtle') : PAL.DESK_TRACK
+  const rule = (key) => term
+    ? t('─'.repeat(inner), 'subtle', { wrap: 'truncate' })
+    : h(Svg, { key, source: `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="17" viewBox="0 0 ${px} 17"><rect y="8" width="${px}" height="1" fill="${hair}"/></svg>`, alt: 'divider', width: px, height: 17 })
+  // A Button holds no Svg, so the desktop's switch is an Svg with a plain Button laid over it, its word kept for what reads it.
+  // The terminal has no Svg: a plain Button holding orange Text draws in that colour with no bold, the same switch in glyphs.
+  const toggle = (r, on) => {
+    const lit = on && !settingsIdle(r)
+    const onPress = () => o.onSet(r, !on)
+    if (term) return h(Button, { key: `set-${r.key}`, plain: true, onPress }, h(Text, { color: lit ? 'claude' : 'inactive' }, on ? '━━●' : '●━━'))
+    return h(Box, { position: 'relative', width: SWITCH.CELLS, height: 1, flexShrink: 0 },
+      h(Svg, { source: switchSvg(on, lit, themeMode(false) === 'light'), alt: on ? 'On' : 'Off', width: SWITCH.W, height: SWITCH.H }),
+      h(Box, { position: 'absolute', top: 0, left: 0 }, h(Button, { key: `set-${r.key}`, plain: true, onPress }, h(Text, { color: 'transparent' }, ` ${on ? 'On' : 'Off'} `))))
+  }
+  const segmented = (r, v) => r.options.map((x) => {
+    const pick = () => { if (x !== v) o.onSet(r, x) }
+    if (x !== v) return h(Button, { key: `set-${r.key}:${x}`, label: cap1(x), plain: true, dimColor: true, onPress: pick })
+    return term
+      ? h(Button, { key: `set-${r.key}:${x}`, plain: true, onPress: pick }, h(Text, { color: 'claude' }, cap1(x)))
+      : h(Button, { key: `set-${r.key}:${x}`, label: cap1(x), onPress: pick })
+  })
+  const stepLabel = (r, n) => (r.key === 'inputPricePerM' ? `$${n % 1 ? n.toFixed(2) : n}` : String(n))
   const control = (r) => {
     const v = optOf(r)
-    if (r.kind === 'bool') return [h(Button, { key: `set-${r.key}`, label: v ? 'On' : 'Off', onPress: () => o.onSet(r, !v), ...(v ? { variant: 'primary' } : {}) })]
-    if (r.kind === 'choice') return r.options.map((x) => btn(`set-${r.key}:${x}`, cap1(x), x === v, () => { if (x !== v) o.onSet(r, x) }))
-    const steps = r.steps.includes(Number(v)) ? r.steps : [...r.steps, Number(v)].sort((a, b) => a - b)
-    const i = steps.indexOf(Number(v))
+    if (r.kind === 'bool') return [toggle(r, !!v)]
+    if (r.kind === 'choice') {
+      if (!Select || r.options.length < 3) return segmented(r, v)
+      return [h(Select, { key: `set-${r.key}`, value: v, options: r.options.map((x) => ({ value: x, label: cap1(x) })), onSelect: (x) => { if (x !== v) o.onSet(r, x) } })]
+    }
+    const n = Number(v)
+    const steps = r.steps.includes(n) ? r.steps : [...r.steps, n].sort((a, b) => a - b)
+    if (Select) return [h(Select, { key: `set-${r.key}`, value: String(n), options: steps.map((x) => ({ value: String(x), label: stepLabel(r, x) })), onSelect: (x) => { const m = Number(x); if (Number.isFinite(m) && m !== n) o.onSet(r, m) } })]
+    const i = steps.indexOf(n)
     return [
-      h(Button, { key: `set-${r.key}:down`, label: '−', onPress: () => { if (i > 0) o.onSet(r, steps[i - 1]) }, ...(i > 0 ? {} : { dimColor: true }) }),
-      t(` ${String(v)} `, 'text'),
-      h(Button, { key: `set-${r.key}:up`, label: '+', onPress: () => { if (i < steps.length - 1) o.onSet(r, steps[i + 1]) }, ...(i < steps.length - 1 ? {} : { dimColor: true }) }),
+      h(Button, { key: `set-${r.key}:down`, label: '−', plain: true, onPress: () => { if (i > 0) o.onSet(r, steps[i - 1]) }, ...(i > 0 ? {} : { dimColor: true }) }),
+      t(stepLabel(r, n), 'text'),
+      h(Button, { key: `set-${r.key}:up`, label: '+', plain: true, onPress: () => { if (i < steps.length - 1) o.onSet(r, steps[i + 1]) }, ...(i < steps.length - 1 ? {} : { dimColor: true }) }),
     ]
   }
-  const kids = [
+  const optionRow = (r) => {
+    const label = t(r.label, settingsIdle(r) ? 'inactive' : 'text', { wrap: 'truncate' })
+    const hint = t(settingsHint(r), 'inactive', { wrap: 'wrap' })
+    const ctl = row({ gap: 1, flexShrink: 0, alignItems: 'center' }, control(r))
+    if (narrow) return col({ key: `row-${r.key}` }, [row({ alignItems: 'center' }, [row({ flexShrink: 1, overflow: 'hidden' }, [label]), grow(), t(' '), ctl]), hint])
+    // the terminal cannot centre one row on two, so its control stays level with the title
+    return row({ key: `row-${r.key}`, alignItems: term ? 'flex-start' : 'center', gap: 2 }, [col({ flexGrow: 1, flexShrink: 1 }, [label, hint]), ctl])
+  }
+  const rows = []
+  SETTINGS.flatMap((g) => g.rows).forEach((r, i) => { if (i) rows.push(rule(`rule-${r.key}`)); rows.push(optionRow(r)) })
+  return col({ width: cells }, [
     row({ alignItems: 'center' }, [
       t('Settings', 'text', { wrap: 'truncate' }), grow(),
       o.onDone ? h(Button, { key: 'settings-done', label: 'Done', ...(term ? { plain: true } : {}), onPress: o.onDone }) : null,
     ]),
-  ]
-  for (const g of SETTINGS) {
-    kids.push(t(' '), t(g.group, 'claude'))
-    for (const r of g.rows) {
-      const ctl = row({ gap: 1, flexShrink: 0, alignItems: 'center' }, control(r))
-      const label = t(r.label, 'text', { wrap: 'truncate' })
-      kids.push(narrow
-        ? col({}, [label, ctl])
-        : row({ alignItems: 'center' }, [row({ flexShrink: 1, overflow: 'hidden' }, [label]), grow(), t(' '), ctl]))
-      if (r.hint) kids.push(t(r.hint, 'inactive', { wrap: 'wrap' }))
-    }
-  }
-  kids.push(t(' '), t(settingsMsg || 'Saved to /config as token-saver.<name>. A change reloads the mod.', settingsMsg ? 'error' : 'inactive', { wrap: 'wrap' }))
-  return col({ width: cells }, kids)
+    settingsMsg ? t(settingsMsg, 'error', { wrap: 'wrap' }) : null,        // above the card, where a press near the top can still see it
+    term ? null : t(' '),
+    col({ key: 'settings-card', borderStyle: 'round', borderColor: hair, paddingX: padX, paddingY: term ? 0 : 1 }, rows),
+    t(' '),
+    t('Saved to /config as token-saver.<name>. A change reloads the mod.', 'inactive', { wrap: 'wrap' }),
+  ])
 }
 
 async function renderSettings($, e, inBand) {
@@ -2623,9 +2688,15 @@ async function renderSettings($, e, inBand) {
     const el = $.ui.resolve(e)
     const term = e.surface === 'terminal'
     if (term && !themeRead) await readTheme($)
-    const ui = { Box: el.Box, Text: el.Text, Button: el.Button, term, hex: hexFor(term) }
+    // a dropdown where the surface draws one and Tab does not open it in place; the terminal and the phone step with − and +
+    const Select = e.surface === 'desktop' || e.surface === 'vscode' ? el.Select : undefined
+    const ui = { Box: el.Box, Text: el.Text, Button: el.Button, Select, Svg: term ? undefined : el.Svg, term, hex: hexFor(term) }
     const W = (e.props && e.props.bodyColumns) || (e.viewport && e.viewport.columns) || 80
     usePal(term)
+    // a change reloads the module and forgets the plan, so learn it again before saying what a row does
+    let usage = null
+    try { usage = await $.session.usage() } catch { /* no usage API */ }
+    noteBilling(usage)
     return drawSettings(ui, {
       W,
       onSet: (r, v) => setOption($, r, v),
