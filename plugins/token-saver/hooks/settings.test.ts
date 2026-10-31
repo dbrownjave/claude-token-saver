@@ -36,10 +36,10 @@ test('settings panel on terminal: every option has a control, and a press saves 
   await ui.press({ key: 'set-theme:light' })
   expect(log.sets).toContainEqual({ key: 'token-saver.theme', value: 'light' })
 
-  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label).toBe('━━●')
+  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label).toBe('━━━━●')
   await ui.press({ key: 'set-keepWarm' })
   expect(log.sets).toContainEqual({ key: 'token-saver.keepWarm', value: false })
-  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label).toBe('●━━')
+  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label).toBe('●━━━━')
 
   await ui.press({ key: 'set-keepWarmPings:up' })
   expect(log.sets).toContainEqual({ key: 'token-saver.keepWarmPings', value: 6 })
@@ -74,12 +74,11 @@ test('settings panel on desktop: a switch that presses, dropdowns for the longer
   expect((await ui.find({ type: 'Text', text: /^Settings$/ }))?.props.color).toBe('#141413')   // the light palette, before the reload
 
   const alts = async () => walk(await ui.drawn()).filter((n) => n.type === 'Svg' && n.props.alt !== 'divider').map((n) => n.props.alt)
-  expect((await alts()).filter((x) => x === 'On').length).toBeGreaterThan(5)
-  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label.trim()).toBe('On')
+  expect((await alts()).filter((x) => x.endsWith(': On')).length).toBeGreaterThan(5)
+  expect(await alts()).toContain('Keep the cache warm while idle: On')
   await ui.press({ key: 'set-keepWarm' })
   expect(log.sets).toContainEqual({ key: 'token-saver.keepWarm', value: false })
-  expect((await ui.find({ key: 'set-keepWarm' }))?.props.label.trim()).toBe('Off')
-  expect(await alts()).toContain('Off')
+  expect(await alts()).toContain('Keep the cache warm while idle: Off')
 
   await ui.select({ key: 'set-keepWarmPings', value: '6' })
   expect(log.sets).toContainEqual({ key: 'token-saver.keepWarmPings', value: 6 })
@@ -87,6 +86,34 @@ test('settings panel on desktop: a switch that presses, dropdowns for the longer
   await ui.press({ key: 'settings-done' })
   expect(log.closed.map((c) => c.id)).toContain('settings')
 })
+
+for (const bodyColumns of [100, 40]) {
+  test(`a switch shows no word, is long, and presses, at ${bodyColumns} columns`, { options: OPTIONS }, async ($, on) => {
+    const log = setup(on)
+    const props = { ...PANE, bodyColumns }
+    const desk: any = await mount($, 'desktop', props)
+    const nodes = walk(await desk.drawn())
+    for (const key of ['set-cacheBand', 'set-quietBash', 'set-suggestSkills']) {
+      const b = await desk.find({ key })
+      expect(b.props.label.replace(/\u00a0/g, '')).toBe('')
+      expect(b.children ?? []).toEqual([])
+    }
+    expect(nodes.some((n) => n.props?.color === 'transparent')).toBe(false)
+    const sw = nodes.filter((n) => n.type === 'Svg' && n.props.alt !== 'divider')
+    expect(sw.length).toBe(9)
+    for (const s of sw) { expect(s.props.width).toBe(48); expect(s.props.height).toBe(20) }
+    expect(await desk.find({ type: 'Text', text: /^(On|Off)$/ })).toBeUndefined()
+    await desk.press({ key: 'set-quietBash' })
+    expect(log.sets).toContainEqual({ key: 'token-saver.quietBash', value: false })
+
+    const term: any = await mount($, 'terminal', props)
+    expect(await term.find({ type: 'Text', text: /^(On|Off)$/ })).toBeUndefined()
+    expect((await term.find({ key: 'set-cacheBand' })).props.label).toBe('━━━━●')
+    await term.press({ key: 'set-cacheBand' })
+    expect(log.sets).toContainEqual({ key: 'token-saver.cacheBand', value: false })
+    expect((await term.find({ key: 'set-cacheBand' })).props.label).toBe('●━━━━')
+  })
+}
 
 test('settings panel in VS Code: the same switch and dropdowns', { options: OPTIONS }, async ($, on) => {
   setup(on)
@@ -99,7 +126,7 @@ test('a refused change goes back and says why, above the card', { options: OPTIO
   setup(on, { refuse: 'locked by your organization' })
   const ui: any = await mount($, 'desktop')
   await ui.press({ key: 'set-quietBash' })
-  expect((await ui.find({ key: 'set-quietBash' }))?.props.label.trim()).toBe('On')
+  expect(walk(await ui.drawn()).filter((n) => n.type === 'Svg').map((n) => n.props.alt)).toContain('Rewrite noisy bash: On')
   expect(await ui.find({ text: /^Rewrite noisy bash not saved: locked by your organization$/ })).toBeDefined()
   const nodes = walk(await ui.drawn())
   const msg = nodes.findIndex((n) => n.type === 'Text' && /not saved/.test(n.children?.[0] ?? ''))
@@ -117,7 +144,7 @@ test('on a subscription the rows that do nothing say so, and the switch keeps it
   expect(await ui.find({ text: /Not used while keep-warm is off/ })).toBeDefined()
   expect(await ui.find({ text: /^Not used on a subscription/ })).toBeDefined()
   const keepWarm = await ui.find({ key: 'set-keepWarm' })
-  expect(keepWarm.props.label).toBe('━━●')
+  expect(keepWarm.props.label).toBe('━━━━●')
   expect(keepWarm.children[0].props.color).toBe('inactive')
   expect((await ui.find({ key: 'set-quietBash' })).children[0].props.color).toBe('claude')
 })
@@ -141,7 +168,7 @@ test('settings panel at 40 columns: no box wider than the panel, and every label
   const texts = walk(await term.drawn()).filter((n) => n.type === 'Text').map((n) => String(n.children?.[0] ?? ''))
   expect(texts).toContain('Input $ per million tokens')
   expect('Input $ per million tokens'.length + 1 + '− $0.80 +'.length).toBeLessThanOrEqual(36)
-  expect('Suggest parked skills at start'.length + 1 + '━━●'.length).toBeLessThanOrEqual(36)
+  expect('Suggest parked skills at start'.length + 1 + '━━━━●'.length).toBeLessThanOrEqual(36)
   expect('Palette'.length + 1 + 'Auto Dark Light'.length).toBeLessThanOrEqual(36)
 })
 

@@ -560,7 +560,7 @@ From token-saver (observed, not in the types):
 - VS Code extension 2.1.263 and older: the webview has no mod UI at all, and its bundled CLI rejects a `userConfig` string with `options` ("Invalid input"), which fails the whole plugin load, and gates hooks modules behind the `tengu_plugin_hooks_modules` rollout flag (`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` overrides it). token-saver keeps `options` out of its manifest and validates choices in code.
 - The terminal's pane body, measured on the real CLI (2.1.302) opened with no size asked: inline at a third of the height under 110 columns (76 x 6 on 80 x 24, 96 x 14 on 100 x 50), docked at 54 columns from 110 up, even at 220. Asking `rows: 17, columns: 72` changed none of these.
 - On the terminal, Tab into a Select opens it in place: its options take a row each and push the rows below down. Closed it is one row, `Auto ▾`.
-- A Button holds no Svg, so a pressable graphic on the desktop is an Svg with a `position: 'absolute'` plain Button laid over it (token-saver's Settings switch). Its Text is `transparent`, which keeps the word for whatever reads the label.
+- A Button holds no Svg, so a pressable graphic on the desktop is an Svg with a `position: 'absolute'` plain Button laid over it (token-saver's Settings switch). Its label is non-breaking spaces and the state is the Svg's `alt`: a word in a `transparent` Text still shows in the desktop app.
 - With no UI client attached (an older panel on a newer CLI, an SDK host), `$.ui.open` resolves `{ isPlaced: false, reason: 'no-surface: …' }` and a toast reaches nobody. Answer in the command's `text` instead.
 
 ---

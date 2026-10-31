@@ -529,7 +529,7 @@ function settingsHint(r) {
   if (r.key === 'inputPricePerM' && f.sub) return 'Not used on a subscription: savings show in tokens and % of the 5-hour window.'
   return r.hint
 }
-const SWITCH = { W: 32, H: 20, CELLS: 4 }
+const SWITCH = { W: 48, H: 20, CELLS: 6, COVER: 13, ON: '━━━━●', OFF: '●━━━━' }   // COVER: the spaces that stretch the plain Button over the pill
 /** The desktop's switch: a pill and a knob. Orange means in force; a stored On that does nothing here keeps its knob and loses the colour. */
 function switchSvg(on, lit, light) {
   const track = lit ? PAL.hex.desktop.claude : light ? PAL.DESK_TRACK : PAL.DESK_BUFFER
@@ -553,15 +553,16 @@ function drawG(ui, o) {
   const rule = (key) => term
     ? t('─'.repeat(inner), 'subtle', { wrap: 'truncate' })
     : h(Svg, { key, source: `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="17" viewBox="0 0 ${px} 17"><rect y="8" width="${px}" height="1" fill="${hair}"/></svg>`, alt: 'divider', width: px, height: 17 })
-  // A Button holds no Svg, so the desktop's switch is an Svg with a plain Button laid over it, its word kept for what reads it.
+  // A Button holds no Svg, so the desktop's switch is an Svg with a plain Button laid over it. The Button is spaces only: a word
+  // there shows in the app even in a `transparent` Text. The state is the Svg's alt.
   // The terminal has no Svg: a plain Button holding orange Text draws in that colour with no bold, the same switch in glyphs.
   const toggle = (r, on) => {
     const lit = on && !settingsIdle(r)
     const onPress = () => o.onSet(r, !on)
-    if (term) return h(Button, { key: `set-${r.key}`, plain: true, onPress }, h(Text, { color: lit ? 'claude' : 'inactive' }, on ? '━━●' : '●━━'))
+    if (term) return h(Button, { key: `set-${r.key}`, plain: true, onPress }, h(Text, { color: lit ? 'claude' : 'inactive' }, on ? SWITCH.ON : SWITCH.OFF))
     return h(Box, { position: 'relative', width: SWITCH.CELLS, height: 1, flexShrink: 0 },
-      h(Svg, { source: switchSvg(on, lit, themeMode(false) === 'light'), alt: on ? 'On' : 'Off', width: SWITCH.W, height: SWITCH.H }),
-      h(Box, { position: 'absolute', top: 0, left: 0 }, h(Button, { key: `set-${r.key}`, plain: true, onPress }, h(Text, { color: 'transparent' }, ` ${on ? 'On' : 'Off'} `))))
+      h(Svg, { source: switchSvg(on, lit, themeMode(false) === 'light'), alt: `${r.label}: ${on ? 'On' : 'Off'}`, width: SWITCH.W, height: SWITCH.H }),
+      h(Box, { position: 'absolute', top: 0, left: 0 }, h(Button, { key: `set-${r.key}`, label: '\u00a0'.repeat(SWITCH.COVER), plain: true, onPress })))
   }
   const segmented = (r, v) => r.options.map((x) => {
     const pick = () => { if (x !== v) o.onSet(r, x) }
@@ -873,7 +874,7 @@ function renderDesk(tree, surf, mode) {
 /* ---------- directions and surfaces ---------- */
 const DIRS = [
   { id: 'A', name: 'Current', draw: drawSettings, note: 'As shipped in 0.3.40. Every hint always open, so the terminal shows Look and part of Cache. Active value is the engine\'s bold periwinkle on the terminal, a solid pill on the desktop.' },
-  { id: 'G', name: 'Settings page', draw: drawG, note: 'Your reference, as built: one hairline card, a title and a grey sentence at the left of each row, the control at the right, thin rules between. Switches, dropdowns for the longer lists, a segmented control for two choices. On the desktop the switch is an Svg with a plain Button over it, because a Button cannot hold an Svg. Orange instead of the reference\'s blue, per the no-blue rule. The terminal has no Svg, so its switch is glyphs in a plain Button: real, but tall: 45 rows in a 14-row pane, more than A.' },
+  { id: 'G', name: 'Settings page', draw: drawG, note: 'Your reference, as built: one hairline card, a title and a grey sentence at the left of each row, the control at the right, thin rules between. Switches, dropdowns for the longer lists, a segmented control for two choices. On the desktop the switch is an Svg with a plain Button of spaces over it, because a Button cannot hold an Svg and a word there shows in the app. Orange instead of the reference\'s blue, per the no-blue rule. The terminal has no Svg, so its switch is glyphs in a plain Button: real, but tall: 45 rows in a 14-row pane, more than A.' },
   { id: 'B', name: 'Cards', draw: drawB, note: 'The unmerged 0.3.37: hairline cards, first sentence under each title, More for the rest, a Select for numbers on the desktop. The most like a desktop Settings page, and the tallest on every surface. Borders eat 4 columns and rules a row each. Keeps the bold periwinkle. At 40 the More button squeezes the price label to "million tok…", which breaks the rule that every string says tokens.' },
   { id: 'C', name: 'Ledger', draw: drawC, note: 'One row per option, nothing hidden. Wide: group, label, one-line hint, value. Narrow: group headings and one help row that follows focus (ui.focus, confirmed firing on the real CLI). Long hints are gone: the full text stays in /config. A mouse on the narrow desktop only sees a row\'s hint after pressing it.' },
   { id: 'D', name: 'Accordion', draw: drawD, note: 'Five rows that say what each group holds, one open, hints in full. Fits the 14-row pane with any group open. Most options sit one press away, and every summary is a sentence that must stay true as options change. Adds open-group state.' },
