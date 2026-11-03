@@ -29,7 +29,7 @@ def load_levels() -> list:
     except Exception:
         return [
             {"id": "watch", "pct": 40, "hint": "note"},
-            {"id": "handoff", "pct": 60, "hint": "new-conversation"},
+            {"id": "fresh start", "pct": 60, "hint": "new-conversation"},
             {"id": "compact", "pct": 75, "hint": "compact-if-warm"},
         ]
 
@@ -44,7 +44,7 @@ def hint_for(pct: float, warm: bool) -> str:
     kind = str(hit.get("hint") or "note")
     mark = f"{hit.get('id') or 'limit'} {int(hit['pct'])}%"
     if kind == "new-conversation":
-        return f"{mark} handoff"
+        return f"{mark} summary, then /clear"
     if kind == "compact-if-warm":
         return f"{mark} compact" if warm else f"{mark} new chat"
     return mark

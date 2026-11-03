@@ -188,3 +188,16 @@ test('a 1M window with auto-compact above 900k: the pane and /tokens say to run 
   await h.clock.advance(2 * MIN)                                                 // past the breakdown cache
   expect(await list()).not.toContain('/autocompact 400k')
 })
+
+
+test('with auto-compact at 400k on a 1M window the marks scale to it, so every mark can be reached', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const usage = () => ({ context: { tokens: 150_000, window: 1_000_000, percent: 15, breakdown: {
+    totalTokens: 150_000, maxTokens: 1_000_000, rawMaxTokens: 1_000_000, percentage: 15, isAutoCompactEnabled: true, autoCompactThreshold: 400_000, categories: [] } }, rateLimits: [], cost: { usd: 1.37 } })
+  const h = setup(on, () => usage())
+  await mainTurn($, h.step)
+  const ui: any = await mount($)
+  if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
+  expect(await ui.find({ text: /^At 16%$/ })).toBeDefined()        // watch: 40% of the 400k before auto-compact
+  const list = String((await $.command.run({ command: 'tokens', args: 'list', presentation: { columns: 160 } })).text)
+  expect(list).not.toContain('/autocompact 400k')
+})

@@ -5,6 +5,8 @@ const NOW = Date.UTC(2026, 9, 7, 12, 0, 0)
 const MIN = 60_000
 const PANE = { title: 'Context', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} }
 const PANE80 = { ...PANE, bodyColumns: 78 }
+// the recommended action: `primary` on the desktop, a plain Button holding orange Text on the terminal (no bold, no blue)
+const lit = (b: any) => b?.props?.variant === 'primary' || b?.children?.[0]?.props?.color === 'claude'
 const OPTIONS = { suggestSkills: false, cacheBand: false }
 // Mounting the pane draws several animated bars; give the tests room on a loaded machine.
 const SLOW = 30_000
@@ -114,8 +116,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
     const clear = await ui.find({ key: 'ctx-clear' }), compact = await ui.find({ key: 'ctx-compact' }), later = await ui.find({ key: 'ctx-later' })
     for (const b of [clear, compact, later]) expect(b?.props.hotkey).toBeUndefined()
-    expect(later?.props.variant).toBe('primary')                 // before the first reply, Later is the only action
-    expect(compact?.props.variant).toBeUndefined()
+    expect(lit(later)).toBe(true)                 // before the first reply, Later is the only action
+    expect(lit(compact)).toBe(false)
     expect(compact?.props.dimColor).toBe(true)
     expect(later?.props.role).toBe('dismiss')
 
@@ -138,9 +140,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ text: /^0 tokens$/ })).toBeDefined()
     expect(await ui.find({ text: /^Cut 0% of input$/ })).toBeDefined()
     expect(await ui.find({ text: /^Spent \$1\.37$/ })).toBeDefined()   // a cost ledger, but no turns yet: no derived rate
-    expect(await ui.find({ text: /^Handoff$/ })).toBeDefined()       // the next mark: 60% handoff
-    expect(await ui.find({ text: /^Runway 40%$/ })).toBeDefined()     // 48% is 40% of the way from 40 to 60
-    expect(await ui.find({ text: /^Then handoff \+ Clear$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Fresh start$/ })).toBeDefined()    // the next mark: 60% fresh start
+    expect(await ui.find({ text: /^40% of the way$/ })).toBeDefined() // 48% is 40% of the way from 40 to 60
+    expect(await ui.find({ text: /^Then summary \+ Clear$/ })).toBeDefined()
     expect(await ui.find({ text: /^Keep-warm$/ })).toBeDefined()
     expect(await ui.find({ text: /^Pings 0 of 5$/ })).toBeDefined()
     expect(await ui.find({ text: /^The clock starts after the first reply$/ })).toBeDefined()
@@ -185,8 +187,8 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ text: /^Cache (very warm|warm|chill): next message reuses[ \u00a0]$/ })).toBeDefined()
     expect(await ui.find({ text: /^800k$/ })).toBeDefined()
     expect(await ui.find({ text: /[ \u00a0]· 5m left$/ })).toBeDefined()
-    expect((await ui.find({ key: 'ctx-compact' }))?.props.variant).toBe('primary')   // past compact, cache warm
-    expect((await ui.find({ key: 'ctx-clear' }))?.props.variant).toBeUndefined()
+    expect(lit(await ui.find({ key: 'ctx-compact' }))).toBe(true)   // past compact, cache warm
+    expect(lit(await ui.find({ key: 'ctx-clear' }))).toBe(false)
     if (surface === 'terminal') expect(await ui.find({ text: /^Very warm 5m$/ })).toBeDefined()
     await ui.press({ key: 'ctx-expand' })
     expect(await ui.find({ text: /^Compact$/ })).toBeDefined()
@@ -199,9 +201,9 @@ for (const surface of ['terminal', 'desktop'] as const) {
     ui = await mount($, surface)
     expect(await ui.find({ text: /^Cache frozen: next message re-caches[ \u00a0]$/ })).toBeDefined()
     const compact = await ui.find({ key: 'ctx-compact' })
-    expect(compact?.props.variant).toBeUndefined()                // cold: Compact would re-cache everything
+    expect(lit(compact)).toBe(false)                // cold: Compact would re-cache everything
     expect(compact?.props.dimColor).toBe(true)
-    expect((await ui.find({ key: 'ctx-clear' }))?.props.variant).toBe('primary')
+    expect(lit(await ui.find({ key: 'ctx-clear' }))).toBe(true)
     expect(await ui.find({ text: /^Clear$/, type: 'Text' })).toBeDefined()           // the next-mark card says Clear · Now
     expect(await ui.find({ text: /^Compact would re-cache 800k$/ })).toBeDefined()
     expect(await ui.find({ text: /^Idle 10m, past 5m$/ })).toBeDefined()
@@ -276,7 +278,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(log.compacts.length).toBe(1)
     for (let i = 0; i < 50 && (await ui.find({ key: 'ctx-compact' }))?.props.label !== 'Compact'; i++) await new Promise((r) => setTimeout(r, 10))
     expect((await ui.find({ key: 'ctx-compact' }))?.props.label).toBe('Compact')
-    expect(await ui.find({ text: /^Compacted[ \u00a0]484k[ \u00a0]→[ \u00a0]120k$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Compacted[ \u00a0]484k[ \u00a0]→[ \u00a0]≈271k$/ })).toBeDefined()   // 120k of summary + 151k of setup
   })
 }
 
@@ -318,7 +320,7 @@ test('context pane counts context growth per message and says how many messages 
   ui = await mount($, 'terminal', PANE80)
   expect(await ui.find({ text: /^In ≈2 messages$/ })).toBeDefined()  // 8k to 60% at 6k a message
   expect(await ui.find({ text: /^[ \u00a0]· 8k to go$/ })).toBeDefined()
-  expect(await ui.find({ text: /^Runway 80%$/ })).toBeDefined()
+  expect(await ui.find({ text: /^80% of the way$/ })).toBeDefined()
 })
 
 test('context pane without a breakdown falls back to one Used row and no groups', { options: { ...OPTIONS, cardBars: 'ember' }, timeoutMs: SLOW }, async ($, on) => {
@@ -492,6 +494,7 @@ test('/clear says what it freed, typed or from the pane, and the band starts ove
   expect(cleared).toBe(true)
   expect(toasts.some((t) => /Cleared: ≈472\.0k tokens freed \(47% of 1\.0M\)/.test(t))).toBe(true)
   expect(lines.some((t) => /≈472\.0k tokens freed/.test(t))).toBe(true)
+  expect(toasts.some((t) => /The next message re-reads ≈12\.0k of setup/.test(t))).toBe(true)   // not freed: read again
 })
 
 test('/tokens list is the pane as a table: context with a bar, cache, saved, keep-warm, memory, next, then help', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -502,7 +505,7 @@ test('/tokens list is the pane as a table: context with a bar, cache, saved, kee
   expect(lines[0]).toMatch(/^┌─+┬─+┬─+┐$/)
   expect(lines[1]).toMatch(/^│ Context +│ 484k of 1M \(48%\) +│ █{10}░{10} +│$/)
   expect(lines[2]).toMatch(/^│ Cache +│ Very warm \d+m +│ next message reuses 484k from cache · \d+m left · hit \d+% +│$/)
-  expect(lines[3]).toMatch(/^│ Saved +│ 0 tokens +│ trimmed output 0 · compactions vetoed 0 · keep-warm 0 · model switches held 0 +│$/)
+  expect(lines[3]).toMatch(/^│ Saved +│ 0 tokens +│ trimmed output 0 · compactions vetoed 0 · keep-warm 0 +│$/)
   expect(lines[4]).toMatch(/^│ Keep-warm +│ (on|off[^│]*) +│/)
   expect(lines[5]).toMatch(/^│ Idle +│ \S[^│]* +│ compaction: /)
   expect(lines[6]).toMatch(/^│ Memory +│ messages 302k +│ skills 88k · MCP tools 63k · memory files 20k · system prompt 8k +│$/)
@@ -522,7 +525,7 @@ test('Claude Code idle compaction is named in the pane, gets the keep-list, and 
   expect(r.skip).toBeUndefined()
   expect(String(log.compacts[0].instructions)).toContain('When compacting, keep')
   const ui: any = await mount($, 'terminal')
-  expect(await ui.find({ text: /Claude compacted while idle \(54m\): 484k → 120k tokens\. Claude Code's own feature, not counted in Saved\./ })).toBeDefined()
+  expect(await ui.find({ text: /Claude compacted while idle \(54m\): 484k → ≈271k tokens\. Claude Code's own feature, not counted in Saved\./ })).toBeDefined()
   expect(await ui.find({ text: /^0 saved$/ })).toBeDefined()
 })
 
@@ -628,11 +631,11 @@ test('idle compaction section shows the compaction once it ran, until the next r
   await clock.advance(54 * MIN)
   await ($ as any).session.compact({ trigger: 'auto', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
   const ui: any = await full($)
-  expect(await ui.find({ text: /^Compacted 484k → 120k$/ })).toBeDefined()
+  expect(await ui.find({ text: /^Compacted 484k → ≈271k$/ })).toBeDefined()
   await turn($)
   await clock.advance(MIN)
   await ui.redraw()
-  expect(await ui.find({ text: /^Compacted 484k → 120k$/ })).toBeUndefined()
+  expect(await ui.find({ text: /^Compacted 484k → ≈271k$/ })).toBeUndefined()
   expect(await ui.find({ text: /^≈53m left$/ })).toBeDefined()
 })
 
@@ -679,13 +682,13 @@ for (const cols of [24, 40, 50, 120]) {
   })
 }
 
-test('the cache reads Very warm, Warm, Chill, Cold, then Frozen, with one square in its colour and room above the bottom row', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+test('the cache reads Very warm, Warm, Chill, Fading, then Frozen, with one square in its colour and room above the bottom row', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
   const { clock } = setup(on, () => USAGE, STEP_TTL('5m'))
   SETTINGS(on, {})
   await turn($)
   const seen: string[] = []
   const colors = new Set<string>()
-  for (const [mins, word] of [[0.5, 'Very warm'], [1, 'Warm'], [1, 'Chill'], [1.5, 'Cold'], [2, 'Frozen']] as const) {
+  for (const [mins, word] of [[0.5, 'Very warm'], [1, 'Warm'], [1, 'Chill'], [1.5, 'Fading'], [2, 'Frozen']] as const) {
     await clock.advance(mins * MIN)
     const ui: any = await mount($, 'desktop', { ...PANE, bodyColumns: 50 })
     const minis = (await ui.findAll({ type: 'Svg' })).filter((x: any) => /^Cache /.test(String(x.props.alt)))
@@ -764,7 +767,7 @@ test('hint: after an idle compaction it says the next message reads the summary'
   await turn($)
   await clock.advance(54 * MIN)
   await ($ as any).session.compact({ trigger: 'auto', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
-  expect((await hintOf($))[0]).toMatch(/^Compacted while away: 484k → 120k tokens\.$/)
+  expect((await hintOf($))[0]).toMatch(/^Compacted while away: 484k → ≈271k tokens\.$/)
 })
 
 test('hint: auto-compact a few messages away is counted from this session\'s growth', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
@@ -839,4 +842,107 @@ test('theme auto: the terminal follows its /config Theme row and a later change;
   expect(new Set(await side('desktop'))).toEqual(new Set(['dark']))
   await ($ as any).config.set({ key: 'theme', value: 'dark' })
   expect(new Set(await side('terminal'))).toEqual(new Set(['dark']))
+})
+
+
+// ---- 0.3.45: what a new-user review found ----
+
+test('a trim is counted once, not again on every later request, and /clear takes it out of the window', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => USAGE)
+  on('tool.call' as any, { tool: 'Bash' } as any, () => ({ result: { stdout: 'y'.repeat(26_000), stderr: '' } }))
+  await turn($)
+  const trimmed = async () => /trimmed output ([\d.]+k?)/.exec(String((await ($ as any).command.run({ command: 'tokens', args: 'list', presentation: { columns: 160 } })).text))?.[1]
+  await ($ as any).tool.call({ tool: 'Bash', command: 'cat big.log' })
+  const once = await trimmed()
+  expect(once).toBeDefined()
+  expect(once).not.toBe('0')
+  await turn($)
+  await turn($)
+  expect(await trimmed()).toBe(once)                           // was 2× and 3× before
+  await ($ as any).command.run({ command: 'clear', args: '' })
+  await turn($)
+  expect(await trimmed()).toBe(once)
+})
+
+test('growth per message leaves out the first turn: the setup is not growth', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const ctx = { tokens: 0, window: 200_000, percent: 0 }
+  const { clock } = setup(on, () => ({ context: { ...ctx }, rateLimits: [], cost: { usd: 0.5 } }))
+  await turn($, () => { ctx.tokens = 54_000; ctx.percent = 27 })       // the first reply: setup and prompt
+  await clock.advance(11_000)
+  let ui: any = await mount($, 'terminal', PANE80)
+  await ui.press({ key: 'ctx-expand' })
+  expect(await ui.find({ text: /^At 40%$/ })).toBeDefined()            // no growth measured yet: not "In ≈1 message"
+  await turn($, () => { ctx.tokens = 60_000; ctx.percent = 30 })
+  await clock.advance(11_000)
+  await ui.unmount()
+  ui = await mount($, 'terminal', PANE80)
+  expect(await ui.find({ text: /^In ≈4 messages$/ })).toBeDefined()   // 20k to 40% at 6k a message
+})
+
+test('Clear from the pane starts the band over, as a typed /clear does', { options: { ...OPTIONS, cacheBand: true }, timeoutMs: SLOW }, async ($, on) => {
+  let log: any
+  ;({ log } = setup(on, () => (log && log.commands.some((c: any) => c.command === 'clear') ? { ...USAGE, context: { tokens: 12_000, window: 1_000_000, percent: 1 } } : USAGE)))
+  on('ui.render' as any, (_$: any, e: any) => _$.ui.resolve(e).Box({}))      // the engine beneath, where the band passes
+  await turn($)
+  const band = () => ($ as any).ui.mount({ plugin: 'token-saver', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, bodyColumns: 100 } })
+  let b: any = await band()
+  expect(await b.find({ text: /^[ \u00a0]?48%$/ })).toBeDefined()
+  await b.unmount()
+  const ui: any = await mount($, 'terminal')
+  await ui.press({ key: 'ctx-clear' })
+  expect(log.commands.map((c: any) => c.command)).toContain('clear')
+  b = await band()
+  expect(await b.find({ text: /^[ \u00a0]?48%$/ })).toBeUndefined()   // no figures from before the clear
+})
+
+test('the terminal pane: every action a plain Button, the recommended one orange, none bold or blue', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => USAGE)
+  await turn($)
+  const ui: any = await mount($, 'terminal')
+  for (const key of ['ctx-clear', 'ctx-compact', 'ctx-later']) {
+    const b = await ui.find({ key })
+    expect(b.props.plain).toBe(true)
+    expect(b.props.variant).toBeUndefined()
+  }
+  const btns = await Promise.all(['ctx-clear', 'ctx-compact', 'ctx-later'].map((key) => ui.find({ key })))
+  expect(btns.filter(lit).length).toBe(1)                          // one recommended action, in orange
+  const all = await ui.findAll({ type: 'Text' })
+  expect(all.some((x: any) => x.props.bold)).toBe(false)
+  expect(all.some((x: any) => x.props.color === 'permission')).toBe(false)
+})
+
+test('the 54-column terminal dock gets the narrow layout: Saved splits, cards one per row', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => USAGE)
+  await turn($)
+  const ui: any = await mount($, 'terminal', { ...PANE, bodyColumns: 54 })
+  if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
+  expect(await ui.find({ text: /^Cut \d+% of input$/ })).toBeDefined()
+  expect(await ui.find({ text: /^ this session$/ })).toBeDefined()
+  const fixed = (await ui.findAll({ type: 'Box' })).filter((b: any) => b.props.width === Math.max(16, Math.floor((54 - 1 - 6) / 3)))
+  expect(fixed.length).toBe(0)
+})
+
+test('/tokens list fits the transcript: the box at 120 columns, a list where a box cannot fit', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => USAGE)
+  await turn($)
+  const list = async (columns: number) => String((await ($ as any).command.run({ command: 'tokens', args: 'list', presentation: { columns } })).text).split('\n')
+  const wide = await list(120)
+  expect(wide[0].startsWith('┌')).toBe(true)
+  for (const l of wide.slice(0, -1)) expect(l.length).toBeLessThanOrEqual(114)       // behind "  ⎿  "
+  const thin = await list(66)
+  expect(thin.some((l) => l.startsWith('┌'))).toBe(false)
+  for (const l of thin.slice(0, -1)) expect(l.length).toBeLessThanOrEqual(60)
+  expect(thin.some((l) => /^Context +\d/.test(l))).toBe(true)
+})
+
+test('no /handoff anywhere a stranger reads it: hints, the pane, the glossary', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => ({ ...USAGE, context: { ...USAGE.context, tokens: 640_000, percent: 64 } }))
+  await turn($)
+  const learn = String((await ($ as any).command.run({ command: 'tokens', args: 'learn' })).text)
+  const list = String((await ($ as any).command.run({ command: 'tokens', args: 'list', presentation: { columns: 160 } })).text)
+  for (const s of [learn, list]) expect(s).not.toMatch(/\/handoff|write a handoff|\bhandoff \+/i)
+  const ui: any = await mount($, 'desktop')
+  if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
+  expect(await ui.find({ text: /handoff/i })).toBeUndefined()
+  expect(learn).toContain('Fading: still there')
 })

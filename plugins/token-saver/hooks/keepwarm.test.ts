@@ -311,3 +311,23 @@ test('FORCE_PROMPT_CACHING_5M beats promptCacheTtl: pings go out on an API key',
   await idle(clock, 4 * MIN)
   expect(forks.length).toBe(1)
 })
+
+
+// Some plans report only the weekly window: no five_hour entry. An API key reports none at all.
+const WEEKLY = { context: { tokens: PREFIX, window: 200_000, percent: 50 }, rateLimits: [{ kind: 'seven_day', percentUsed: 8 }], cost: { usd: 0 } }
+
+test('a plan with only the weekly window is a plan: one-hour cache, no keep-warm pings, no dollars', { options: { ...OPTIONS, inputPricePerM: 3 }, timeoutMs: SLOW }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home' })
+  const forks: any[] = []
+  wire(on, WEEKLY, forks)
+  await ($ as any).session.start({ cwd: '/tmp/x', surface: null, isInteractive: true })
+  await turn($)
+  await idle(clock, 30 * MIN)
+  expect(forks.length).toBe(0)                                   // a ping here would spend plan quota
+  const text = await tokensText($)
+  expect(text).toContain('off (not API billing)')
+  expect(text).not.toMatch(/\$\d/)
+  expect(text).not.toMatch(/5-hour/)
+})

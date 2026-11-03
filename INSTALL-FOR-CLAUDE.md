@@ -6,7 +6,7 @@ Do not enable both quiet-bash implementations. Do not run `bench --live` unless 
 
 ## 1. Find the pack
 
-The folder is the one that contains this file, `install.sh`, and `plugins/token-saver`. If they dropped a zip, unzip it and `cd` into `claude-token-saver`. Run `python3 --version`; if python3 is missing, stop and say so.
+The folder is the one that contains this file, `install.sh`, and `plugins/token-saver`. If they dropped a zip, unzip it into a new folder (the zip has no folder of its own) and `cd` into that folder. Run `python3 --version`; if python3 is missing, stop and say so.
 
 ## 2. Run the one-shot
 

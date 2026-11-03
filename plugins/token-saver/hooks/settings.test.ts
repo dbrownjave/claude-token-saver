@@ -145,7 +145,7 @@ test('on a subscription the rows that do nothing say so, and the switch keeps it
   on('session.usage' as any, () => ({ value: SUBSCRIPTION }))
   const ui: any = await mount($, 'terminal')
   expect(await ui.find({ text: /^Off \(not API billing\): a subscription caches for an hour already\.$/ })).toBeDefined()
-  expect(await ui.find({ text: /^Off: the TTL follows Claude Code, now 1 hour from your plan\.$/ })).toBeDefined()
+  expect(await ui.find({ text: /^Off: follows Claude Code's cache, now 1 hour from your plan\.$/ })).toBeDefined()
   expect(await ui.find({ text: /Not used while keep-warm is off/ })).toBeDefined()
   expect(await ui.find({ text: /^Not used on a subscription/ })).toBeDefined()
   const keepWarm = await ui.find({ key: 'set-keepWarm' })
@@ -159,7 +159,7 @@ test('on an API key keep-warm is in force and says what it does', { options: OPT
   on('session.usage' as any, () => ({ value: API }))
   const ui: any = await mount($, 'terminal')
   expect(await ui.find({ text: /^API billing on the 5-minute cache only\./ })).toBeDefined()
-  expect(await ui.find({ text: /^Off: the TTL follows Claude Code, now 5 minutes\.$/ })).toBeDefined()
+  expect(await ui.find({ text: /^Off: follows Claude Code's cache, now 5 minutes\.$/ })).toBeDefined()
   expect((await ui.find({ key: 'set-keepWarm' })).children[0].props.color).toBe('claude')
 })
 
@@ -195,4 +195,16 @@ test('a desktop that docks no panes shows Settings in the band, and Done puts th
   expect(await ui.find({ key: 'set-theme' })).toBeDefined()
   await ui.press({ key: 'settings-done' })
   expect(await (await band()).find({ key: 'set-theme' })).toBeUndefined()
+})
+
+
+test('settings copy says no "TTL" and no "0 turns"', { options: OPTIONS }, async ($, on) => {
+  setup(on)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui: any = await mount($, surface)
+    const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => String(t.children?.[0] ?? ''))
+    expect(texts.some((t: string) => /\bTTL\b|0 turns/.test(t))).toBe(false)
+    expect(texts).toContain('About 4 minutes apart. At 0 it sends none.')
+    await ui.unmount()
+  }
 })

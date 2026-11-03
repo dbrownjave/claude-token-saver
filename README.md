@@ -5,17 +5,12 @@ Fewer tokens per turn, and a Context pane that tells the truth.
 A Claude Code **mod** (an in-process plugin of function hooks) that quiets noisy commands before they run, trims huge output before Claude reads it, refuses a `/compact` that would re-send a cold cache, keeps the prompt cache warm while you think, prices your skills per turn, and shows a receipt it can stand behind. MIT. Works in the terminal, the desktop app, and on a phone.
 
 ```bash
-claude plugin marketplace add dbrownjave/claude-token-saver
-claude plugin install token-saver@token-saver
+git clone https://github.com/dbrownjave/claude-token-saver
+cd claude-token-saver
+./install.sh
 ```
 
-That installs the mod, from a terminal, at user scope; the desktop app picks it up too. For the Python modules and the settings preflight as well, clone and run the installer:
-
-```bash
-git clone https://github.com/dbrownjave/claude-token-saver && cd claude-token-saver && ./install.sh
-```
-
-Then open a new session and type `/tokens`.
+That installs the mod at user scope (the desktop app picks it up too), turns on a small default set of modules, and leaves your existing hooks in place. Needs `python3`. Then open a new session and type `/tokens`. To install only the mod from GitHub, or to build a zip for a teammate, see [Other ways to install](#other-ways-to-install).
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="site/img/pane-terminal-light.png">
@@ -30,35 +25,33 @@ Docs: [docs/claude-mods.md](docs/claude-mods.md) is a full reference for writing
 
 ---
 
-Each engineer installs this on their own machine and turns on only the modules they want. Nothing is forced. A bare install copies files and enables **zero** modules.
+Each engineer installs this on their own machine. Nothing is forced: `./install.sh` turns on the default modules in step 3 below and nothing else, `--disable` turns any of them off, and `--files-only` copies the files and turns on nothing.
 
 ## Install (once per machine)
 
+From the folder you cloned:
+
 ```bash
-unzip claude-token-saver.zip
-cd claude-token-saver
 ./install.sh
 ```
 
 That is the whole install. No questions. It:
 
 1. Copies the pack to `~/.claude/token-saver/`.
-2. Installs the in-process mod through `claude plugin install` when your Claude Code accepts it. The marketplace is registered from a staged copy under `~/.claude/token-saver/pack`, so you can delete the download afterwards. If the build refuses the mod, the Python hooks cover the same ground and it says so.
-3. Enables the recommended modules: rules, the two skills, the session-start line, the quiet map. The Python quiet-bash and trim hooks come on only when the mod is not.
+2. Installs the in-process mod through `claude plugin install` when `claude` is on your PATH and your build accepts the mod. The marketplace is registered from a staged copy under `~/.claude/token-saver/pack`, so you can delete the clone afterwards. If the mod is already installed from somewhere else, such as the GitHub marketplace, it is moved onto that copy. If the build refuses the mod, the Python hooks cover the same ground and it says so.
+3. Enables the default modules: `rules`, `skill` (the `token-saver` and `repo-skills` skills), `session-audit` (the session-start line) and `quiet-map`. `quiet-bash` and `trim-output` are defaults too, but come on only when the mod is not on, since the mod does both in-process. Modules you turned on in an earlier run stay on.
 4. **Preflights your existing `settings.json`.** Hooks you already have stay. For each one that overlaps, it prints one line saying how the two coexist, or that it left ours off (for example when you already have a status line). Nothing of yours is edited or reordered.
 5. Prints a summary and the one thing left to do: open a new session.
 
 While it works, an ASCII gold coin spins above the step list, a progress bar with a tick per step and a pill naming the current step fills underneath it, and each step ticks as it lands. It is a lit, textured disc in the spirit of David Haubner's ASCII Bitcoin animation, without the B; `--size` sets its height and `--emblem T` puts a raised letter on the face. On a pipe, in CI, or with `--plain` (or `TOKEN_SAVER_PLAIN=1`) you get plain lines instead. `NO_COLOR` is honored. `python3 scripts/coin.py --demo` shows it without installing anything.
 
-Run it again after updating the pack; it restages the mod and Claude picks it up on the next session or `/reload-plugins`. `./install.sh --dry-run` shows the plan without writing. `./install.sh --pick` is the module picker if you want to choose. `./install.sh --uninstall` removes the mod, our hooks, rules and skills, and leaves everything else.
+Run it again after a `git pull`; it restages the mod and Claude picks it up on the next session or `/reload-plugins`. `./install.sh --dry-run` shows the plan without writing. `./install.sh --pick` is the module picker if you want to choose. `./install.sh --uninstall` removes the mod, our hooks, rules and skills, and leaves everything else.
 
 Requires `python3` (stdlib only). On Windows there is no bash; run the same one-shot directly:
 
 ```bash
 python manage.py setup
 ```
-
-Build the zip you hand to others with `scripts/dist.sh`. It runs the self-test, validates the mod, and writes `dist/claude-token-saver-<version>.zip` from a whitelist.
 
 Other entry points:
 
@@ -69,6 +62,27 @@ Other entry points:
 ./install.sh --project --enable rules,quiet-bash    # one repo only
 python3 manage.py status
 ```
+
+## Other ways to install
+
+### The mod only, from GitHub
+
+```bash
+claude plugin marketplace add dbrownjave/claude-token-saver
+claude plugin install token-saver@token-saver
+```
+
+No clone and no Python. Run it from a terminal; it installs at user scope and the desktop app picks it up too. It installs whatever is on the repo's `main` branch on GitHub. You get the mod and none of the Python modules: no rules file, no skills, no session-start line, no settings preflight. `claude plugin marketplace update token-saver` pulls a newer `main`. Running `./install.sh` from a clone later moves the mod onto the clone's staged copy.
+
+### A zip for a teammate
+
+There is no published zip or release download. To hand the pack to someone, build one from your clone:
+
+```bash
+scripts/dist.sh
+```
+
+It runs the self-test, validates the mod, and writes `dist/claude-token-saver-<version>.zip` from a whitelist. The files sit at the top level of the zip, so unzip it into an empty folder and run `./install.sh` there. The install is the same as from a clone.
 
 ## Mod
 
@@ -104,7 +118,7 @@ A settings hook can only add a note before `/compact`. The mod sits on the compa
 | Trigger | What happens |
 |---|---|
 | `/compact`, cache warm | Runs. The keep-list (task, files touched, decisions, failing tests, next steps, exact errors) is appended to the summarizer's instructions. |
-| `/compact`, cache cold | **Refused.** One line names the idle time and the tokens a compaction would re-send, and points at `/handoff` then `/clear`. |
+| `/compact`, cache cold | **Refused.** One line names the idle time and the tokens a compaction would re-send, and suggests asking Claude for a summary, then `/clear`. |
 | `/compact force` | Runs anyway. Keep-list still appended. |
 | auto-compaction | Never refused. Keep-list appended. Blocking it would let the window overflow. |
 | idle compaction (Claude Code 2.1.299+ in the terminal, 2.1.314+ in VS Code and the desktop app) | Never refused. Keep-list appended. The pane names it as Claude Code's own work, with the before and after size, and never counts it in Saved. Keep-warm stops for that stretch, since the prefix it would re-read is gone. Claude Code runs it on the 1-hour cache, for sessions over 200k tokens (`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`, 100k floor), about 54 minutes after the last reply. Opt out with `"idleCompaction": false`. |
@@ -154,20 +168,20 @@ Dev loop: `claude plugin validate ./plugins/token-saver` then `claude plugin tes
 
 Same `~/.claude/token-saver/quiet.json` as the Python hook. Do not run both quiet-bash implementations at once or commands get rewritten twice.
 
-The mod does not touch the system prompt every turn. That would bust the cache. The band hint does not type a command into the box. Your marks live in `~/.claude/token-saver/thresholds.json`, copied once and never overwritten. Defaults: 40% note, 60% `/handoff` then `/clear`, 75% `/compact` if warm and a new chat if cold. `/context` in VS Code stays the category grid. `/tokens` prints the same hint. Enabling the Python `quiet-bash` hook while the mod is on is refused. `dash` shows cache read vs cache write per session. That is request accounting, not a bill. The named miss cause stays on `/usage`.
+The mod does not touch the system prompt every turn. That would bust the cache. The band hint does not type a command into the box. Your marks live in `~/.claude/token-saver/thresholds.json`, copied once and never overwritten. Defaults: 40% note, 60% fresh start (ask Claude for a summary, then `/clear`), 75% `/compact` if warm and a new chat if cold. If you set auto-compact below 75% of the window, the marks scale to it. `/context` in VS Code stays the category grid. `/tokens` prints the same hint. Enabling the Python `quiet-bash` hook while the mod is on is refused. `dash` shows cache read vs cache write per session. That is request accounting, not a bill. The named miss cause stays on `/usage`.
 
 Python `dash` / `bench` stay. Mods do not read history.
 
 ## What we shipped next
 
 ```bash
-./install.sh --enable statusline,quiet-map
+./install.sh --enable statusline
 ```
 
 | Module | What it does |
 |---|---|
 | `statusline` | CLI status bar: `● cache 98% 1h 12m  ctx 41%` or `▲ COLD  +461k if you type`. Does **not** overwrite an existing `statusLine`. VS Code’s chat panel already has a cache clock — this is for the terminal. |
-| `quiet-map` | Copies `~/.claude/token-saver/quiet.json` if you do not already have one. Edit it to add `pnpm`, `kubectl`, company wrappers. Never overwritten on reinstall. |
+| `quiet-map` | On by default. Copies `~/.claude/token-saver/quiet.json` if you do not already have one. Edit it to add `pnpm`, `kubectl`, company wrappers. Never overwritten on reinstall. |
 
 `dash` now ranks the noisiest Bash commands from your last week of transcripts (count, est. tokens, whether a quiet.json rule already covers them).
 
@@ -289,6 +303,9 @@ Recommended (on if you press Enter):
 | `session-audit` | Short budget line at session start |
 | `quiet-bash` | Rewrites `git status` / `git log` / tests to short output |
 | `trim-output` | Caps huge *successful* bash stdout (never trims failures) |
+| `quiet-map` | Copies `~/.claude/token-saver/quiet.json` if you do not have one |
+
+With the mod on, `quiet-bash` and `trim-output` stay off: the mod does both in-process.
 
 Opt-in (off until you enable them):
 
@@ -306,7 +323,7 @@ Opt-in (off until you enable them):
 
 ## Company use without mandating it
 
-IT can put the zip on an internal drive and say:
+IT can build the zip with `scripts/dist.sh`, put it on an internal drive and say:
 
 > Install it yourself. Recommended: `./install.sh --enable rules,skill,quiet-bash,session-audit`
 

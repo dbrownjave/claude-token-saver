@@ -59,77 +59,83 @@ const SWITCH = (over: any = {}) => ({
 const mount = ($: any) => $.ui.mount({ plugin: 'token-saver', surface: 'desktop', component: 'Pane', requestId: 'context',
   props: { title: 'Context', isFocused: true, bodyColumns: 120, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } })
 
-test('warm and large on the API: one priced dialog; Stay denies the switch and books the re-write held', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
-  const { log } = setup(on, () => API, () => 'Stay')
+const POST = (over: any = {}) => ({
+  hook_event_name: 'PostModelSwitch', session_id: 's', transcript_path: '/t', cwd: '/repo',
+  from_model: 'claude-fable-5-1', to_model: 'claude-opus-5-5', requested_model: 'opus', source: 'picker', context_tokens: USED, ...over,
+})
+const receipt = async ($: any) => {
+  const ui: any = await mount($)
+  if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
+  await ui.press({ key: 'ctx-receipt' })
+  return ui
+}
+
+test('warm and large on the API: the engine asks, carrying the price; the hook opens no dialog of its own', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const { log } = setup(on, () => API)
   await turn($)
   const r: any = await $.classic.PreModelSwitch(SWITCH())
-  expect(log.asks).toHaveLength(1)
-  expect(log.asks[0].question).toContain('142.0k tokens')
-  expect(log.asks[0].question).toContain("$0.53 at Opus 5.5's list price")
-  expect(log.asks[0].options).toEqual(['Switch', 'One message', 'Stay'])
-  expect(r.permissionDecision).toBe('deny')
-  expect(r.permissionDecisionReason).toContain('stayed on Fable 5.1')
-  const ui: any = await mount($)
-  if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
-  await ui.press({ key: 'ctx-receipt' })
-  expect(await ui.find({ text: /^Model switches held$/ })).toBeDefined()
-  expect(await ui.find({ text: /^177\.5k tokens$/ })).toBeDefined()        // 142k × 1.25, the cold re-write a Stay avoided
+  expect(log.asks).toHaveLength(0)                                   // a dialog opened here waits behind the hook: the switch hung
+  expect(r.permissionDecision).toBe('ask')
+  expect(r.permissionDecisionReason).toContain('142.0k tokens')
+  expect(r.permissionDecisionReason).toContain("$0.53 at Opus 5.5's list price")
 })
 
-test('on the one-hour cache the dialog and the receipt price the re-write at 2×', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
-  const { log } = setup(on, () => API, () => 'Stay')
+test('declined: nothing is booked, neither held nor paid', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => API)
   await turn($)
-  await $.classic.PreModelSwitch({ ...SWITCH(), cache_ttl: '1h' })
-  expect(log.asks[0].question).toContain('at 2× the input price')
-  const ui: any = await mount($)
-  if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
-  await ui.press({ key: 'ctx-receipt' })
-  expect(await ui.find({ text: /^284k tokens$/ })).toBeDefined()           // 142k × 2
-})
-
-test('One message: the switch is denied, the next turn alone goes to the other model, the one after returns', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
-  const { log } = setup(on, () => API, () => 'One message')
-  await turn($)
-  const r: any = await $.classic.PreModelSwitch(SWITCH())
-  expect(r.permissionDecision).toBe('deny')
-  expect(r.permissionDecisionReason).toContain('next message goes to Opus 5.5')
-  expect(log.statuses[0]).toContain('Next message on Opus 5.5')
-  await turn($)
-  expect(log.steps[1].model).toBe('claude-opus-5-5')
-  expect(log.statuses[log.statuses.length - 1]).toBeUndefined()        // status cleared when the turn ends
-  await turn($)
-  expect(log.steps[2].model).toBe('claude-fable-5-1')
-  const ui: any = await mount($)
-  if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
-  await ui.press({ key: 'ctx-receipt' })
-  expect(await ui.find({ text: /1 one-off message on another model, each paid as one cold read/ })).toBeDefined()
-})
-
-test('Switch: allowed, and the receipt lists the cold re-read as paid, never as saved', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
-  const { log } = setup(on, () => API, () => 'Switch')
-  await turn($)
-  const r: any = await $.classic.PreModelSwitch(SWITCH())
-  expect(r.permissionDecision).toBeUndefined()
-  expect(log.asks).toHaveLength(1)
-  const ui: any = await mount($)
-  if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
-  await ui.press({ key: 'ctx-receipt' })
-  expect(await ui.find({ text: /^Model switches, cold re-read \(not a saving\)$/ })).toBeDefined()
+  await $.classic.PreModelSwitch(SWITCH())                           // the engine's dialog says No, or Esc: no PostModelSwitch follows
+  const ui = await receipt($)
+  expect(await ui.find({ text: /held/ })).toBeUndefined()
+  expect(await ui.find({ text: /^Model switches, cold re-read \(not a saving\)$/ })).toBeUndefined()
   expect(await ui.find({ text: /^Total saved$/ })).toBeDefined()
-  expect(await ui.find({ text: /^0 tokens$/ })).toBeDefined()               // nothing counted as saved
+  expect(await ui.find({ text: /^0 tokens$/ })).toBeDefined()
 })
 
-test('subscription: the dialog prices the switch as window headroom and never shows a dollar', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+test('switched: PostModelSwitch books the cold re-read as paid, never as saved', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => API)
+  on('classic.PostModelSwitch' as any, () => ({}))
+  await turn($)
+  await $.classic.PreModelSwitch(SWITCH())
+  await $.classic.PostModelSwitch(POST())
+  const ui = await receipt($)
+  expect(await ui.find({ text: /^Model switches, cold re-read \(not a saving\)$/ })).toBeDefined()
+  expect(await ui.find({ text: /^177\.5k/ })).toBeDefined()          // 142k × 1.25
+  expect(await ui.find({ text: /^0 tokens$/ })).toBeDefined()        // nothing counted as saved
+})
+
+test('on the one-hour cache the reason and the receipt price the re-write at 2×', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => API)
+  on('classic.PostModelSwitch' as any, () => ({}))
+  await turn($)
+  const r: any = await $.classic.PreModelSwitch({ ...SWITCH(), cache_ttl: '1h' })
+  expect(r.permissionDecisionReason).toContain('at 2× the input price')
+  await $.classic.PostModelSwitch(POST())
+  const ui = await receipt($)
+  expect(await ui.find({ text: /^284k/ })).toBeDefined()             // 142k × 2
+})
+
+test('subscription: the reason prices the switch as window headroom and never shows a dollar', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
   let pct = 10
   const usage = () => ({ context: { tokens: USED, window: 1_000_000, percent: 14 }, rateLimits: [{ kind: 'five_hour', percentUsed: pct }], cost: { usd: 0.4 } })
-  const { log } = setup(on, () => usage(), () => 'Stay')
-  await turn($)                                                      // limitBase at 10%
+  setup(on, () => usage())
+  await turn($)                                                      // the window's base at 10%
   pct = 12
   await turn($)                                                      // 142k tokens moved the window 2%: 71k per %
-  await $.classic.PreModelSwitch(SWITCH())
-  expect(log.asks).toHaveLength(1)
-  expect(log.asks[0].question).toContain('% of your 5-hour window')
-  expect(log.asks[0].question).not.toContain('$')
+  const r: any = await $.classic.PreModelSwitch(SWITCH())
+  expect(r.permissionDecisionReason).toContain('% of your 5-hour window')
+  expect(r.permissionDecisionReason).not.toContain('$')
+})
+
+test('a plan with only the weekly window prices the switch against the week', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  let pct = 8
+  const usage = () => ({ context: { tokens: USED, window: 1_000_000, percent: 14 }, rateLimits: [{ kind: 'seven_day', percentUsed: pct }], cost: { usd: 0 } })
+  setup(on, () => usage())
+  await turn($)
+  pct = 10
+  await turn($)
+  const r: any = await $.classic.PreModelSwitch(SWITCH())
+  expect(r.permissionDecisionReason).toContain('% of your weekly window')
+  expect(r.permissionDecisionReason).not.toContain('$')
 })
 
 test('cold cache: no dialog, one toast says the switch is free, the switch goes through', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -166,14 +172,6 @@ test('a subagent or an SDK switch is never questioned even with the guard on', {
   await $.classic.PreModelSwitch(SWITCH({ source: 'sdk' }))
   expect(log.asks).toHaveLength(0)
   expect(log.toasts).toHaveLength(0)
-})
-
-test('a dismissed dialog counts as Stay', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
-  const { log } = setup(on, () => API, () => Promise.reject(new Error('dismissed')))
-  await turn($)
-  const r: any = await $.classic.PreModelSwitch(SWITCH())
-  expect(log.asks).toHaveLength(1)
-  expect(r.permissionDecision).toBe('deny')
 })
 
 test('the Context pane prices a switch on its cache card: warm and large shows the dollars, cold says free', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {

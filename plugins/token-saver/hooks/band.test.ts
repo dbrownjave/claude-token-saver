@@ -35,7 +35,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       expect(await ui.find({ text: /^Reuses 120k$/ })).toBeDefined()
       expect(await ui.find({ type: 'Raster', key: 'ctx-bar' })).toBeDefined()
       expect(await ui.find({ text: /saved$/ })).toBeDefined()
-      expect(await ui.find({ text: /^Past your handoff mark \(60%\)/ })).toBeDefined()     // the hint, on its own line
+      expect(await ui.find({ text: /^Past your 60% mark: ask Claude for a summary, then Clear/ })).toBeDefined()     // the hint, on its own line
       expect(await ui.find({ text: /turn/i })).toBeUndefined()
       const open = await ui.find({ key: 'band-open' }), hide = await ui.find({ key: 'hide' })
       expect(open?.props.label).toBe('Open')
