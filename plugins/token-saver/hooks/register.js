@@ -516,22 +516,47 @@ async function tickKeepWarm($, ttl, maxPings) {
   }
 }
 
+/** A cold /compact held: booked once per cold stretch, however many times it is typed or pressed. */
+function bookVeto(tokens) {
+  if (vetoHeld) return
+  vetoHeld = { tokens: tokens || 0 }
+  vetoes += 1
+  totals.vetoTokens += vetoHeld.tokens
+}
+/** /compact force after a veto: the compaction ran after all, so the hold saved nothing. */
+function unbookVeto() {
+  if (!vetoHeld) return
+  vetoes = Math.max(0, vetoes - 1)
+  totals.vetoTokens = Math.max(0, totals.vetoTokens - vetoHeld.tokens)
+  vetoHeld = null
+}
+
 function levelFor(pct) {
   return levels.map((l) => ({ ...l, pct: pct100(Number(l.pct) * markScale) })).filter((l) => l.pct <= pct).sort((a, b) => b.pct - a.pct)[0]
 }
 
-function hintFor(pct, clock) {
+/**
+ * What to do past a mark, in one place: the toast at a crossing, the band's line and the pane's hint line all read
+ * it, so they cannot disagree. `act` marks the advice worth more than the pane's quieter notes. Null under the first mark.
+ */
+function markAdvice(pct, clock) {
   const hit = levelFor(pct)
-  if (!hit) return ''
-  if (hit.hint === 'note') return `past your ${hit.pct}% (${hit.id}) — note decisions`
-  if (hit.hint === 'new-conversation') return `past your ${hit.pct}% (${hit.id}) — ask Claude for a summary, then /clear`
-  if (hit.hint === 'compact-if-warm' && clock.warm) {
-    return `past your ${hit.pct}% (${hit.id}), cache warm ${mins(clock.leftMs)}m — /compact is cheap`
-  }
+  if (!hit) return null
+  const warm = !!(clock && clock.known && clock.warm)
+  const head = `Past your ${hit.pct}% mark`
   if (hit.hint === 'compact-if-warm') {
-    return `past your ${hit.pct}% (${hit.id}), cache cold — ask Claude for a summary, then /clear; don't /compact`
+    return warm
+      ? { text: `${head}: Compact now, while the cache is warm (${mins(clock.leftMs)}m left)`, tone: 'warning', act: true }
+      : { text: `${head}: Clear, since Compact would pay for everything again`, tone: 'warning', act: true }
   }
-  return `past your ${hit.pct}% (${hit.id})`
+  if (hit.hint === 'new-conversation') return { text: `${head}: ask Claude for a summary, then Clear`, tone: 'warning', act: true }
+  return { text: `${head}: note decisions as you go`, tone: 'inactive', act: false }
+}
+
+/** The toast at a crossing: markAdvice, lower case after the "context N% —" it follows. */
+function hintFor(pct, clock) {
+  const a = markAdvice(pct, clock)
+  return a ? a.text.replace(/^Past/, 'past') : ''
 }
 
 async function refreshSkills($, cwd) {
@@ -952,6 +977,7 @@ let homeCache = null                 // $HOME, read once, to shorten memory-file
 /** Context added per message: tokens at turn.complete less tokens at turn.start, the last five. */
 const growth = []
 let turnStartTokens = null
+let vetoHeld = null           // { tokens }: the compaction this cold stretch held, booked once; dropped if forced, kept when the cache warms
 let markScale = 1              // marks × this: < 1 when auto-compact sits below the last mark (contextView sets it)
 const GROWTH_KEEP = 5
 
@@ -1056,7 +1082,8 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 
 /** 484000 → "484k", 1000000 → "1M", 1500000 → "1.5M". */
 function fmtK(n) {
-  if (!n || n < 0) return '0'
+  if (!n) return '0'
+  if (n < 0) return `−${fmtK(-n)}`                // keep-warm net of its pings can be below zero: the Receipt must add up
   if (n >= 999_500) {
     const m = n / 1_000_000
     const s = m >= 10 ? String(Math.round(m)) : m.toFixed(1).replace(/\.0$/, '')
@@ -1629,7 +1656,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
   const cacheInfo = { read: T.cacheRead, line: T.cacheRead > 0 ? `Prompt cache read ${fmtK(T.cacheRead)} tokens at a fraction of the price — Claude's own, not counted` : '' }
   const share = totalTok > 0 ? totalTok / (totalTok + billedUnits) : 0
   const priced = mode === 'api' && rate > 0
-  const usd = (tok) => (priced ? `$${((tok * rate) / 1e6).toFixed(2)}` : '')
+  const usd = (tok) => (priced ? `${tok < 0 ? '−' : ''}$${((Math.abs(tok) * rate) / 1e6).toFixed(2)}` : '')
   const base = saved.limitBase
   const tokPerPct = perPct(base, five, inputAll)
   const spent = hasCost ? usage.cost.usd : 0
@@ -1755,11 +1782,15 @@ function contextHint(view, avg) {
       return { text: `Auto-compact in ≈${plural(msgs, 'message')} (${fmtK(at)}).`, tone: msgs <= 5 ? 'warning' : 'inactive' }
     }
   }
-  // 6. A 1M window that compacts near the top: the one setting worth changing
+  // 6. Past a mark that asks for action: the band and the toast say the same (markAdvice)
+  const mark = markAdvice(view.pct, { known: c.known, warm: c.warm, leftMs: (c.leftMin || 0) * MINUTE })
+  if (mark && mark.act) return { text: mark.text, tone: mark.tone }
+  // 7. A 1M window that compacts near the top: the one setting worth changing
   if (view.compactHint1M) return { text: `Auto-compact at ${fmtK(at)}. Try /autocompact 400k.`, tone: 'inactive' }
-  // 7. Idle compaction is armed but far: a quiet note for whoever steps away
+  // 8. Idle compaction is armed but far: a quiet note for whoever steps away
   if (iv.state === 'counting') return { text: `Idle compaction in ≈${iv.leftMin}m if you step away.`, tone: 'inactive' }
-  return null
+  // 9. Past the first mark only
+  return mark ? { text: mark.text, tone: mark.tone } : null
 }
 
 function nextCard(view, avg) {
@@ -1800,7 +1831,7 @@ function billCard(view, now, ttl, keepWarmMax, longTtl) {
     const missed = !Number.isFinite(keepWarm.streak)
     const usedPings = missed ? keepWarmMax : Math.min(keepWarm.streak, keepWarmMax)
     const every = Math.max(1, Math.round((ttl - KEEP_WARM_LEAD) / MINUTE))
-    return { title: 'Keep-warm', accent: 'On', tone: PAL.WARM, bar: { fill: usedPings / keepWarmMax, ink: PAL.WARM }, strong: `Pings ${usedPings} of ${keepWarmMax}`, rest: ' · 0.1× each',
+    return { title: 'Keep-warm', accent: 'On', tone: PAL.WARM, bar: { fill: usedPings / keepWarmMax, ink: PAL.WARM }, strong: `Pings ${usedPings} of ${keepWarmMax}`, rest: ` · ${readRate(lastModel)}× each`,
       foot: missed ? 'Stopped: the cache had already gone' : `Warm ${(keepWarmMax - usedPings) * every}m more if away` }
   }
   const why = keepWarm.stopped ? cap1(keepWarm.stopped) : longTtl ? 'One-hour cache' : 'Turned off'
@@ -1926,7 +1957,7 @@ function drawContextPane(ui, view, o) {
   const shades = [ok, mixHex(ok, ui.hex('text'), 0.4), mixHex(ok, PAL.CACHE_TRACK, 0.5), mixHex(ok, PAL.CACHE_TRACK, 0.75)]
   const srcSum = sv.sources.reduce((n, s) => n + s.tok, 0) || 1
   const parts = sv.sources.map((s, i) => ({ f: (sv.share * s.tok) / srcSum, color: shades[i] }))
-  const cut = `Cut ${Math.round(sv.share * 100)}% of input`
+  const cut = `Cut ${Math.round(sv.share * 100)}% of cost`      // saved ÷ (saved + spent), both in input-price units
   // narrow: "Saved … this session" over "Cut …% of input   ≈ $ · Spent $"
   const savedHead = narrow
     ? col({}, [
@@ -1970,7 +2001,7 @@ function drawContextPane(ui, view, o) {
   const cardKeys = ['card-next', 'card-bill', 'card-cache', 'card-idle']
   // desktop: three across from 110 cells, two from 72, one (full width) on a phone or a thin window
   // four cards: four across when wide, else two by two, one per row on a phone or a thin window
-  const perRow = Math.min(cardList.length, term ? (o.W < 140 ? 2 : 4) : narrow ? 1 : cells < 140 ? 2 : 4)
+  const perRow = Math.min(cardList.length, narrow ? 1 : term ? (o.W < 140 ? 2 : 4) : cells < 140 ? 2 : 4)   // narrow, the 54-column dock too: one a row
   const gapN = term ? 4 : 3
   const cw = Math.max(16, Math.floor((cells - gapN * (perRow - 1)) / perRow))
   const card = (cd, i) => col(perRow === 1 ? { flexGrow: 1, flexShrink: 1, overflow: 'hidden' } : { width: cw, flexShrink: 0, overflow: 'hidden' }, [
@@ -2376,17 +2407,6 @@ function nbsp(s) {
   return typeof s === 'string' ? s.replace(/^ +| +$/g, (m) => '\u00a0'.repeat(m.length)) : s
 }
 
-/** The band's second line, past a mark: what to do now, in the pane's words. */
-function bandHint(pct, clock) {
-  const hit = [...levels].filter((l) => Number(l.pct) <= pct).sort((a, b) => b.pct - a.pct)[0]
-  if (!hit) return ''
-  const warm = clock && clock.known && clock.warm
-  const left = warm ? ` (${mins(clock.leftMs)}m left)` : ''
-  if (hit.id === 'compact') return warm ? `Past your compact mark (${hit.pct}%): Compact now, while the cache is warm${left}` : `Past your compact mark (${hit.pct}%): Clear, since Compact would pay for everything again`
-  if (hit.hint === 'new-conversation') return `Past your ${hit.pct}% mark: ask Claude for a summary, then Clear`
-  return `Past your ${hit.id} mark (${hit.pct}%): note decisions as you go`
-}
-
 /** A drill-down group's command (/mcp, /memory, /agents, /loadout): close the pane, then run it as /clear does. */
 async function runFromPane($, command) {
   ctxPaneOpen = false; ctxPopped = false
@@ -2443,8 +2463,8 @@ export async function compactNow($, ttl, compactGuard, { inCommandHook = false }
   try {
     const clock = cacheClock(await $.clock.now(), ttl)
     if (compactGuard && clock.known && !clock.warm) {
-      vetoes += 1
       const ctx = await contextOf($)
+      bookVeto(ctx.tokens)
       ctxMsg = `compact vetoed: cache cold (idle ${mins(clock.idleMs)}m), it would re-send ≈${fmt(ctx.tokens)} tokens. Ask Claude for a summary, then /clear; /compact force overrides.`
     } else {
       let r
@@ -2540,6 +2560,7 @@ const ttl = ttlNow(), longTtl = ttl === TTL_LONG
    `token-saver.<key>`, the same row /config shows, so there is one source; Claude Code then reloads the module with the
    new options. The panel shows the new value at once, and the palette and card bars switch before the reload. */
 const SETTINGS_PANE = 'settings'
+const TOKENS_USAGE = 'usage: /tokens (the pane) · /tokens list · /tokens learn [term] · /tokens settings · /tokens hide|show'
 const SETTINGS = [
   { group: 'Look', rows: [
     { key: 'theme', label: 'Palette', kind: 'choice', options: ['auto', 'dark', 'light'], def: 'auto',
@@ -2550,7 +2571,7 @@ const SETTINGS = [
   ] },
   { group: 'Cache', rows: [
     { key: 'longCacheTtl', label: 'Treat the cache as 1 hour', kind: 'bool', def: false, hint: "Off: follows Claude Code's cache." },
-    { key: 'keepWarm', label: 'Keep the cache warm while idle', kind: 'bool', def: true, hint: 'API billing on the 5-minute cache only. One tiny request at about 0.1× input, before it lapses.' },
+    { key: 'keepWarm', label: 'Keep the cache warm while idle', kind: 'bool', def: true, hint: 'API billing on the 5-minute cache only. One tiny request at the cache-read price, before it lapses.' },
     { key: 'keepWarmPings', label: 'Pings per idle stretch', kind: 'step', steps: [0, 1, 2, 3, 4, 5, 6, 8, 10, 15, 20], def: 5, hint: 'About 4 minutes apart. At 0 it sends none.' },
   ] },
   { group: 'Guards', rows: [
@@ -2591,6 +2612,7 @@ function settingsHint(r) {
   if (r.key === 'keepWarm') {
     if (onPlan()) return 'Off (not API billing): a subscription caches for an hour already.'
     if (hourNow()) return 'Off on the 1-hour cache.'
+    return `API billing on the 5-minute cache only. One tiny request at ${lastModel ? `${readRate(lastModel)}×` : 'the cache-read price of'} input, before it lapses.`
   }
   if (r.key === 'keepWarmPings' && settingsIdle(r)) return 'About 4 minutes apart. Not used while keep-warm is off.'
   if (r.key === 'inputPricePerM' && onPlan()) return "Not used on a subscription: savings show in tokens and % of your plan's usage window."
@@ -2997,6 +3019,7 @@ export function register(on, options = {}) {
         return { text: 'Context pane opened. Esc closes it. /tokens list prints the same as text.' }
       }
     }
+    if (arg !== '' && arg !== 'pane' && arg !== 'list') return { text: TOKENS_USAGE }
     // /tokens list: the pane's cards as text, one line each, from the same view the pane draws.
     const now = await $.clock.now()
     const data = await loadContext($, now, 80)
@@ -3168,6 +3191,7 @@ export function register(on, options = {}) {
       if (e.model) lastModel = e.model
       totals.billed += billedTok(result.usage, stepModel)
       keepWarm.streak = 0
+      vetoHeld = null
       if (!setupTok) setupTok = (result.usage.cache_read_input_tokens || 0) + (result.usage.cache_creation_input_tokens || 0)
       lastUsage = result.usage
       lastStepAt = stepAt
@@ -3241,12 +3265,12 @@ export function register(on, options = {}) {
     const own = forced ? typed.replace(/^(force|!)\s*/i, '') : typed
     const instructions = [own, KEEP].filter(Boolean).join('\n')
 
+    if (forced) unbookVeto()
     if (compactGuard && e.trigger === 'manual' && !forced) {
       const clock = cacheClock(await $.clock.now(), ttlNow())
       if (clock.known && !clock.warm) {
-        vetoes += 1
         const ctx = await contextOf($)
-        totals.vetoTokens += ctx.tokens || 0
+        bookVeto(ctx.tokens)
         return {
           skip:
             `token-saver: prompt cache is cold (idle ${mins(clock.idleMs)}m). ` +
@@ -3493,8 +3517,8 @@ export function register(on, options = {}) {
         row.push(t(' · ', 'inactive'), t(view.savings.short, 'inactive'), h(Box, { flexGrow: 1 }), t(' '), ...buttons)
         children.push(h(Box, { flexDirection: 'row', alignItems: 'center' }, ...row.filter(Boolean)))
         if (compactHint) {
-          const hint = bandHint(view.pct, clock)
-          if (hint) children.push(h(Text, { color: term ? 'inactive' : ui.hex('inactive'), wrap: 'truncate' }, hint))
+          const hint = contextHint(view, avgGrowth())     // the pane's own line: band and pane cannot disagree
+          if (hint) children.push(h(Text, { color: term ? 'inactive' : ui.hex('inactive'), wrap: 'truncate' }, hint.text))
         }
       } catch {
         /* usage unavailable: progress rows still draw */

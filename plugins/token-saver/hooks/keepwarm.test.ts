@@ -71,6 +71,7 @@ test('keep-warm pings just before the 5-minute TTL lapses, stops at the cap, and
   await turn($)
   let text = await tokensText($)
   expect(text).toContain('5 pings · avoided 0 ·')
+  expect(text).toMatch(/keep-warm −\d/)                       // net of its pings, below zero: shown with its sign, not as 0
 
   // A stretch the pings cover: come back after 9 minutes (would have lapsed at 5), cache still warm.
   const before = forks.length

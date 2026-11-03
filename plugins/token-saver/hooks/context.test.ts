@@ -138,7 +138,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ text: /^30\.2%$/ })).toBeDefined()    // Messages 302k of 1M
     expect(await ui.find({ text: /^Saved$/ })).toBeDefined()
     expect(await ui.find({ text: /^0 tokens$/ })).toBeDefined()
-    expect(await ui.find({ text: /^Cut 0% of input$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Cut 0% of cost$/ })).toBeDefined()
     expect(await ui.find({ text: /^Spent \$1\.37$/ })).toBeDefined()   // a cost ledger, but no turns yet: no derived rate
     expect(await ui.find({ text: /^Fresh start$/ })).toBeDefined()    // the next mark: 60% fresh start
     expect(await ui.find({ text: /^40% of the way$/ })).toBeDefined() // 48% is 40% of the way from 40 to 60
@@ -420,7 +420,7 @@ for (const [surface, cols] of [['mobile', 44], ['desktop', 60]] as const) {
     const ui: any = await mount($, surface as any, { ...PANE, bodyColumns: cols })
     if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
     expect(await ui.find({ key: 'ctx-popout' })).toBeUndefined()
-    expect(await ui.find({ text: /^Cut 0% of input$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Cut 0% of cost$/ })).toBeDefined()
     expect(await ui.find({ text: /^ this session$/ })).toBeDefined()      // its own line, no trailing " · "
     expect(await ui.find({ key: 'ctx-receipt' })).toBeDefined()
     // no fixed-width card columns: each card grows to the body's width
@@ -439,7 +439,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const ui: any = await mount($, surface)
     if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
     expect(await ui.find({ text: /^0 tokens$/ })).toBeDefined()           // Saved: zero, the plugin did nothing yet
-    expect(await ui.find({ text: /^Cut 0% of input$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Cut 0% of cost$/ })).toBeDefined()
     expect(await ui.find({ text: /Prompt cache read 150k tokens at a fraction of the price/ })).toBeDefined()
     expect(await ui.find({ text: /^Cache reads/ })).toBeUndefined()    // the old, false source is gone
     await ui.press({ key: 'ctx-receipt' })
@@ -742,7 +742,8 @@ test('hint: idle compaction close says so, and beats the 1M auto-compact advice'
 })
 
 test('hint: armed idle compaction is a quiet note when nothing else needs saying', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
-  const { clock } = setup(on, () => USAGE_AT(250_000, 400_000), STEP_TTL('1h'))
+  // auto-compact at 800k: no mark is passed at 250k (with 400k the marks scale to 16/24/30% and 25% is past one)
+  const { clock } = setup(on, () => USAGE_AT(250_000, 800_000), STEP_TTL('1h'))
   SETTINGS(on, {})
   await turn($)
   await clock.advance(MIN)
@@ -916,10 +917,12 @@ test('the 54-column terminal dock gets the narrow layout: Saved splits, cards on
   await turn($)
   const ui: any = await mount($, 'terminal', { ...PANE, bodyColumns: 54 })
   if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
-  expect(await ui.find({ text: /^Cut \d+% of input$/ })).toBeDefined()
+  expect(await ui.find({ text: /^Cut \d+% of cost$/ })).toBeDefined()
   expect(await ui.find({ text: /^ this session$/ })).toBeDefined()
-  const fixed = (await ui.findAll({ type: 'Box' })).filter((b: any) => b.props.width === Math.max(16, Math.floor((54 - 1 - 6) / 3)))
+  // a card in a row of two or more has a fixed width; one a row grows instead: no fixed-width card at 54
+  const fixed = (await ui.findAll({ type: 'Box' })).filter((b: any) => typeof b.props.width === 'number' && b.props.flexShrink === 0 && b.props.overflow === 'hidden')
   expect(fixed.length).toBe(0)
+  expect(await ui.find({ text: /^10% of the$/ })).toBeUndefined()
 })
 
 test('/tokens list fits the transcript: the box at 120 columns, a list where a box cannot fit', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -945,4 +948,68 @@ test('no /handoff anywhere a stranger reads it: hints, the pane, the glossary', 
   if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
   expect(await ui.find({ text: /handoff/i })).toBeUndefined()
   expect(learn).toContain('Fading: still there')
+})
+
+// ---- 0.3.46: what the review found still in 0.3.45 ----
+
+test('a cold /compact is booked once, typed twice or pressed, and dropped when it is forced', { options: { ...OPTIONS, keepWarm: false }, timeoutMs: SLOW }, async ($, on) => {
+  const { clock, log } = setup(on, () => USAGE, STEP_TTL('5m'))
+  await turn($)
+  await clock.advance(10 * MIN)
+  const vetoed = async () => /compactions vetoed ([^ ·│]+)/.exec(String((await ($ as any).command.run({ command: 'tokens', args: 'list', presentation: { columns: 200 } })).text))?.[1]
+  const compact = (instructions = '') => ($ as any).session.compact({ trigger: 'manual', instructions, messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
+  expect(String((await compact()).skip)).toContain('prompt cache is cold')
+  expect(await vetoed()).toBe('605k')                              // 484k × 1.25, once
+  await compact()
+  const ui: any = await mount($, 'terminal')
+  await ui.press({ key: 'ctx-compact' })
+  await ui.unmount()
+  expect(await vetoed()).toBe('605k')                              // the same held compaction, not three
+  await compact('force')
+  expect(log.compacts.length).toBe(1)
+  expect(await vetoed()).toBe('0')                                 // it ran after all: nothing was held
+})
+
+test('an unknown /tokens argument answers with usage, not the list', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => USAGE)
+  await turn($)
+  const r = String((await ($ as any).command.run({ command: 'tokens', args: 'lsit' })).text)
+  expect(r).toMatch(/^usage: \/tokens/)
+  expect(r).not.toContain('│')
+  expect(String((await ($ as any).command.run({ command: 'tokens', args: 'list', presentation: { columns: 160 } })).text)).toContain('│ Context')
+})
+
+test('keep-warm prices a ping at the model\'s read rate, not 0.1× everywhere', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => USAGE)
+  await turn($)                                                    // claude-sonnet-5-5: reads at 0.05×
+  const ui: any = await mount($, 'desktop')
+  if ((await ui.find({ key: 'ctx-expand' }))?.props.label === 'More') await ui.press({ key: 'ctx-expand' })
+  expect(await ui.find({ text: /0\.05× each$/ })).toBeDefined()
+  expect(await ui.find({ text: /0\.1× each$/ })).toBeUndefined()
+})
+
+test('past a mark the band, the pane and the toast say the same thing', { options: { ...OPTIONS, cacheBand: true, compactHint: true }, timeoutMs: SLOW }, async ($, on) => {
+  mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home' })
+  let ctx = { tokens: 110_000, window: 200_000, percent: 55 }
+  const toasts: string[] = []
+  on('session.usage' as any, () => ({ value: { context: { ...ctx }, rateLimits: [], cost: { usd: 0.5 } } }))
+  on('turn.start' as any, (_$: any, e: any) => ({ turnId: e.turnId }))
+  on('turn.complete' as any, () => ({ text: 'ok' }))
+  on('turn.step' as any, async function* () { return { turnId: 't', index: 0, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: STEP } })
+  on('ui.toast' as any, (_$: any, e: any) => { toasts.push(String(e.text)); return { value: undefined } })
+  for (const ev of ['ui.status', 'ui.log']) on(ev as any, () => ({ value: undefined }))
+  on('ui.render' as any, (_$: any, e: any) => _$.ui.resolve(e).Box({}))
+  await turn($)                                                    // 55%: past watch
+  ctx = { tokens: 124_000, window: 200_000, percent: 62 }
+  await turn($)                                                    // crosses 60%: the toast
+  const toast = toasts.find((x) => /^context 62% — /.test(x))
+  expect(toast).toBe('context 62% — past your 60% mark: ask Claude for a summary, then Clear')
+  const advice = /^[  ]?Past your 60% mark: ask Claude for a summary, then Clear[  ]?$/
+  const band: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, bodyColumns: 160 } })
+  expect(await band.find({ text: advice })).toBeDefined()
+  await band.unmount()
+  const pane: any = await mount($, 'terminal')
+  expect(await pane.find({ text: advice })).toBeDefined()
 })
