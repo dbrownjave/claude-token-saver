@@ -144,7 +144,7 @@ test('on a subscription the rows that do nothing say so, and the switch keeps it
   setup(on)
   on('session.usage' as any, () => ({ value: SUBSCRIPTION }))
   const ui: any = await mount($, 'terminal')
-  expect(await ui.find({ text: /^Off \(not API billing\): a subscription caches for an hour already\.$/ })).toBeDefined()
+  expect(await ui.find({ text: /^Off: on a plan a ping would spend its usage, and the plan keeps the cache an hour\.$/ })).toBeDefined()
   expect(await ui.find({ text: /^Off: follows Claude Code's cache, now 1 hour from your plan\.$/ })).toBeDefined()
   expect(await ui.find({ text: /Not used while keep-warm is off/ })).toBeDefined()
   expect(await ui.find({ text: /^Not used on a subscription/ })).toBeDefined()

@@ -142,7 +142,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await ui.find({ text: /^Spent \$1\.37$/ })).toBeDefined()   // a cost ledger, but no turns yet: no derived rate
     expect(await ui.find({ text: /^Fresh start$/ })).toBeDefined()    // the next mark: 60% fresh start
     expect(await ui.find({ text: /^40% of the way$/ })).toBeDefined() // 48% is 40% of the way from 40 to 60
-    expect(await ui.find({ text: /^Then summary \+ Clear$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Then summary while warm, then Clear$/ })).toBeDefined()
     expect(await ui.find({ text: /^Keep-warm$/ })).toBeDefined()
     expect(await ui.find({ text: /^Pings 0 of 5$/ })).toBeDefined()
     expect(await ui.find({ text: /^The clock starts after the first reply$/ })).toBeDefined()
@@ -210,7 +210,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
     await ui.press({ key: 'ctx-compact' })
     expect(log.compacts.length).toBe(0)                           // the guard vetoes a cold compact
-    expect(await ui.find({ text: /^Compact vetoed: cache cold/ })).toBeDefined()
+    expect(await ui.find({ text: /^Compact vetoed: the prompt cache has lapsed/ })).toBeDefined()
   })
 }
 
@@ -492,9 +492,10 @@ test('/clear says what it freed, typed or from the pane, and the band starts ove
   await turn($)
   await ($ as any).command.run({ command: 'clear', args: '' })
   expect(cleared).toBe(true)
-  expect(toasts.some((t) => /Cleared: ≈472\.0k tokens freed \(47% of 1\.0M\)/.test(t))).toBe(true)
-  expect(lines.some((t) => /≈472\.0k tokens freed/.test(t))).toBe(true)
-  expect(toasts.some((t) => /The next message re-reads ≈12\.0k of setup/.test(t))).toBe(true)   // not freed: read again
+  // the breakdown just before the clear: Messages 302k is what goes; MCP tools, skills, prompt, tools and memory (182k) load again
+  expect(toasts.some((t) => /Cleared ≈302k tokens of conversation \(30% of 1M\)/.test(t))).toBe(true)
+  expect(lines.some((t) => /≈302k tokens of conversation/.test(t))).toBe(true)
+  expect(toasts.some((t) => /The next message re-reads ≈182k of setup \(system prompt, tools, memory\)/.test(t))).toBe(true)   // not freed: read again
 })
 
 test('/tokens list is the pane as a table: context with a bar, cache, saved, keep-warm, memory, next, then help', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -554,7 +555,7 @@ test('on the engine\'s 5-minute TTL the same 10 minutes is cold, and /compact is
   await turn($)
   await clock.advance(10 * MIN)
   const r: any = await ($ as any).session.compact({ trigger: 'manual', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
-  expect(String(r.skip)).toContain('prompt cache is cold')
+  expect(String(r.skip)).toContain('prompt cache has lapsed')
   expect(log.compacts.length).toBe(0)
 })
 
@@ -958,7 +959,7 @@ test('a cold /compact is booked once, typed twice or pressed, and dropped when i
   await clock.advance(10 * MIN)
   const vetoed = async () => /compactions vetoed ([^ ·│]+)/.exec(String((await ($ as any).command.run({ command: 'tokens', args: 'list', presentation: { columns: 200 } })).text))?.[1]
   const compact = (instructions = '') => ($ as any).session.compact({ trigger: 'manual', instructions, messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
-  expect(String((await compact()).skip)).toContain('prompt cache is cold')
+  expect(String((await compact()).skip)).toContain('prompt cache has lapsed')
   expect(await vetoed()).toBe('605k')                              // 484k × 1.25, once
   await compact()
   const ui: any = await mount($, 'terminal')
@@ -1005,11 +1006,95 @@ test('past a mark the band, the pane and the toast say the same thing', { option
   ctx = { tokens: 124_000, window: 200_000, percent: 62 }
   await turn($)                                                    // crosses 60%: the toast
   const toast = toasts.find((x) => /^context 62% — /.test(x))
-  expect(toast).toBe('context 62% — past your 60% mark: ask Claude for a summary, then Clear')
-  const advice = /^[  ]?Past your 60% mark: ask Claude for a summary, then Clear[  ]?$/
+  expect(toast).toBe('context 62% — past your 60% mark: ask Claude for a summary of where you are (cheap while the cache is warm, 5m left), then Clear')
+  const advice = /^[  ]?Past your 60% mark: ask Claude for a summary of where you are \(cheap while the cache is warm, 5m left\), then Clear[  ]?$/
   const band: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, bodyColumns: 160 } })
   expect(await band.find({ text: advice })).toBeDefined()
   await band.unmount()
   const pane: any = await mount($, 'terminal')
   expect(await pane.find({ text: advice })).toBeDefined()
+})
+
+// ---- 0.3.47: what the retest of 0.3.46 on the real CLI found ----
+
+/** A session whose usage is `plain` from the plain call and `full` (with its breakdown) from a summary call, as the engine answers. */
+function windowed(on: any, plain: () => any, full: () => any, env: Record<string, string> = {}) {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME: '/nonexistent-home', ...env })
+  const toasts: string[] = []
+  on('session.usage' as any, (_$: any, e: any) => ({ value: e && e.breakdown ? full() : plain() }))
+  on('turn.start' as any, (_$: any, e: any) => ({ turnId: e.turnId }))
+  on('turn.complete' as any, () => ({ text: 'ok' }))
+  on('turn.step' as any, async function* () { return { turnId: 't', index: 0, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: STEP } })
+  on('command.run' as any, () => ({ text: 'ran' }))
+  on('ui.toast' as any, (_$: any, e: any) => { toasts.push(String(e.text)); return { value: undefined } })
+  for (const ev of ['ui.status', 'ui.log']) on(ev as any, () => ({ value: undefined }))
+  return { clock, toasts }
+}
+const cat = (name: string, tokens: number, kind = 'used') => ({ name, tokens, color: 'inactive', isDeferred: false, kind })
+// /autocompact 100k as the real engine reports it: the plain call keeps the model's 1M window; the breakdown has the set one
+const SET100K = (messages: number, setup: number) => ({
+  ...BREAKDOWN, totalTokens: messages + setup, maxTokens: 100_000, rawMaxTokens: 100_000, percentage: ((messages + setup) * 100) / 100_000,
+  autoCompactThreshold: 67_000, isAutoCompactEnabled: true,
+  categories: [cat('System prompt', 5_000), cat('System tools', setup - 5_000), cat('Messages', messages), cat('Free space', 100_000 - messages - setup - 33_000, 'free'), cat('Autocompact buffer', 33_000, 'buffer')],
+})
+
+test('a set auto-compact window: the title, the band, the marks and the toast count against it, as /context does', { options: { ...OPTIONS, cacheBand: true, compactHint: true }, timeoutMs: SLOW }, async ($, on) => {
+  const bd = SET100K(35_000, 20_000)                                // 55k of 100k; auto-compact at 67k scales the marks to 27/40/50%
+  const plain = () => ({ context: { tokens: 55_000, window: 1_000_000, percent: 5 }, rateLimits: [], cost: { usd: 0.1 } })
+  const { toasts } = windowed(on, plain, () => ({ ...plain(), context: { ...plain().context, breakdown: bd } }))
+  await turn($)
+  const pane: any = await mount($, 'terminal')
+  expect(await pane.find({ text: /^55k \/ 100k \(55%\)$/ })).toBeDefined()            // never "55k / 1M (55%)"
+  const advice = /^[  ]?Past your 50% mark: Compact now, while the cache is warm \(5m left\)[  ]?$/
+  expect(await pane.find({ text: advice })).toBeDefined()
+  await pane.unmount()
+  const band: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, bodyColumns: 160 } })
+  expect(await band.find({ text: /^ ?55%$/ })).toBeDefined()                             // never 5% of the model's window
+  expect(await band.find({ text: advice })).toBeDefined()
+  expect(toasts.some((t) => /^context 55% — past your 50% mark: Compact now/.test(t))).toBe(true)
+})
+
+test('a window that is mostly setup: past the marks, Compact and Clear are not pushed, and the hint says why', { options: { ...OPTIONS, cacheBand: true, compactHint: true }, timeoutMs: SLOW }, async ($, on) => {
+  const bd = SET100K(7_000, 48_000)                                 // 55k, but only 7k is conversation
+  const plain = () => ({ context: { tokens: 55_000, window: 1_000_000, percent: 5 }, rateLimits: [], cost: { usd: 0.1 } })
+  windowed(on, plain, () => ({ ...plain(), context: { ...plain().context, breakdown: bd } }))
+  await turn($)
+  const pane: any = await mount($, 'terminal')
+  expect(await pane.find({ text: /^[  ]?Past your 50% mark, but ≈48k of it is setup that loads every time: Compact or Clear would free only ≈7k\. \/context shows what loads\.[  ]?$/ })).toBeDefined()
+  expect(lit(await pane.find({ key: 'ctx-compact' }))).toBe(false)
+  expect(lit(await pane.find({ key: 'ctx-later' }))).toBe(true)
+  await pane.press({ key: 'ctx-expand' })
+  expect(await pane.find({ text: /^Mostly setup$/ })).toBeDefined()                      // the next-mark card, not "Compact · Now"
+})
+
+test('right after /clear there is nothing to compact: the pane draws Compact unavailable', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  setup(on, () => USAGE)
+  await turn($)
+  await ($ as any).command.run({ command: 'clear', args: '' })
+  const ui: any = await mount($, 'terminal')
+  expect((await ui.find({ key: 'ctx-compact' }))?.props.dimColor).toBe(true)
+  expect(lit(await ui.find({ key: 'ctx-compact' }))).toBe(false)
+})
+
+test('a lapsed cache: the veto offers /clear and compacting after the next message, never a summary that costs the same', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const { clock } = setup(on, () => USAGE)
+  await turn($)
+  await clock.advance(10 * MIN)
+  const r: any = await ($ as any).session.compact({ trigger: 'manual', instructions: '' })
+  const text = String(r && r.skip)
+  expect(text).toContain('/clear is free')
+  expect(text).toContain('compact after that, while it is warm')
+  expect(text).not.toMatch(/summary/i)
+})
+
+test('the idle card on a 5-minute cache set in the environment says it does not run here, from the first reply on', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
+  const plain = () => ({ context: { tokens: 250_000, window: 1_000_000, percent: 25 }, rateLimits: [], cost: { usd: 0.1 } })
+  windowed(on, plain, () => ({ ...plain(), context: { ...plain().context, breakdown: { ...BREAKDOWN, totalTokens: 250_000, percentage: 25 } } }), { CLAUDE_CODE_PROMPT_CACHE_TTL: '5m' })
+  await turn($)
+  const ui: any = await mount($, 'terminal')
+  await ui.press({ key: 'ctx-expand' })
+  expect(await ui.find({ text: /^This session caches for 5 minutes$/ })).toBeDefined()
+  expect(await ui.find({ text: /Learned from the next reply/ })).toBeUndefined()
 })

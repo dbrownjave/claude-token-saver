@@ -76,7 +76,7 @@ test('warm and large on the API: the engine asks, carrying the price; the hook o
   const r: any = await $.classic.PreModelSwitch(SWITCH())
   expect(log.asks).toHaveLength(0)                                   // a dialog opened here waits behind the hook: the switch hung
   expect(r.permissionDecision).toBe('ask')
-  expect(r.permissionDecisionReason).toContain('142.0k tokens')
+  expect(r.permissionDecisionReason).toContain('142k tokens')
   expect(r.permissionDecisionReason).toContain("$0.53 at Opus 5.5's list price")
 })
 

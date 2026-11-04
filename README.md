@@ -118,7 +118,7 @@ A settings hook can only add a note before `/compact`. The mod sits on the compa
 | Trigger | What happens |
 |---|---|
 | `/compact`, cache warm | Runs. The keep-list (task, files touched, decisions, failing tests, next steps, exact errors) is appended to the summarizer's instructions. |
-| `/compact`, cache cold | **Refused.** One line names the idle time and the tokens a compaction would re-send, and suggests asking Claude for a summary, then `/clear`. |
+| `/compact`, cache lapsed | **Refused.** One line names the idle time and the tokens a compaction would first re-cache. Moving on, `/clear` is free; carrying on, your next message re-caches it anyway, so compact after that while it is warm. It never suggests asking Claude for a summary, which would pay the same re-cache. |
 | `/compact force` | Runs anyway. Keep-list still appended. |
 | auto-compaction | Never refused. Keep-list appended. Blocking it would let the window overflow. |
 | idle compaction (Claude Code 2.1.299+ in the terminal, 2.1.314+ in VS Code and the desktop app) | Never refused. Keep-list appended. The pane names it as Claude Code's own work, with the before and after size, and never counts it in Saved. Keep-warm stops for that stretch, since the prefix it would re-read is gone. Claude Code runs it on the 1-hour cache, for sessions over 200k tokens (`CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`, 100k floor), about 54 minutes after the last reply. Opt out with `"idleCompaction": false`. |
@@ -168,7 +168,7 @@ Dev loop: `claude plugin validate ./plugins/token-saver` then `claude plugin tes
 
 Same `~/.claude/token-saver/quiet.json` as the Python hook. Do not run both quiet-bash implementations at once or commands get rewritten twice.
 
-The mod does not touch the system prompt every turn. That would bust the cache. The band hint does not type a command into the box. Your marks live in `~/.claude/token-saver/thresholds.json`, copied once and never overwritten. Defaults: 40% note, 60% fresh start (ask Claude for a summary, then `/clear`), 75% `/compact` if warm and a new chat if cold. If you set auto-compact below 75% of the window, the marks scale to it. `/context` in VS Code stays the category grid. `/tokens` prints the same hint. Enabling the Python `quiet-bash` hook while the mod is on is refused. `dash` shows cache read vs cache write per session. That is request accounting, not a bill. The named miss cause stays on `/usage`.
+The mod does not touch the system prompt every turn. That would bust the cache. The band hint does not type a command into the box. Your marks live in `~/.claude/token-saver/thresholds.json`, copied once and never overwritten. Defaults: 40% note, 60% fresh start (while the cache is warm, ask Claude for a summary, then `/clear`; once it lapsed, `/clear`), 75% `/compact` if warm and `/clear` if it lapsed. If you set auto-compact below 75% of the window, the marks scale to it, and percents follow the window `/context` shows. When most of the window is setup that loads every time (system prompt, tools, memory), the hint says so instead of pushing Compact or Clear, which could free only the conversation. `/context` in VS Code stays the category grid. `/tokens` prints the same hint. Enabling the Python `quiet-bash` hook while the mod is on is refused. `dash` shows cache read vs cache write per session. That is request accounting, not a bill. The named miss cause stays on `/usage`.
 
 Python `dash` / `bench` stay. Mods do not read history.
 

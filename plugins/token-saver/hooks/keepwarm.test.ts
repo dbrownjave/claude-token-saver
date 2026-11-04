@@ -79,7 +79,7 @@ test('keep-warm pings just before the 5-minute TTL lapses, stops at the cap, and
   await turn($)
   expect(forks.length - before).toBe(2)
   text = await tokensText($)
-  expect(text).toContain('7 pings · avoided 120.0k')
+  expect(text).toContain('7 pings · avoided 120k')
 })
 
 test('keep-warm stays off on a subscription: the main thread already caches for an hour and pings would spend quota', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -92,7 +92,7 @@ test('keep-warm stays off on a subscription: the main thread already caches for 
   await turn($)
   await idle(clock, 30 * MIN)
   expect(forks.length).toBe(0)
-  expect(await tokensText($)).toContain('off (not API billing)')
+  expect(await tokensText($)).toContain('off (on a plan a ping would spend its usage)')
 })
 
 test('keep-warm never pings during a turn, and stops a stretch on a miss', { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
@@ -258,7 +258,7 @@ test('a real subscription: an hour of cache from its first step, no pings, howev
   await idle(clock, 30 * MIN)
   expect(forks.length).toBe(0)
   const text = await tokensText($)
-  expect(text).toContain('off (not API billing)')
+  expect(text).toContain('off (on a plan a ping would spend its usage)')
   expect(text).not.toContain('Cold')
   expect(text).not.toContain('needs the one-hour cache')
   expect(text).not.toContain('$')                           // savings are window headroom, never dollars
@@ -328,7 +328,7 @@ test('a plan with only the weekly window is a plan: one-hour cache, no keep-warm
   await idle(clock, 30 * MIN)
   expect(forks.length).toBe(0)                                   // a ping here would spend plan quota
   const text = await tokensText($)
-  expect(text).toContain('off (not API billing)')
+  expect(text).toContain('off (on a plan a ping would spend its usage)')
   expect(text).not.toMatch(/\$\d/)
   expect(text).not.toMatch(/5-hour/)
 })

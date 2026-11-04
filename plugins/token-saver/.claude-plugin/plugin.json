@@ -1,6 +1,6 @@
 {
   "name": "token-saver",
-  "version": "0.3.46",
+  "version": "0.3.47",
   "description": "Token-saver mod: quiet bash, trim output, cache band, /tokens, cold-cache compaction veto, priced model-switch guard, keep-warm pings, agents that re-read after a long wait",
   "author": {
     "name": "token-saver"
@@ -32,8 +32,8 @@
     },
     "compactGuard": {
       "type": "boolean",
-      "title": "Veto /compact on a cold cache",
-      "description": "Manual /compact is refused when the prompt cache has gone cold, with the re-send cost named. Auto-compaction is never blocked. Override once with: /compact force",
+      "title": "Veto /compact on a lapsed cache",
+      "description": "Manual /compact is refused when the prompt cache has lapsed, with the re-send cost named. Auto-compaction is never blocked. Override once with: /compact force",
       "default": true
     },
     "modelGuard": {
@@ -51,7 +51,7 @@
     "keepWarm": {
       "type": "boolean",
       "title": "Keep the prompt cache warm while you are idle",
-      "description": "API billing with the 5-minute TTL only; it turns itself off when Claude Code is on the 1-hour cache. Shortly before the cache lapses, re-reads the session's own cached prefix with one tiny request (a cache read: 0.025\u00d7 to 0.1\u00d7 its input price, by model) so your next message hits the cache instead of paying a 1.25\u00d7 re-write. Stops after the cap, on any miss, and never runs during a turn. Pings and their cost show in /tokens and the Context pane.",
+      "description": "API billing with the 5-minute TTL only; it turns itself off when Claude Code is on the 1-hour cache. Shortly before the cache lapses, re-reads the session's own cached prefix with one tiny request (a cache read: 0.025\u00d7 to 0.1× its input price, by model) so your next message hits the cache instead of paying a 1.25× re-write. Stops after the cap, on any miss, and never runs during a turn. Pings and their cost show in /tokens and the Context pane.",
       "default": true
     },
     "keepWarmPings": {
