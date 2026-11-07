@@ -18,7 +18,7 @@ claude plugin test .          # quiet: | grep -E "\(fail\)| pass$| fail$"
 
 One session, no install: `claude --plugin-dir ./plugins/token-saver`. The mod API is documented in [docs/claude-mods.md](docs/claude-mods.md); the repo's own hard-won rules (desktop collapses spaces, 140 ms redraws lose clicks, `$.session.compact` rejects on the desktop…) are in `.claude/skills/mod-authoring/SKILL.md` and load automatically when you open the repo in Claude Code.
 
-Python side: `python3 scripts/selftest.py` and `python3 scripts/test_skills.py` (temp dirs, never touch `~/.claude`).
+Python side: `python3 scripts/selftest.py`, `python3 -I scripts/test_audit_startup.py` and `python3 scripts/test_skills.py` (temp dirs, never touch `~/.claude`).
 
 ## Pull requests
 
