@@ -262,7 +262,11 @@ test('Compact while a turn runs waits for it instead of showing the engine error
 
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`Compact pressed mid-turn on ${surface} reads Queued and runs at turn.complete`, { options: OPTIONS, timeoutMs: SLOW }, async ($, on) => {
-    const { log } = setup(on, () => USAGE)
+    // once compacted, the engine's breakdown measures the smaller window: 120k of summary and the 151k of setup
+    const AFTER = { ...USAGE, context: { ...USAGE.context, tokens: 271_000, percent: 27, breakdown: { ...BREAKDOWN, totalTokens: 271_000, percentage: 27 } } }
+    let ref: any = null
+    const { log } = setup(on, () => (ref && ref.compacts.length ? AFTER : USAGE))
+    ref = log
     await turn($)                                                  // a warm cache, so the guard lets it through
     await ($ as any).turn.start({ text: 'long one', turnId: 't2' })
     const ui: any = await mount($, surface)
@@ -1030,6 +1034,7 @@ function windowed(on: any, plain: () => any, full: () => any, env: Record<string
   on('command.run' as any, () => ({ text: 'ran' }))
   on('ui.toast' as any, (_$: any, e: any) => { toasts.push(String(e.text)); return { value: undefined } })
   for (const ev of ['ui.status', 'ui.log']) on(ev as any, () => ({ value: undefined }))
+  on('ui.render' as any, (_$: any, e: any) => _$.ui.resolve(e).Box({}))      // what draws when the mod passes (a band with nothing to say)
   return { clock, toasts }
 }
 const cat = (name: string, tokens: number, kind = 'used') => ({ name, tokens, color: 'inactive', isDeferred: false, kind })
@@ -1097,4 +1102,64 @@ test('the idle card on a 5-minute cache set in the environment says it does not 
   await ui.press({ key: 'ctx-expand' })
   expect(await ui.find({ text: /^This session caches for 5 minutes$/ })).toBeDefined()
   expect(await ui.find({ text: /Learned from the next reply/ })).toBeUndefined()
+})
+
+// ---- 0.3.48: what the retest of 0.3.47 found ----
+
+// 110k set; auto-compact at 77k scales the marks to 28/42/53%. 73k is 66%: past the compact mark, a third of it conversation.
+const SET110K = { ...BREAKDOWN, totalTokens: 73_000, maxTokens: 110_000, rawMaxTokens: 110_000, percentage: (73_000 * 100) / 110_000,
+  autoCompactThreshold: 77_000, isAutoCompactEnabled: true,
+  categories: [cat('System prompt', 5_000), cat('System tools', 43_000), cat('Messages', 25_000), cat('Free space', 4_000, 'free'), cat('Autocompact buffer', 33_000, 'buffer')] }
+const plain110 = () => ({ context: { tokens: 73_000, window: 1_000_000, percent: 7 }, rateLimits: [], cost: { usd: 0.1 } })
+const full110 = () => ({ ...plain110(), context: { ...plain110().context, breakdown: SET110K } })
+// The engine's after-figure is the conversation alone; the files Claude read come back with it, so it barely shrinks
+const FREED_LITTLE = { messages: [{ role: 'assistant', text: 'summary', toolUses: [] }], tokensBefore: 73_300, tokensAfter: 25_100 }
+
+test('Compact from the pane that frees little: the band starts over and Compact is not recommended again', { options: { ...OPTIONS, cacheBand: true, compactHint: true }, timeoutMs: SLOW }, async ($, on) => {
+  windowed(on, plain110, full110)
+  on('session.compact' as any, () => FREED_LITTLE)
+  await turn($)
+  let pane: any = await mount($, 'terminal')
+  expect(await pane.find({ text: /^[  ]?Past your 53% mark: Compact now, while the cache is warm \(5m left\)[  ]?$/ })).toBeDefined()
+  expect(lit(await pane.find({ key: 'ctx-compact' }))).toBe(true)
+  await pane.press({ key: 'ctx-compact' })
+  await pane.unmount()
+  // the band: drawn again from the next reply, as after a typed /compact, never the old window's "66% · Reuses 73k"
+  const band: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, bodyColumns: 160 } })
+  expect(await band.find({ key: 'band-open' })).toBeUndefined()
+  await band.unmount()
+  pane = await mount($, 'terminal')
+  expect(await pane.find({ text: /^[  ]?Past your 53% mark, but the last compaction freed little \(73k → ≈73k\): files Claude read come back with it\. \/clear starts fresh\.[  ]?$/ })).toBeDefined()
+  expect(lit(await pane.find({ key: 'ctx-compact' }))).toBe(false)
+  expect(lit(await pane.find({ key: 'ctx-later' }))).toBe(true)
+  const list = String(((await ($ as any).command.run({ command: 'tokens', args: 'list' })) || {}).text)
+  expect(list).not.toContain('Compact now')
+  expect(list).toMatch(/Next +│ Compacted freed little +│ 73k → ≈73k/)
+})
+
+test('a typed /compact that frees little: the same advice, and /clear forgets it', { options: { ...OPTIONS, cacheBand: true, compactHint: true }, timeoutMs: SLOW }, async ($, on) => {
+  windowed(on, plain110, full110)
+  on('session.compact' as any, () => FREED_LITTLE)
+  await turn($)
+  await ($ as any).session.compact({ trigger: 'manual', instructions: '', messages: [{ role: 'user', text: 'hello', toolUses: [] }] })
+  await turn($)                                                    // the next reply: the band is back, with the same advice
+  const band: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, bodyColumns: 160 } })
+  expect(await band.find({ text: /^[  ]?Past your 53% mark, but the last compaction freed little/ })).toBeDefined()
+  await band.unmount()
+  await ($ as any).command.run({ command: 'clear', args: '' })
+  await turn($)
+  const pane: any = await mount($, 'terminal')
+  expect(await pane.find({ text: /^[  ]?Past your 53% mark: Compact now, while the cache is warm/ })).toBeDefined()
+})
+
+test('the mostly-setup row of /tokens list keeps its figure, and the toast names the same setup as the band', { options: { ...OPTIONS, cacheBand: true, compactHint: true }, timeoutMs: SLOW }, async ($, on) => {
+  const bd = SET100K(7_000, 48_000)
+  const plain = () => ({ context: { tokens: 55_000, window: 1_000_000, percent: 5 }, rateLimits: [], cost: { usd: 0.1 } })
+  const { toasts } = windowed(on, plain, () => ({ ...plain(), context: { ...plain().context, breakdown: bd } }))
+  await turn($)
+  const list = String(((await ($ as any).command.run({ command: 'tokens', args: 'list' })) || {}).text)
+  expect(list).toMatch(/Next +│ Mostly setup +│ ≈48k setup · ≈7k conversation/)
+  expect(toasts.some((t) => /≈48k of it is setup/.test(t))).toBe(true)
+  const band: any = await ($ as any).ui.mount({ plugin: 'token-saver', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, bodyColumns: 160 } })
+  expect(await band.find({ text: /≈48k of it is setup/ })).toBeDefined()
 })

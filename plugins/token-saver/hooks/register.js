@@ -53,7 +53,10 @@ let setupTok = 0               // the first main-thread request's cached prefix:
 // The window as /context measures it, from the last local breakdown. With autoCompactWindow set (/autocompact 400k) the
 // plain usage call still reports the model's whole window (1M) while /context shows the set one (400k): everything that
 // shows a percent or a mark reads this, so the band, the toast and the pane agree with /context and with each other.
-let winMeta = null             // { raw, threshold, on, setup, conv }
+let winMeta = null             // { raw, threshold, on, setup, conv, total }
+// A compaction that freed little (files Claude read come back with it): until the window grows past it again, Compact is
+// not recommended a second time. Cleared by /clear.
+let compactFutile = null       // { before, after }
 let lastStepAt = 0
 let savedChars = 0
 let rewrites = 0
@@ -553,6 +556,10 @@ function markAdvice(pct, clock, used) {
   if (hit.hint !== 'note' && Number(used) > 0 && mostlySetup(used)) {
     const { setup, conv } = splitOf(used)
     return { text: `${head}, but ≈${fmtK(setup)} of it is setup that loads every time: Compact or Clear would free only ≈${fmtK(conv)}. /context shows what loads.`, tone: 'inactive', act: false, setup: true }
+  }
+  if (hit.hint === 'compact-if-warm' && warm && compactIsFutile(used)) {
+    const f = compactFutile
+    return { text: `${head}, but the last compaction freed little (${fmtK(f.before)} → ≈${fmtK(f.after)}): files Claude read come back with it. /clear starts fresh.`, tone: 'inactive', act: false, futile: true }
   }
   if (hit.hint === 'compact-if-warm') {
     return warm
@@ -1759,7 +1766,7 @@ function contextView(usage, ttl, usageLast, clock, stats) {
 /** Which of Clear / Compact / Later is recommended now, and which are unavailable (drawn dim, never hidden). */
 function paneActions(view) {
   const fresh = !view.cache.known, cold = view.cache.known && !view.cache.warm
-  const setup = view.pct >= view.handoffPct && mostlySetup(view.used)
+  const setup = view.pct >= view.handoffPct && (mostlySetup(view.used) || (!cold && compactIsFutile(view.used)))
   const prim = fresh || setup ? 'later' : cold && view.pct >= view.handoffPct ? 'clear' : view.pct >= view.compactMarkPct ? 'compact' : view.pct >= view.handoffPct ? 'clear' : 'later'
   // nothing to compact before the first reply of a window (after /clear, or a compaction)
   const off = (k) => (fresh && k !== 'later') || (k === 'compact' && (cold || fresh || view.noReply))
@@ -1814,7 +1821,7 @@ function contextHint(view, avg) {
 function nextCard(view, avg) {
   const cold = view.cache.known && !view.cache.warm
   const next = view.nextMark, prev = view.prevMark
-  const then = (m) => ({ note: 'note decisions', 'new-conversation': 'summary while warm, then Clear', 'compact-if-warm': 'Compact while warm' }[m.hint] || m.id)
+  const then = (m) => ({ note: 'note decisions', 'new-conversation': 'summary while warm, then Clear', 'compact-if-warm': compactFutile ? 'Clear (Compact just freed little)' : 'Compact while warm' }[m.hint] || m.id)
   if (next && !(next.hint === 'compact-if-warm' && cold)) {
     const lo = prev ? prev.pct : 0
     const frac = clamp01((view.pct - lo) / Math.max(1, next.pct - lo))
@@ -1828,6 +1835,11 @@ function nextCard(view, avg) {
     const { setup, conv } = splitOf(view.used)
     return { title: 'Mostly setup', accent: '', tone: 'inactive', bar: { fill: 1, ink: 'inactive' }, strong: `≈${fmtK(setup)} setup`, rest: ` · ≈${fmtK(conv)} conversation`,
       foot: 'Little to free with Compact or Clear: /context' }
+  }
+  if (!cold && compactIsFutile(view.used)) {
+    const f = compactFutile
+    return { title: 'Compacted', accent: 'Freed little', tone: 'inactive', bar: { fill: 1, ink: 'inactive' }, strong: `${fmtK(f.before)} → ≈${fmtK(f.after)}`, rest: '',
+      foot: 'What Claude read comes back: /clear starts fresh' }
   }
   if (!cold) {
     return { title: 'Compact', accent: 'Now', tone: 'error', bar: { fill: 1, ink: 'error' }, strong: `Past ${view.compactMarkPct}%`, rest: view.cache.known ? ' · Cache warm' : '',
@@ -1877,7 +1889,7 @@ function idleCard(view) {
 function clip(s, n) {
   s = String(s)
   if (s.length <= n) return s
-  return /[\\/]/.test(s) ? '…' + s.slice(-(n - 1)) : s.slice(0, n - 1) + '…'
+  return /[\\/]/.test(s) && !/\s/.test(s) ? '…' + s.slice(-(n - 1)) : s.slice(0, n - 1) + '…'
 }
 
 /**
@@ -2309,7 +2321,7 @@ function noteWinMeta(usage) {
     if (memKey(c) === 'messages') conv += n
     else setup += n
   }
-  winMeta = { raw: Number(b.rawMaxTokens) || 0, threshold: Number(b.autoCompactThreshold) || 0, on: !!b.isAutoCompactEnabled, setup, conv }
+  winMeta = { raw: Number(b.rawMaxTokens) || 0, threshold: Number(b.autoCompactThreshold) || 0, on: !!b.isAutoCompactEnabled, setup, conv, total: Number(b.totalTokens) || 0 }
 }
 
 /** A fresh local breakdown for winMeta (no request is sent: 'summary' estimates locally). */
@@ -2334,6 +2346,53 @@ function pctOf(tokens, fallbackPct) {
 function splitOf(used) {
   const setup = winMeta ? winMeta.setup : 0          // only a breakdown knows the setup; a first request's prefix is not it
   return { setup, conv: Math.max(0, (Number(used) || 0) - (setup || 0)) }
+}
+
+/**
+ * Nobody watches the band: say it once, at the moment a mark is crossed. Run at the end of a main-thread turn, after
+ * winMeta is read again, so the toast's figures are the band's and the pane's.
+ */
+async function announceMark($) {
+  const ctx = await contextOf($)
+  if (winMeta) markScale = scaleOf(winMeta)
+  const pct = pctOf(ctx.tokens, ctx.percent)
+  const hit = levelFor(pct)
+  if (!hit || Number(hit.pct) <= announcedPct) return
+  announcedPct = Number(hit.pct)
+  const clock = cacheClock(lastStepAt, ttlNow())
+  try { $.ui.toast(`context ${pct}% — ${hintFor(pct, clock, ctx.tokens)}`, { timeoutMs: 12000 }) } catch { /* no UI */ }
+}
+
+/** What a finished compaction left, setup included: the engine's after-figure is the conversation alone. */
+function compactAfter(r) {
+  if (!r || !Number.isFinite(r.tokensBefore) || !Number.isFinite(r.tokensAfter)) return null
+  const setup = (winMeta && winMeta.setup) || setupTok || 0
+  return { before: r.tokensBefore, after: r.tokensAfter + setup }
+}
+
+/**
+ * After any compaction (typed, forced, auto, or the pane's): the band starts over, the window is measured again, and a
+ * compaction that freed little (files Claude read come back with it) is remembered. The size after is the local
+ * breakdown's, taken now: the engine's own after-figure leaves the setup out, and estimating that part was off by 8k.
+ * Returns { before, after } for the message, or null.
+ */
+async function noteCompaction($, r, measuredBefore) {
+  afterClear()
+  await refreshWinMeta($)
+  // both sides from the local breakdown: the engine's before-figure is the whole window once and the conversation alone
+  // the next time (a second compaction in a row reported 16.7k for a 67k window)
+  const before = measuredBefore > 0 ? measuredBefore : r && Number(r.tokensBefore)
+  const measured = winMeta && winMeta.total > 0 ? { before, after: winMeta.total } : null
+  const a = Number.isFinite(before) && before > 0 ? measured || compactAfter(r) : null
+  compactFutile = a && a.before - a.after < Math.max(10_000, 0.2 * a.before) ? a : null
+  invalidate($)
+  return a
+}
+
+/** The last compaction freed little and the window has not grown much since: compacting again would free little too. */
+function compactIsFutile(used) {
+  const f = compactFutile
+  return !!f && (Number(used) || 0) < f.after + Math.max(10_000, 0.15 * f.after)
 }
 
 /** Compact and Clear free little when the window is mostly setup: say so instead of recommending them. */
@@ -2431,6 +2490,7 @@ async function clearSession($) {
 /** The window is empty after a /clear: the band, the pane and the trims kept out of it start again. */
 function afterClear() {
   lastUsage = null
+  compactFutile = null
   announcedPct = 0
   growth.length = 0
   turnStartTokens = null
@@ -2555,6 +2615,8 @@ export async function compactNow($, ttl, compactGuard, { inCommandHook = false }
       ctxMsg = `compact vetoed: ${vetoText(clock, ctx.tokens)}`
     } else {
       let r
+      await refreshWinMeta($)
+      const measuredBefore = winMeta ? winMeta.total : 0
       try {
         r = await $.session.compact({})
       } catch (err) {
@@ -2567,6 +2629,11 @@ export async function compactNow($, ttl, compactGuard, { inCommandHook = false }
       else if (r && r.skip) ctxMsg = `compact skipped: ${r.skip}`
       else if (r && Number.isFinite(r.tokensBefore)) ctxMsg = Number.isFinite(r.tokensAfter) ? `compacted ${afterCompact(r.tokensBefore, r.tokensAfter)}` : `compacted ${fmtK(r.tokensBefore)}`
       else ctxMsg = 'compacted'
+      // A mod's own $.session.compact skips that mod's session.compact hook: the reset a typed /compact gets runs here
+      if (r && !r.queued && !r.skip) {
+        const a = await noteCompaction($, r, measuredBefore)
+        if (a) ctxMsg = `compacted ${fmtK(a.before)} → ≈${fmtK(a.after)}`
+      }
     }
   } catch (err) {
     // The engine's own words name the session: never show them. A turn the mod missed (hot reload) waits as above.
@@ -3239,7 +3306,10 @@ export function register(on, options = {}) {
         agents.delete(e.agentId)
         await rollAgent($, rec)
       }
-      if (!e.agentId) await refreshWinMeta($)
+      if (!e.agentId) {
+        await refreshWinMeta($)
+        if (compactHint) { try { await announceMark($) } catch { /* no usage yet */ } }
+      }
       if (!e.agentId && turnStartTokens !== null) {
         const before = turnStartTokens
         turnStartTokens = null
@@ -3309,24 +3379,6 @@ export function register(on, options = {}) {
       } catch {
         /* no UI */
       }
-      if (compactHint) {
-        // Nobody watches the band. Say it once, at the moment a threshold is crossed.
-        try {
-          const ctx = await contextOf($)
-          if (!winMeta) await refreshWinMeta($)          // a step before any breakdown was read: read one, it is local
-          if (winMeta) markScale = scaleOf(winMeta)
-          const pct = pctOf(ctx.tokens, ctx.percent)
-          const hit = levelFor(pct)
-          if (hit && Number(hit.pct) > announcedPct) {
-            await refreshWinMeta($)                      // about to speak: the setup/conversation split as it is now
-            announcedPct = Number(hit.pct)
-            const clock = cacheClock(lastStepAt, ttlNow())
-            $.ui.toast(`context ${pct}% — ${hintFor(pct, clock, ctx.tokens)}`, { timeoutMs: 12000 })
-          }
-        } catch {
-          /* no UI or no usage yet */
-        }
-      }
     }
     return result
   })
@@ -3382,8 +3434,10 @@ export function register(on, options = {}) {
     }
     const now = await $.clock.now()
     if (e.trigger !== 'auto' || !lastStepAt || now - lastStepAt < IDLE_COMPACT_AFTER) {
+      await refreshWinMeta($)
+      const measuredBefore = winMeta ? winMeta.total : 0
       const r = await next({ ...e, instructions })
-      if (r && !r.skip && e.trigger !== 'precompute') { afterClear(); refreshWinMeta($).finally(() => invalidate($)) }
+      if (r && !r.skip && e.trigger !== 'precompute') await noteCompaction($, r, measuredBefore)
       return r
     }
     const r = await next({ ...e, instructions })

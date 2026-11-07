@@ -117,7 +117,7 @@ A settings hook can only add a note before `/compact`. The mod sits on the compa
 
 | Trigger | What happens |
 |---|---|
-| `/compact`, cache warm | Runs. The keep-list (task, files touched, decisions, failing tests, next steps, exact errors) is appended to the summarizer's instructions. |
+| `/compact`, cache warm | Runs. The keep-list (task, files touched, decisions, failing tests, next steps, exact errors) is appended to the summarizer's instructions. The pane says what it freed, measured before and after ("Compacted 91.5k → ≈67.5k"), and the band starts over from the next reply. When a compaction frees little (files Claude read come back with it), Compact is not recommended again until the window grows; the hint points at `/clear`. |
 | `/compact`, cache lapsed | **Refused.** One line names the idle time and the tokens a compaction would first re-cache. Moving on, `/clear` is free; carrying on, your next message re-caches it anyway, so compact after that while it is warm. It never suggests asking Claude for a summary, which would pay the same re-cache. |
 | `/compact force` | Runs anyway. Keep-list still appended. |
 | auto-compaction | Never refused. Keep-list appended. Blocking it would let the window overflow. |
